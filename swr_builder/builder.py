@@ -85,7 +85,8 @@ class BuildManager:
         self.jobs_dir = self.data_dir / "jobs"
         self.docker_config = self.data_dir / "docker-config"
         self._sem: Optional[asyncio.Semaphore] = None
-        self._repo_locks: Dict[str, asyncio.Lock] = {}
+        # 仓库路径 → (锁, 使用该锁的任务数)；计数归零时删除，避免字典无限增长
+        self._repo_locks: Dict[str, Tuple[asyncio.Lock, int]] = {}
         self._procs: Dict[int, Any] = {}
         self._tasks: Dict[int, Any] = {}
         self._cancelled: Set[int] = set()
@@ -100,7 +101,7 @@ class BuildManager:
             logger.warning("有 %s 个未完成的任务因平台重启被标记为失败", count)
 
     def resize(self, n: int) -> None:
-        if self._tasks:
+        if self.has_running_jobs():
             raise ValueError("有构建任务时不能调整并发数")
         self._sem = asyncio.Semaphore(max(1, n))
 
@@ -159,6 +160,24 @@ class BuildManager:
             task.cancel()
         return True
 
+    def has_running_jobs(self) -> bool:
+        """是否有已提交但未结束的构建任务（排队中或构建中）。"""
+        return bool(self._tasks)
+
+    def _acquire_repo_lock(self, key: str) -> asyncio.Lock:
+        lock, users = self._repo_locks.get(key, (None, 0))
+        if lock is None:
+            lock = asyncio.Lock()
+        self._repo_locks[key] = (lock, users + 1)
+        return lock
+
+    def _release_repo_lock(self, key: str) -> None:
+        lock, users = self._repo_locks[key]
+        if users <= 1:
+            del self._repo_locks[key]
+        else:
+            self._repo_locks[key] = (lock, users - 1)
+
     def _check_cancel(self, job_id: int) -> None:
         if job_id in self._cancelled:
             raise JobCancelled()
@@ -171,17 +190,21 @@ class BuildManager:
         try:
             assert self._sem is not None, "BuildManager.start() 未调用"
             log.info(f"任务 #{job_id} 已提交，操作人：{job.get('operator') or '-'}")
-            if self._sem.locked():
-                log.info("构建资源已满，排队等待…")
-            async with self._sem:
-                app = job["app_snapshot"]
-                repo_key = repo_path_of(self.settings, app)
-                lock = self._repo_locks.setdefault(repo_key, asyncio.Lock())
+            app = job["app_snapshot"]
+            repo_key = repo_path_of(self.settings, app)
+            # 先排同仓库的队，再占全局并发名额：同一仓库排队的任务不会占着名额阻塞其他仓库
+            lock = self._acquire_repo_lock(repo_key)
+            try:
                 if lock.locked():
                     log.info(f"{repo_key} 有其他构建正在进行，等待其完成后再计算版本…")
                 async with lock:
-                    self._check_cancel(job_id)
-                    await self._execute(job_id, job, app, log)
+                    if self._sem.locked():
+                        log.info("构建资源已满，排队等待…")
+                    async with self._sem:
+                        self._check_cancel(job_id)
+                        await self._execute(job_id, job, app, log)
+            finally:
+                self._release_repo_lock(repo_key)
         except (JobCancelled, asyncio.CancelledError):
             log.warn("任务已取消")
             self.store.update_job(job_id, status="cancelled", finished_at=utcnow())

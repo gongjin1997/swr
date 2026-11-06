@@ -42,6 +42,10 @@ class DeployManager:
 
     def log_path(self,id): return self.settings.data_path / 'deployments' / str(id) / 'deploy.log'
 
+    def target_busy(self,target_id):
+        """旧部署目标是否有正在执行的部署。"""
+        return any((self.store.get_deployment(d) or {}).get('target_id')==target_id for d in self.tasks)
+
     async def _service_worker(self):
         last_expiry_check=0.0
         while True:
