@@ -1,0 +1,32 @@
+{
+  "source": "Huawei ApiGateway-python-sdk 2.0.7 (official download), Signer.Sign output; dummy credentials only",
+  "url": "https://obs.cn-north-1.myhuaweicloud.com/apig-sdk/ApiGateway-python-sdk.zip",
+  "ak": "AKEXAMPLE123",
+  "sk": "dummy-secret-key-for-test",
+  "cases": [
+    {
+      "url": "https://iam.example:443/v3/auth/tokens",
+      "body": "",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "0",
+        "X-Sdk-Date": "20261023T120000Z",
+        "X-Project-Id": "project-123",
+        "Host": "iam.example:443"
+      },
+      "authorization": "SDK-HMAC-SHA256 Access=AKEXAMPLE123, SignedHeaders=content-length;content-type;host;x-project-id;x-sdk-date, Signature=d652a5fc607ca46a1a34b2339f0209e2866f8a8bcbc0e32a9cd947962449a662"
+    },
+    {
+      "url": "https://iam.example:26335/v3/auth/tokens",
+      "body": "{\"auth\":{\"scope\":{\"project\":{\"id\":\"项目-测试\"}}}}",
+      "headers": {
+        "Content-Type": "application/json",
+        "Content-Length": "53",
+        "X-Sdk-Date": "20261023T120000Z",
+        "X-Project-Id": "project-123",
+        "Host": "iam.example:26335"
+      },
+      "authorization": "SDK-HMAC-SHA256 Access=AKEXAMPLE123, SignedHeaders=content-length;content-type;host;x-project-id;x-sdk-date, Signature=5e1b7c958d21ded4cfcbe1cdc0f6d7d1778b2437e8a5494d42ce396aa38f8af1"
+    }
+  ]
+}

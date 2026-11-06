@@ -1,0 +1,113 @@
+# SWR 镜像构建平台配置示例：复制为 config.yaml 后按实际环境修改
+# 敏感信息建议用环境变量传入（优先级高于本文件）：
+#   SWR_USERNAME / SWR_PASSWORD   或   SWR_AK / SWR_SK / SWR_PROJECT
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  # 仅首次启动创建 admin 时使用。留空则生成随机密码至 data/admin-initial-password.txt
+  # 推荐用 BUILDER_ADMIN_PASSWORD 环境变量传入；已有账号不会被配置文件重置密码
+  admin_password: ""
+  secure_cookie: false   # 生产必须通过 HTTPS 访问，再设为 true；HTTP 开发环境为 false
+
+registry:
+  # SWR 服务地址（不要带 https://）
+  address: swr.ndc302-region-1.huaweicloud.cnnc.cn
+  # 默认组织，应用里可以单独覆盖
+  organization: metaerp-beta15
+  # docker login 用户名，格式：区域项目名@AK，例如 ndc302-region-1_his_beta@XXXXXXXXXXXX
+  username: "ndc302-region-1_his_beta@<AK>"
+  # docker login 密码：SWR 控制台“获取长期有效登录指令”中 -p 后面的明文密钥
+  # 建议改用环境变量 SWR_PASSWORD 传入，不要提交到代码仓库
+  password: ""
+  # 只有 AK/SK 时：填写 ak / sk / project，平台按 SWR 规则自动计算登录密钥（password 留空）
+  ak: ""
+  sk: ""
+  project: ""
+  # 仓库使用自签名证书时：填写 CA 文件路径，或设置 insecure: true 跳过平台侧证书校验
+  # （docker 本身也需要信任该证书，见 README 常见问题）
+  ca_file: ""
+  insecure: false
+  timeout: 30
+
+build:
+  docker_bin: docker
+  data_dir: ./data            # 数据库、构建日志、构建上下文
+  max_concurrent: 2           # 同时进行的构建数；同一个镜像仓库始终串行
+  login_timeout: 120
+  build_timeout: 1800
+  push_timeout: 1800
+  max_upload_mb: 2048         # 每个上传文件上限（MB）
+  keep_context: false         # 构建结束后是否保留上传的文件
+  cleanup_local_images: true  # 推送成功后删除构建机本地的上一版本标签，避免磁盘膨胀
+  extra_build_args: []        # 追加给 docker build 的参数，例如 ["--network", "host"]
+
+security:
+  session_hours: 12
+  remember_days: 7
+  password_min_length: 8
+  max_login_failures: 5
+  lock_minutes: 15
+
+general:
+  site_name: SWR 镜像构建平台
+  deploy_enabled: true    # 模块入口；未配置目标不会执行部署，自动部署默认关闭
+
+# HCS 后端连接：默认关闭，Endpoint 必须从现场获取，不从 SWR 主机名推断
+# 已实现 AK/SK 签名 POST /v3/auth/tokens；真实网关请求体与签名兼容性需现场验收
+hcs:
+  enabled: false
+  version: "8.5.1"
+  region: ""
+  iam_endpoint: ""
+  swr_endpoint: ""       # 管理 API，不是 docker login 地址
+  cce_endpoint: ""       # 管理 API，不是集群 Kubernetes API Server
+  ecs_endpoint: ""
+  project_id: ""
+  project_name: ""
+  domain_name: ""        # IAM 所属账号，不是网络 DNS 域名
+  username: ""
+  password: ""           # 推荐 HCS_PASSWORD 环境变量
+  auth_mode: aksk         # 默认；也可显式选择 password 或 token，不会自动回退
+  ak: ""                  # 推荐 HCS_AK；不复用 SWR_AK
+  sk: ""                  # 推荐 HCS_SK；仅在本地用于官方 SDK 签名
+  security_token: ""      # 临时 AK/SK 才填写；推荐 HCS_SECURITY_TOKEN
+  token_scope: project    # project 或 domain
+  domain_id: ""           # domain 模式必须填写账号 ID
+  # 默认零字节空体 + 作用域签名请求头，不猜 identity 方法
+  # 如现场要求 JSON，在此显式填写；仅支持完整值占位符 ${ak}/${project_id}/${domain_id}
+  aksk_request_body: ""
+  token: ""              # 推荐 HCS_TOKEN 环境变量；预置 Token 测试不会验证服务权限
+  ca_file: ""
+  insecure: false
+  timeout: 30
+
+# 首次启动时导入的应用（数据库中已有应用时忽略；之后在页面“应用管理”中维护）
+apps:
+  - name: cnnc-coding-chc-fin
+    description: 财务编码服务
+    organization: metaerp-beta15
+    repository: cnnc-coding-chc-fin
+    # 全量构建 / 首次构建使用的基础镜像
+    base_image: swr.ndc302-region-1.huaweicloud.cnnc.cn/metaerp_sdk/java:8-huawei-r30-arm64
+    default_mode: incremental     # incremental：基于上一版本累加；full：基于基础镜像全量构建
+    target_dir: /app
+    target_name: cnnc-coding-chc-fin.jar   # 只上传一个文件时重命名为此文件名
+    chown: nonroot:nonroot
+    platform: linux/arm64         # 目标架构；构建机是 x86 时必须填写
+    latest_strategy: version      # version：版本号最大为上一版本；time：最近推送为上一版本
+    initial_tag: 1.0.0            # 仓库中还没有任何版本时使用
+    max_layers: 100               # 上一版本层数达到该值时自动改为全量构建（Docker 上限 127 层）
+    push_latest: false
+    # 全量构建模板（由原 Dockerfile 转换而来）
+    full_template: |
+      FROM {{BASE_IMAGE}}
+      MAINTAINER FAN
+      WORKDIR /app
+      {{COPY_FILES}}
+      EXPOSE 8080
+      CMD ["-jar","/app/cnnc-coding-chc-fin.jar"]
+    # 累加构建模板：只追加本次上传的文件，WORKDIR/EXPOSE/CMD 沿用上一版本
+    incremental_template: |
+      FROM {{BASE_IMAGE}}
+      {{COPY_FILES}}

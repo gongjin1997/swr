@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SWR 镜像构建平台</title>
+<link rel="stylesheet" href="/static/style.css?v=1.2.0-dev.2">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2 3 6.5v11L12 22l9-4.5v-11L12 2Zm0 2.2 6.7 3.3L12 10.8 5.3 7.5 12 4.2ZM5 9.1l6 3v7.6l-6-3V9.1Zm8 10.6v-7.6l6-3v7.6l-6 3Z"/></svg>
+      <span>SWR 镜像构建平台</span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" role="tab" data-tab="build" data-perm="build.run">构建镜像</button>
+      <button class="tab" role="tab" data-tab="jobs">构建记录</button>
+      <button class="tab" role="tab" data-tab="apps">应用管理</button>
+      <button class="tab" role="tab" data-tab="resources" data-perm-any="project.view,namespace.view">资源管理</button>
+      <button class="tab" role="tab" data-tab="deploy" data-perm="deploy.view" data-deploy>部署中心</button>
+      <button class="tab" role="tab" data-tab="settings" data-perm="settings.manage">系统设置</button>
+      <button class="tab" role="tab" data-tab="users" data-perm="user.manage">账号管理</button>
+    </nav>
+    <div class="user-menu"><button class="link" id="accountBtn"><span id="accountName">我的账号</span></button><button class="link" id="logoutBtn">退出</button></div>
+    <div class="status-area">
+      <button class="chip" id="registryChip" data-perm="settings.manage" title="点击测试 SWR 连接">SWR：加载中</button>
+      <span class="chip" id="dockerChip">Docker：检测中</span>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+  <!-- 构建镜像 -->
+  <section class="panel active" id="tab-build" role="tabpanel">
+    <div class="build-grid">
+      <div class="card">
+        <div class="card-head"><h2>新建构建</h2></div>
+        <div class="card-body form">
+          <div class="field">
+            <label class="label" for="appSelect">应用</label>
+            <div class="row">
+              <select id="appSelect"></select>
+              <button class="btn" id="refreshVersions" type="button">刷新版本</button>
+            </div>
+            <span class="hint mono" id="repoPath"></span>
+          </div>
+
+          <div class="version-box" id="versionBox"></div>
+
+          <div class="field">
+            <span class="label">构建方式</span>
+            <div class="mode-options">
+              <label class="mode-option">
+                <input type="radio" name="mode" value="incremental">
+                <span><b>累加构建</b><span class="hint" id="modeIncDesc">在上一版本镜像上叠加本次文件</span></span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="mode" value="full">
+                <span><b>全量构建</b><span class="hint" id="modeFullDesc">基于基础镜像重新构建</span></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="field-row">
+            <div class="field" id="baseTagField">
+              <label class="label" for="baseTagSelect">基于版本</label>
+              <select id="baseTagSelect"></select>
+            </div>
+            <div class="field">
+              <label class="label" for="newTag">新版本号</label>
+              <input id="newTag" autocomplete="off" spellcheck="false">
+              <span class="hint" id="newTagHint">留空自动递增</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <span class="label">上传文件</span>
+            <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="选择要上传的文件">
+              <input type="file" id="fileInput" multiple hidden>
+              <div><b>拖拽文件到这里</b>，或点击选择</div>
+              <div class="hint">jar / war / zip / 配置文件，可多选</div>
+            </div>
+            <ul class="file-list" id="fileList"></ul>
+            <label class="check"><input type="checkbox" id="extractZip"> zip 包解压后合并到目标目录（适合增量补丁）</label>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label class="label" for="operator">操作人</label>
+              <input id="operator" maxlength="32" autocomplete="off">
+            </div>
+            <div class="field">
+              <label class="label" for="remark">备注</label>
+              <input id="remark" maxlength="200" placeholder="本次变更说明（可选）" autocomplete="off">
+            </div>
+          </div>
+
+          <div class="progress hidden" id="uploadProgress"><div class="bar"></div><span class="pct">0%</span></div>
+          <div class="actions">
+            <button class="btn" id="previewBtn" type="button">预览 Dockerfile</button>
+            <button class="btn primary" id="buildBtn" type="button">上传并构建</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card log-card">
+        <div class="card-head"><h2>构建日志</h2></div>
+        <div class="card-body" id="jobPanel">
+          <div class="empty-state">
+            <div class="empty-title">还没有进行中的构建</div>
+            <div class="hint">选择应用、上传文件后点击“上传并构建”，这里会实时显示日志</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 构建记录 -->
+  <section class="panel" id="tab-jobs" role="tabpanel">
+    <div class="card">
+      <div class="card-head">
+        <h2>构建记录</h2>
+        <div class="filters">
+          <select id="jobAppFilter" aria-label="按应用筛选"><option value="">全部应用</option></select>
+          <select id="jobStatusFilter" aria-label="按状态筛选">
+            <option value="">全部状态</option><option value="running">构建中</option><option value="queued">排队中</option>
+            <option value="success">成功</option><option value="failed">失败</option><option value="cancelled">已取消</option>
+          </select>
+          <button class="btn" id="reloadJobs" type="button">刷新</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>#</th><th>应用</th><th>版本</th><th>方式</th><th>状态</th><th>操作人</th><th>提交时间</th><th>耗时</th><th>操作</th></tr></thead>
+          <tbody id="jobsBody"></tbody>
+        </table>
+      </div>
+      <div class="table-foot"><button class="btn hidden" id="moreJobs" type="button">加载更多</button></div>
+    </div>
+  </section>
+
+  <!-- 应用管理 -->
+  <section class="panel" id="tab-apps" role="tabpanel">
+    <div class="card">
+      <div class="card-head">
+        <h2>应用列表</h2>
+        <button class="btn primary" id="newAppBtn" data-perm="app.manage" type="button">新建应用</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>应用</th><th>镜像仓库</th><th>默认方式</th><th>镜像内路径</th><th>更新时间</th><th>操作</th></tr></thead>
+          <tbody id="appsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+  <section class="panel" id="tab-resources" role="tabpanel"></section>
+  <section class="panel" id="tab-deploy" role="tabpanel"></section>
+  <section class="panel" id="tab-settings" role="tabpanel"></section>
+  <section class="panel" id="tab-users" role="tabpanel"></section>
+  <section class="panel" id="tab-account" role="tabpanel"></section>
+</main>
+
+<div class="modal hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal-box">
+    <div class="modal-head"><h3 id="modalTitle"></h3><button class="icon-btn" data-close aria-label="关闭">×</button></div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot" id="modalFoot"></div>
+  </div>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="/static/app.js?v=1.2.0-dev.2"></script>
+<script src="/static/portal.js?v=1.2.0-dev.2"></script>
+<script src="/static/account.js?v=1.2.0-dev.2"></script>
+<script src="/static/admin.js?v=1.2.0-dev.2"></script>
+<script src="/static/deploy.js?v=1.2.0-dev.2"></script>
+<script src="/static/resources.js?v=1.2.0-dev.2"></script>
+</body>
+</html>

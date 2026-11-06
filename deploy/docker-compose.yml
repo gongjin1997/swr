@@ -1,0 +1,14 @@
+services:
+  swr-builder:
+    build: ..
+    image: swr-builder:1.2.0-dev.2
+    container_name: swr-builder
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - ./swr-builder.env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../config.yaml:/app/config.yaml:ro
+      - ./data:/app/data

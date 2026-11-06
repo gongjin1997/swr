@@ -1,0 +1,22 @@
+# 复制到 /etc/systemd/system/swr-builder.service 后执行：
+#   systemctl daemon-reload && systemctl enable --now swr-builder
+[Unit]
+Description=SWR Image Builder
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 运行用户需要在 docker 组中（或使用 root）
+User=swrbuilder
+Group=docker
+WorkingDirectory=/opt/swr-builder
+# 敏感信息放在 env 文件中（chmod 600），例如：SWR_PASSWORD=xxxx
+EnvironmentFile=-/opt/swr-builder/swr-builder.env
+ExecStart=/opt/swr-builder/venv/bin/python -m swr_builder -c /opt/swr-builder/config.yaml
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
