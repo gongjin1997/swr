@@ -24,6 +24,9 @@ cd swr-image-builder
 python3 -m venv venv && . venv/bin/activate
 pip install -r requirements.txt
 
+# 构建前端（Vue 3，需要 Node 18.18+；产物输出到 swr_builder/webui/）
+(cd web && npm install && npm run build)   # 有 package-lock.json 时用 npm ci
+
 cp config.example.yaml config.yaml        # 修改仓库地址、组织、用户名、平台登录账号
 export SWR_USERNAME='ndc302-region-1_his_beta@<AK>'
 export SWR_PASSWORD='<长期有效登录密钥>'    # 不要写进代码仓库
@@ -31,7 +34,9 @@ export SWR_PASSWORD='<长期有效登录密钥>'    # 不要写进代码仓库
 python -m swr_builder -c config.yaml
 ```
 
-浏览器打开 `http://<构建机IP>:8080`，进入独立登录页。
+浏览器打开 `http://<构建机IP>:8080`，进入独立登录页。未构建前端时页面会提示构建命令，API 不受影响。
+
+前端开发：先按上面启动后端，再执行 `cd web && npm run dev`，浏览器打开 `http://localhost:5173`（`/api` 自动转发到 8080）。构建机不方便安装 Node 时，可以在其他机器构建后把 `swr_builder/webui/` 一起拷贝过去，或直接使用容器部署。
 
 - 首次启动管理员为 **admin**。`server.admin_password` / `BUILDER_ADMIN_PASSWORD` 为空时，自动生成初始密码并写入 `data/admin-initial-password.txt`（权限 0600），不会输出到日志。首次登录必须改密；改密后文件自动删除。
 - 如指定初始化密码，请使用强密码；该配置只用于首次创建账号，不是后续密码重置机制。
@@ -60,13 +65,14 @@ journalctl -u swr-builder -f
 ### 3.2 容器
 
 ```bash
-docker build -t swr-builder:1.2.0-dev.2 .
+docker build -t swr-builder:1.3.0-dev.1 .     # 多阶段构建：先用 Node 构建前端，运行时镜像不含 Node
+# 内网环境可指定镜像源：--build-arg NPM_REGISTRY=... --build-arg PIP_INDEX_URL=...
 docker run -d --name swr-builder --restart unless-stopped -p 8080:8080 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /opt/swr-builder/config.yaml:/app/config.yaml:ro \
   -v /opt/swr-builder/data:/app/data \
   -e SWR_USERNAME='ndc302-region-1_his_beta@<AK>' -e SWR_PASSWORD='<登录密钥>' \
-  swr-builder:1.2.0-dev.2
+  swr-builder:1.3.0-dev.1
 ```
 
 也可以使用 `deploy/docker-compose.yml`。容器内只有 docker CLI，实际构建由宿主机 Docker 完成。
@@ -231,9 +237,10 @@ v1.2 开始按项目与命名空间 role binding 做服务端行级授权。项�
 ```bash
 pip install -r requirements-dev.txt
 pytest -q        # 使用模拟 SWR + 假 docker，不需要真实仓库
+(cd web && npm run typecheck && npm run build)   # 前端类型检查与构建
 ```
 
-详细设计见 `docs/系统设计.md`。
+详细设计见 `docs/系统设计.md`；v1.3 的前端与后端分层见 `docs/重构设计-Vue3与业务逻辑.md`。
 
 
 ## 14. 升级与上线检查

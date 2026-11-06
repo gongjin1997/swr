@@ -1,7 +1,7 @@
 services:
   swr-builder:
     build: ..
-    image: swr-builder:1.2.0-dev.2
+    image: swr-builder:1.3.0-dev.1
     container_name: swr-builder
     restart: unless-stopped
     ports:
