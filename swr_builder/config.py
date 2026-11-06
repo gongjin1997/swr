@@ -7,7 +7,7 @@ import logging
 import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 from .cloud.hcs import HCSProfile
@@ -25,6 +25,8 @@ class ServerConfig:
     secure_cookie: bool = False
     # 兼容 1.0 的配置：{用户名: 密码}，首次启动时导入为管理员账号
     users: Dict[str, str] = field(default_factory=dict)
+    # 是否开放 /docs、/redoc、/openapi.json（需登录）；默认关闭
+    api_docs: bool = False
 
 
 @dataclass

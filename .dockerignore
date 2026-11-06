@@ -5,3 +5,5 @@ docs/
 *.pyc
 config.yaml
 *.zip
+web/node_modules/
+swr_builder/webui/
