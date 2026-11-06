@@ -11,7 +11,6 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 WEBUI_DIR = Path(__file__).resolve().parent.parent / "webui"
 NO_CACHE = {"Cache-Control": "no-cache"}
@@ -34,7 +33,13 @@ def _index():
 
 def install(app: FastAPI) -> None:
     """必须在所有 API 路由注册之后调用：兜底路由会匹配任意路径。"""
-    app.mount("/assets", StaticFiles(directory=str(WEBUI_DIR / "assets"), check_dir=False), name="assets")
+    @app.get("/assets/{path:path}", include_in_schema=False)
+    async def asset(path: str):
+        base = (WEBUI_DIR / "assets").resolve()
+        target = (base / path).resolve()
+        if base not in target.parents or not target.is_file():
+            return JSONResponse({"detail": "文件不存在", "code": "NOT_FOUND"}, status_code=404)
+        return FileResponse(target)
 
     @app.get("/login", include_in_schema=False)
     async def login_page():

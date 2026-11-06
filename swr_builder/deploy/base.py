@@ -1,7 +1,7 @@
 """部署适配器协议。扩展时实现 Deployer 并注册，不侵入构建流程。"""
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict
+from typing import Any, Dict
 from urllib.parse import urlsplit
 
 @dataclass

@@ -35,15 +35,11 @@ async def create_target(ctx: Ctx, data: dict = Body(...)):
 
 @router.put("/api/deploy/targets/{id}")
 async def update_target(id: int, ctx: Ctx, data: dict = Body(...)):
-    if ctx.deploy.target_busy(id):
-        raise ValueError("该目标有部署正在进行，请稍后再修改")
     return ctx.deploy.view(ctx.deploy.save_target(data, id), True)
 
 
 @router.delete("/api/deploy/targets/{id}")
 async def delete_target(id: int, ctx: Ctx):
-    if ctx.deploy.target_busy(id):
-        raise ValueError("该目标有部署正在进行")
     if not ctx.store.delete_deploy_target(id):
         raise NotFound("目标不存在")
     return {"ok": True}

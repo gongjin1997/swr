@@ -127,6 +127,24 @@ class DeploymentsMixin:
                 (*fields.values(),deployment_id,worker_id,fencing_token))
         return cur.rowcount==1
 
+    def renew_service_deployment_lease(self, deployment_id: int, worker_id: str, fencing_token: int,
+                                       lease_seconds: int) -> bool:
+        """延长仍由该 worker 持有且未过期的租约。"""
+        now = datetime.now(timezone.utc)
+        lease_until = (now + timedelta(seconds=lease_seconds)).isoformat(timespec='seconds')
+        with self._db() as db:
+            return db.execute("UPDATE deployments SET lease_until=? WHERE id=? AND lease_owner=? AND fencing_token=? "
+                              "AND status IN ('applying','verifying') AND lease_until>?",
+                              (lease_until, deployment_id, worker_id, fencing_token,
+                               now.isoformat(timespec='seconds'))).rowcount == 1
+
+    def expire_stale_service_leases(self, reason: str) -> int:
+        """租约已过期的执行中任务无法确认集群状态，标记为 unknown 并释放该服务的发布槽。"""
+        with self._db() as db:
+            return db.execute("UPDATE deployments SET status='unknown',error=?,finished_at=?,lease_owner=NULL,lease_until=NULL "
+                              "WHERE service_id IS NOT NULL AND status IN ('applying','verifying') AND lease_until<=?",
+                              (reason, utcnow(), utcnow())).rowcount
+
     def mark_interrupted_service_deployments_unknown(self,reason: str) -> int:
         with self._db() as db:
             return db.execute("UPDATE deployments SET status='unknown',error=?,finished_at=?,lease_owner=NULL,lease_until=NULL WHERE service_id IS NOT NULL AND status IN ('applying','verifying')",

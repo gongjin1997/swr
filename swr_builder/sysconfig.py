@@ -1,9 +1,13 @@
 """数据库持久化设置；优先级：环境变量 > 数据库 > 配置文件。"""
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+import logging
 import math
 import re
 import shlex
+
+
+logger = logging.getLogger('swr_builder')
 
 
 class SettingsError(ValueError):
@@ -138,17 +142,32 @@ class SysConfig:
         return changed
 
     def update(self, values, clear, username):
+        """保存并应用设置：先写库，再改内存并通知订阅方；任一步失败都把数据库和内存恢复到修改前。"""
         changes = self._changes(values,clear)
+        if not changes: return []
+        paths = list(changes)
         old = {p:deepcopy(self._get(p)) for p in changes}
+        saved_before = self.store.get_settings()
         try:
-            for p,v in changes.items(): self._set(p,v)
-            for callback in self.on_change: callback(list(changes))
             self.store.save_settings({p:self.box.encrypt(v) if BY_PATH[p].type == 'secret' else v for p,v in changes.items()},[],username)
         except Exception as exc:
+            raise SettingsError('设置保存失败：'+str(exc)) from exc
+        try:
+            for p,v in changes.items(): self._set(p,v)
+            for callback in self.on_change: callback(paths)
+        except Exception as exc:
             for p,v in old.items(): self._set(p,v)
-            for callback in self.on_change: callback(list(changes))
+            try:
+                self.store.save_settings({p:saved_before[p] for p in paths if p in saved_before},
+                    [p for p in paths if p not in saved_before],username)
+            except Exception:  # noqa: BLE001 回滚失败只记录，原始错误更重要
+                logger.exception('回滚设置时恢复数据库失败')
+            for callback in self.on_change:
+                try: callback(paths)
+                except Exception:  # noqa: BLE001
+                    logger.exception('回滚设置时通知订阅方失败')
             raise SettingsError('设置应用失败：'+str(exc)) from exc
-        return list(changes)
+        return paths
 
     def candidate_registry(self, values, clear):
         cfg = deepcopy(self.settings.registry)
