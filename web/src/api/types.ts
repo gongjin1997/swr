@@ -179,6 +179,50 @@ export interface Cluster {
   status: string
 }
 
+export interface RoleDefinition {
+  code: string
+  name: string
+  scope_type: 'global' | 'project' | 'namespace'
+  permissions: string[]
+  description: string
+  enabled: boolean
+  builtin: boolean
+  binding_count: number
+}
+export interface RoleCatalog {
+  items: RoleDefinition[]
+  permissions: Record<string, string>
+  scope_permissions: Record<string, string[]>
+}
+export interface ClusterDiscovery {
+  cluster_id: number
+  version: string
+  namespaces: { name: string; status: string; managed_id: number | null }[]
+  nodes: { name: string; version: string; ready: boolean; architecture: string }[]
+  warnings: string[]
+  fetched_at: string
+}
+export interface KubeDeployment {
+  name: string
+  uid: string
+  replicas: number
+  ready_replicas: number
+  containers: { name: string; image: string }[]
+}
+export interface NamespaceResources {
+  namespace_id: number
+  namespace_name: string
+  cluster_name: string
+  deployments: KubeDeployment[]
+  services: { name: string; type: string; cluster_ip: string; ports: { port: number; targetPort: string | number }[] }[]
+  pods: { name: string; phase: string; ready: boolean; node: string }[]
+  ingresses: { name: string; hosts: string[] }[]
+  warnings: string[]
+  fetched_at: string
+  found?: boolean
+  container?: { name: string; image: string } | null
+}
+
 export interface DeployWindow {
   days: number[]
   start: string
@@ -188,6 +232,7 @@ export interface DeployWindow {
 
 export interface NamespacePolicy {
   require_approval: boolean
+  require_admin_approval: boolean
   min_approvals: number
   max_replicas: number
   allowed_registry_orgs: string[]
@@ -214,6 +259,11 @@ export interface ImageOnlySpec {
 }
 
 export interface Service {
+  project_name: string
+  app_name: string
+  cluster_name: string
+  namespace_name: string
+  tier: Tier
   id: number
   name: string
   project_id: number
@@ -249,6 +299,15 @@ export interface Approval {
 }
 
 export interface Deployment {
+  project_id: number
+  project_name: string
+  namespace_id: number | null
+  namespace_name: string
+  cluster_name: string
+  environment: string
+  can_approve: boolean
+  can_reject: boolean
+  require_admin_approval: boolean
   id: number
   service_id: number | null
   target_id: number | null

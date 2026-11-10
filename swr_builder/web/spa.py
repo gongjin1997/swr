@@ -10,12 +10,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 WEBUI_DIR = Path(__file__).resolve().parent.parent / "webui"
 NO_CACHE = {"Cache-Control": "no-cache"}
 
-PLACEHOLDER = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>SWR 镜像构建平台</title></head>
+PLACEHOLDER = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>工作台</title></head>
 <body style="font-family:sans-serif;max-width:640px;margin:80px auto;line-height:1.7">
 <h2>前端页面尚未构建</h2>
 <p>后端 API 正常运行。请在源码目录执行：</p>
@@ -40,6 +40,13 @@ def install(app: FastAPI) -> None:
         if base not in target.parents or not target.is_file():
             return JSONResponse({"detail": "文件不存在", "code": "NOT_FOUND"}, status_code=404)
         return FileResponse(target)
+
+    @app.get("/favicon.svg", include_in_schema=False)
+    async def favicon_svg():
+        icon = WEBUI_DIR / "favicon.svg"
+        if not icon.is_file():
+            return Response(status_code=204)
+        return FileResponse(icon)
 
     @app.get("/login", include_in_schema=False)
     async def login_page():

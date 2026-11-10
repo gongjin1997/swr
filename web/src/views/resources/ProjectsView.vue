@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { namespaceApi, projectApi } from '@/api'
 import type { Namespace, Project, RegistryOrg } from '@/api/types'
 import RegistryOrgsEditor from '@/components/RegistryOrgsEditor.vue'
@@ -7,6 +8,8 @@ import { confirmAction, errorText, notifyError, notifySuccess, useAction } from 
 import { useSession } from '@/stores/session'
 
 const session = useSession()
+const route = useRoute()
+const visibleProjects = computed(() => projects.value.filter(p => !route.query.project || p.id === Number(route.query.project)))
 const projects = ref<Project[]>([])
 const namespaces = ref<Namespace[]>([])
 const loading = ref(false)
@@ -102,7 +105,7 @@ onMounted(load)
         <el-button v-if="session.can('project.manage')" type="primary" @click="openEditor(null)">新建项目</el-button>
       </div>
     </template>
-    <el-table v-loading="loading" :data="projects" empty-text="暂无可见项目">
+    <el-table v-loading="loading" :data="visibleProjects" empty-text="暂无可见项目">
       <el-table-column label="项目" min-width="180">
         <template #default="{ row }"><b>{{ row.name }}</b><div class="hint mono">{{ row.slug }}</div></template>
       </el-table-column>
@@ -120,6 +123,7 @@ onMounted(load)
           <span v-if="!row.namespace_ids.length" class="hint">未分配</span>
         </template>
       </el-table-column>
+      <el-table-column label="关联资源" min-width="200"><template #default="{ row }"><div class="toolbar"><RouterLink :to="{ name: 'apps', query: { project: row.id } }">应用</RouterLink><RouterLink :to="{ name: 'services', query: { project: row.id } }">服务</RouterLink><RouterLink v-if="session.deployEnabled" :to="{ name: 'deploy', query: { project: row.id } }">部署与审批</RouterLink></div></template></el-table-column>
       <el-table-column label="操作" width="230">
         <template #default="{ row }">
           <template v-if="session.can('project.manage')">

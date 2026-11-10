@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { Box, Document, Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { appApi, buildApi, jobApi } from '@/api'
 import type { App, BuildMode, Job, Preview, Versions } from '@/api/types'
@@ -17,9 +18,12 @@ const route = useRoute()
 const router = useRouter()
 
 const appId = ref<number | null>(null)
+const viewportWidth = ref(window.innerWidth)
+const versionColumns = computed(() => viewportWidth.value < 600 ? 1 : 2)
 const versions = ref<Versions | null>(null)
 const versionsError = ref('')
 const versionsLoading = ref(false)
+let versionRequest = 0
 const form = reactive({ mode: 'incremental' as BuildMode, baseTag: '', tag: '', remark: '', extractZip: false })
 const files = ref<File[]>([])
 const uploading = ref(false)
@@ -54,7 +58,7 @@ const incrementalDesc = computed(() => {
   return '在上一版本镜像上叠加本次文件'
 })
 const fullDesc = computed(() =>
-  app.value?.base_image ? `基于 ${shortImage(app.value.base_image)} 重新构建，层数归零` : '应用未配置基础镜像',
+  app.value?.base_image ? `基于 ${shortImage(app.value.base_image)} 重新构建，合并历史变更` : '应用未配置基础镜像',
 )
 
 /** 与后端 dockerfile.plan_files 相同的目标路径规则，仅用于展示。 */
@@ -73,19 +77,25 @@ const destinations = computed(() => {
 async function loadVersions() {
   const current = app.value
   if (!current) {
+    ++versionRequest
     versions.value = null
+    versionsLoading.value = false
+    versionsError.value = ''
     return
   }
+  const request = ++versionRequest
   versionsLoading.value = true
   versionsError.value = ''
   try {
     const v = await appApi.versions(current.id)
-    if (appId.value === current.id) versions.value = v
+    if (request === versionRequest && appId.value === current.id) versions.value = v
   } catch (e) {
-    versions.value = null
-    versionsError.value = errorText(e)
+    if (request === versionRequest) {
+      versions.value = null
+      versionsError.value = errorText(e)
+    }
   } finally {
-    versionsLoading.value = false
+    if (request === versionRequest) versionsLoading.value = false
   }
 }
 
@@ -169,6 +179,7 @@ function onFinished(job: Job) {
 }
 
 onMounted(async () => {
+  window.addEventListener('resize', updateViewportWidth)
   try {
     await platform.loadApps(true)
   } catch (e) {
@@ -187,20 +198,27 @@ onMounted(async () => {
     }
   }
 })
+
+onBeforeUnmount(() => window.removeEventListener('resize', updateViewportWidth))
+
+function updateViewportWidth() {
+  viewportWidth.value = window.innerWidth
+}
 </script>
 
 <template>
   <div class="page">
     <div class="build-grid">
       <el-card>
-        <template #header><span class="card-title">新建构建</span></template>
-        <el-form label-position="top">
+        <template #header><div class="card-title"><span><el-icon><Box /></el-icon> 新建构建</span><el-tag size="small" effect="plain">{{ MODE_TEXT[form.mode] }}</el-tag></div></template>
+        <el-form label-position="top" :disabled="uploading">
+          <div class="form-section-title"><span>1</span> 选择应用</div>
           <el-form-item label="应用">
             <div class="row">
               <el-select v-model="appId" filterable placeholder="请先在“应用管理”中新建应用" class="grow">
                 <el-option v-for="a in platform.apps" :key="a.id" :label="a.name" :value="a.id" />
               </el-select>
-              <el-button :loading="versionsLoading" @click="loadVersions">刷新版本</el-button>
+              <el-button :icon="Refresh" :loading="versionsLoading" :disabled="!app" aria-label="刷新版本" @click="loadVersions" />
             </div>
             <div v-if="app" class="hint mono">{{ app.image_repo }}:&lt;版本号&gt;</div>
           </el-form-item>
@@ -214,7 +232,7 @@ onMounted(async () => {
               仓库中还没有版本，首次构建会基于基础镜像，版本号为 <b class="mono">{{ versions.next_tag }}</b>
             </div>
             <template v-else-if="versions">
-              <el-descriptions :column="3" size="small" border>
+              <el-descriptions :column="versionColumns" size="small" border>
                 <el-descriptions-item label="上一版本"><span class="mono">{{ versions.latest }}</span></el-descriptions-item>
                 <el-descriptions-item label="新版本"><b class="mono accent">{{ form.tag.trim() || versions.next_tag }}</b></el-descriptions-item>
                 <el-descriptions-item label="镜像层数">
@@ -230,6 +248,7 @@ onMounted(async () => {
             </template>
           </div>
 
+          <div class="form-section-title divider"><span>2</span> 配置构建</div>
           <el-form-item label="构建方式">
             <el-radio-group v-model="form.mode" class="modes">
               <el-radio value="incremental" border>
@@ -243,7 +262,7 @@ onMounted(async () => {
 
           <div class="form-grid">
             <el-form-item v-if="form.mode === 'incremental' && hasLatest" label="基于版本">
-              <el-select v-model="form.baseTag">
+              <el-select v-model="form.baseTag" :placeholder="`最新版本（${versions?.latest}）`">
                 <el-option :label="`最新版本（${versions?.latest}）`" value="" />
                 <el-option v-for="t in baseTags" :key="t" :label="t" :value="t" />
               </el-select>
@@ -254,6 +273,7 @@ onMounted(async () => {
             </el-form-item>
           </div>
 
+          <div class="form-section-title divider"><span>3</span> 上传制品</div>
           <el-form-item label="上传文件">
             <div class="grow">
               <FileDropzone v-model="files" :max-mb="platform.info?.max_upload_mb" :destinations="destinations" />
@@ -268,14 +288,14 @@ onMounted(async () => {
           <el-progress v-if="uploading" :percentage="progress" :format="(p: number) => (p < 100 ? `上传中 ${p}%` : '上传完成，正在创建任务…')" />
           <div class="actions">
             <el-button :loading="previewing" :disabled="uploading" @click="openPreview">预览 Dockerfile</el-button>
-            <el-button type="primary" :loading="uploading" @click="submit">上传并构建</el-button>
+            <el-button type="primary" :icon="UploadFilled" :loading="uploading" @click="submit">上传并构建</el-button>
           </div>
         </el-form>
       </el-card>
 
       <el-card class="log-card">
-        <template #header><span class="card-title">构建日志</span></template>
-        <JobDetail :job-id="jobId" log-height="calc(100vh - 360px)" @finished="onFinished" />
+        <template #header><div class="card-title"><span><el-icon><Document /></el-icon> 构建日志</span><span class="hint">{{ jobId ? `任务 #${jobId}` : '等待任务' }}</span></div></template>
+        <JobDetail :job-id="jobId" log-height="max(360px, calc(100vh - 420px))" @finished="onFinished" />
       </el-card>
     </div>
 
@@ -307,7 +327,7 @@ onMounted(async () => {
 <style scoped>
 .build-grid {
   display: grid;
-  grid-template-columns: minmax(420px, 5fr) minmax(420px, 6fr);
+  grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
   gap: 16px;
   align-items: start;
 }
@@ -318,7 +338,7 @@ onMounted(async () => {
 }
 .log-card {
   position: sticky;
-  top: 76px;
+  top: 86px;
 }
 .row {
   display: flex;
@@ -327,6 +347,7 @@ onMounted(async () => {
 }
 .grow {
   flex: 1;
+  min-width: 0;
   width: 100%;
 }
 .version-box {
@@ -365,4 +386,14 @@ onMounted(async () => {
   margin: 0;
   padding-left: 18px;
 }
+.form-section-title { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; margin-bottom: 20px; }
+.form-section-title > span { width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center; font-size: 11px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
+.divider { border-top: 1px solid var(--hi-border-light); padding-top: 22px; }
+.modes :deep(.el-radio.is-checked) { background: var(--el-color-primary-light-9); }
+.modes :deep(.el-radio__label) { min-width: 0; padding-left: 8px; }
+.modes :deep(.el-radio__input) { margin-top: 4px; }
+.mode-desc { margin-top: 5px; font-size: 11px; }
+.actions { border-top: 1px solid var(--hi-border-light); padding-top: 20px; }
+.card-title > span:first-child { display: inline-flex; align-items: center; gap: 7px; }
+@media (max-width: 600px) { .modes { grid-template-columns: minmax(0, 1fr); } .log-card { position: static; } .actions { flex-wrap: wrap; } }
 </style>

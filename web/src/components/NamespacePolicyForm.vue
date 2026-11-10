@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /** 命名空间发布策略：审批、副本上限、允许的 SWR 组织、发布冻结、发布窗口。 */
-import type { NamespacePolicy } from '@/api/types'
+import type { NamespacePolicy, Tier } from '@/api/types'
 import { WEEKDAYS } from '@/constants'
 
 const policy = defineModel<NamespacePolicy>({ required: true })
+defineProps<{ tier?: Tier }>()
 
 const TIMEZONES = ['Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Singapore', 'Asia/Tokyo', 'Europe/London', 'UTC']
 
@@ -20,8 +21,12 @@ function removeWindow(index: number) {
   <div>
     <div class="form-grid">
       <el-form-item label="发布需要审批">
-        <el-switch v-model="policy.require_approval" />
-        <div class="hint">生产环境（prod）始终需要审批</div>
+        <el-switch v-model="policy.require_approval" :disabled="tier === 'staging' || tier === 'prod'" />
+        <div class="hint">UAT（预生产）与生产环境始终需要独立审批</div>
+      </el-form-item>
+      <el-form-item label="平台管理员确认">
+        <el-switch v-model="policy.require_admin_approval" />
+        <div class="hint">启用后只有平台管理员可确认；生产环境始终要求管理员确认</div>
       </el-form-item>
       <el-form-item label="最少审批人数"><el-input-number v-model="policy.min_approvals" :min="1" :max="5" /></el-form-item>
       <el-form-item label="最大副本数"><el-input-number v-model="policy.max_replicas" :min="1" :max="1000" /></el-form-item>

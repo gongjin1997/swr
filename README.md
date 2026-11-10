@@ -46,7 +46,21 @@ python -m swr_builder -c config.yaml
 
 > 构建 worker 与旧版部署目标仍限定单进程运行。v1.2 服务发布队列使用 SQLite 持久化与租约；跨主机高可用尚未实现。
 
+### 前端工作台
+
+前端沿用 HCS 巡检平台的浅色侧栏、设计令牌和 Element Plus 组件规范，按 SWR 的业务重新组织：
+
+- **工作台概览**：当前权限范围内的应用数、构建总数、运行中任务、成功率与最近记录。
+- **工作空间**：构建镜像、构建记录和应用管理；构建页面按应用、版本、制品分组，右侧显示实时日志。
+- **资源与发布**：项目、服务及旧部署中心，菜单和路由使用同一套权限检查。
+- **平台管理**：Kubernetes 集群、命名空间、成员授权、账号、审计和系统设置。Kubernetes 配置集中在系统设置；支持 kubeconfig `kind: Config` 的静态 Token/内嵌证书，不依赖 HCS 配置。
+- 侧栏可折叠；手机使用抽屉导航；外观支持浅色、深色与跟随系统，偏好保存在当前浏览器。
+
+旧的业务 URL 和 API 继续可用，登录后的默认入口改为 `/dashboard`。前端生产产物仍输出到 `swr_builder/webui/`，由 FastAPI 托管，无需更换部署方式。
+
 ## 3. 部署方式
+
+ARM64 / aarch64 内网环境推荐使用完整离线交付包，默认部署到 `/data/swr`、端口 `8082`。包内包含完整镜像、锁定的 Python wheel、ARM64 前端构建工具、源码、安装与代码更新工具；日常改代码无需重建镜像。详见 [ARM64 离线部署与更新](docs/ARM64离线部署与更新.md)。
 
 ### 3.1 systemd（推荐，直接使用构建机的 Docker）
 
@@ -133,7 +147,9 @@ location / {
 
 ## 7. 配置说明
 
-管理员可在“系统设置”维护仓库、构建、安全、站点名称与 HCS 连接参数。优先级为 **环境变量 > 数据库中的页面设置 > config.yaml / 默认值**。环境变量控制的项在页面只读；敏感值不回显，留空保持，明确勾选才清空。设置生效不需要重启；有未结束的构建时不能修改仓库及构建参数。
+管理员可在“系统设置”维护站点、仓库、构建、安全与 Kubernetes 集群/命名空间配置。Kubernetes 直连 kubeconfig，不要求配置华为云 Stack。优先级为 **环境变量 > 数据库中的页面设置 > config.yaml / 默认值**。环境变量控制的项在页面只读；敏感值不回显，留空保持，明确勾选才清空。设置生效不需要重启；有未结束的构建时不能修改仓库及构建参数。
+
+镜像仓库的“跳过 Registry API TLS 校验”只影响平台读取 Registry API。`docker login/build/push` 由宿主机 Docker daemon 连接仓库；遇到 x509/SAN 错误时，应修复仓库证书，或在 Docker daemon 的 `/etc/docker/daemon.json` 中合并 `insecure-registries` 配置并重启 Docker。该主机级配置不会由平台自动改写或重启。
 
 端口、监听地址、HTTPS Cookie 策略、数据目录和初始化管理员密码仍由配置文件控制。页面设置不会改写 YAML。连接测试仅验证对应 API，不等于验证 docker push 或部署写权限。
 
@@ -145,14 +161,11 @@ location / {
 | `SWR_USERNAME` / `SWR_PASSWORD` | docker login 用户名 / 登录密钥 |
 | `SWR_AK` / `SWR_SK` / `SWR_PROJECT` | AK/SK 方式 |
 | `BUILDER_ADMIN_PASSWORD` / `BUILDER_SECRET_KEY` | 首次管理员密码 / 机密配置加密主密钥 |
-| `HCS_IAM_ENDPOINT` / `HCS_AK` / `HCS_SK` | 私有云 IAM Endpoint / 专用 AK / SK |
-| `HCS_PROJECT_ID` / `HCS_DOMAIN_ID` / `HCS_SECURITY_TOKEN` | 作用域 ID / 临时凭证 Security Token |
-| `HCS_PASSWORD` / `HCS_TOKEN` | 可选密码 / 预置 Token 模式 |
 | `BUILDER_CONFIG` / `BUILDER_DATA_DIR` / `BUILDER_DOCKER_BIN` / `BUILDER_PORT` | 配置文件 / 数据目录 / docker 路径 / 端口 |
 
 数据目录（默认 `./data`）：`builder.db`（SQLite）、`jobs/<任务ID>/build.log`、`docker-config/`（平台独立的 docker 登录信息）、`deployments/<ID>/deploy.log`、`secret.key`（敏感配置加密主密钥）。
 
-**必须一起备份 builder.db 与 secret.key**；使用 `BUILDER_SECRET_KEY` 时需单独安全托管该环境值。密钥丢失将无法解密页面保存的仓库/部署/HCS 凭证；本版没有在线密钥轮换功能。构建机或主密钥被攻破后，加密不能提供额外隔离。备份和数据目录应限制权限；`docker-config/` 同样含敏感登录信息，不要公开。
+**必须一起备份 builder.db 与 secret.key**；使用 `BUILDER_SECRET_KEY` 时需单独安全托管该环境值。密钥丢失将无法解密页面保存的仓库/Kubernetes 凭证；本版没有在线密钥轮换功能。构建机或主密钥被攻破后，加密不能提供额外隔离。备份和数据目录应限制权限；`docker-config/` 同样含敏感登录信息，不要公开。
 
 ## 8. 常见问题
 
@@ -199,17 +212,17 @@ curl -H "Authorization: Bearer $BUILDER_API_TOKEN" -F app_id=1 -F mode=increment
 | 开发者 | 通过项目绑定查看应用、构建和任务；拥有项目权限时可构建/配置，部署另需 namespace 角色 |
 | 只读用户 | 旧版默认项目迁移为只读；新授权使用 `project_viewer` / `namespace_viewer` |
 
-v1.2 开始按项目与命名空间 role binding 做服务端行级授权。项目绑定不会自动授予 namespace 权限；生产发布根据 namespace policy 进入审批。用户组、SSO、机器人账号、CCE 证书自动签发尚未完成。至少保留一名平台管理员。
+v1.2 开始按项目与命名空间 role binding 做服务端行级授权。项目绑定不会自动授予 namespace 权限；生产发布要求至少一名平台管理员确认。非生产环境可把全局 `deployment_approver` 角色绑定给专职审批人；`namespace_owner` 不能审批发布。命名空间策略也可要求管理员确认。用户组、SSO、机器人账号、CCE 证书自动签发尚未完成。至少保留一名平台管理员。
 
 ## 11. 部署模块
 
 - “部署中心”配置目标：**Webhook** 或 **CCE / Kubernetes**。SSH / Compose 仅为注册表占位，不可执行。
 - Webhook 固定 POST JSON：`event`、`deployment_id`、`image`、`app`、`job_id`、`tag`、`digest`、`operator`。可配置请求头、TLS 校验及 HMAC-SHA256 签名；`X-SWR-Signature: sha256=<十六进制签名>` 对原始 UTF-8 请求体计算。接收方应按 `deployment_id` 去重，建立自身的防重放/鉴权机制。
 - Webhook 测试会发送 `event=ping`，请确保接收端不会误触发部署。HTTP 2xx 仅表示网关接受请求，不代表应用已就绪；异步回调确认尚未实现。
-- 集群凭据以密文保存，当前接入方式为 SA Token；可纳管已有 namespace、执行 SSAR 权限检查和生成供管理员审核的 RBAC 模板。CCE 证书签发/撤销仍待现场适配。
+- 集群凭据以密文保存，支持标准 kubeconfig Config 中的静态 Token 或内嵌客户端证书/私钥；也可在系统设置中直接上传 PEM 客户端证书、私钥和可选 CA。可纳管已有 namespace、执行 SSAR 权限检查和生成供集群管理员审核的 RBAC 模板。kubeconfig `exec`、`auth-provider` 和外部文件凭据不受支持且不会执行/读取。生产发布只有平台管理员可批准；非生产环境由全局发布审批员角色批准。
 - 服务配置支持不可变 revision、CAS 更新和只写密钥。worker 当前可对 `image_only` 服务执行固定 digest 的 Deployment 镜像更新并等待滚动就绪；`managed` 模式的完整清单 apply 尚未启用。
 - 服务发布写入 SQLite 队列，使用幂等键、租约和 fencing token。工作进程重启时，执行中的 Kubernetes 写操作标记 `unknown`，须先核对集群状态；不会盲目重放。
-- 生产 namespace 默认要求审批；审批人与发起人分离。回滚、重启、扩缩容请求已有状态与权限入口，仍需扩展测试集群覆盖和操作体验。
+- 生产 namespace 始终要求平台管理员审批；审批人与发起人分离。非生产 namespace 可要求普通审批或额外启用管理员审批。回滚、重启、扩缩容请求已有状态与权限入口，仍需扩展测试集群覆盖和操作体验。
 - Namespace 可配置冻结截止时间及部署窗口；窗口使用 IANA 时区和 ISO 星期编号（周一 1 至周日 7），跨午夜窗口归属开始日。API 入队和 worker 执行前都会检查当前策略。
 - v1.2 服务发布只能引用所属应用的成功构建，并固定到 digest。旧 `/api/deployments` 手工发布接口返回 HTTP 410；旧自动部署事件不执行，以免绕过 namespace 审批。
 - Webhook / Kubernetes 旧目标保留为迁移查看和管理员连接测试用途。发布请创建服务并使用 namespace 授权与审批队列。
@@ -217,20 +230,9 @@ v1.2 开始按项目与命名空间 role binding 做服务端行级授权。项�
 
 新增适配器：继承 `deploy/base.py` 的 `Deployer`，实现 `validate / test / deploy`，在 `deploy/__init__.py` 注册；前端从字段描述生成表单。通过 `events.py` 订阅构建/部署事件扩展通知、扫描等模块。
 
-## 12. 华为云 Stack 8.5.1 后端接入
+## 12. 云端依赖
 
-已实现独立 HCS 连接层，默认使用 **AK/SK 签名调用 POST /v3/auth/tokens**；以华为官方 SDK 计算签名，获取 X-Subject-Token，校验有效期与作用域并缓存。密码和预置 Token 是显式选择的可选模式，认证失败不自动回退。
-
-- 如果升级前已在数据库保存 password/token 模式，升级不会擅自更换；请在页面显式选择 aksk 后保存。
-- 系统设置 → 华为云 Stack 后端：填写 IAM Endpoint、AK/SK、project/domain 作用域及对应 ID，然后测试认证。
-- 可使用 `HCS_AK`、`HCS_SK`、`HCS_SECURITY_TOKEN`、`HCS_PROJECT_ID`、`HCS_DOMAIN_ID`；页面秘密值加密、不回显。
-- 默认空请求体 + 已签名的 X-Project-Id / X-Domain-Id；如现场网关要求 JSON，显式配置 `aksk_request_body`。不推测 identity 方法，也不会盲试或静默改用密码。
-- 使用官方标准 SDK-HMAC-SHA256 / Access 签名。某些网关旧式 Credential 签名不在本版实现范围；实际网关兼容性需要现场验证。
-- 临时 AK/SK 可带 X-Security-Token；SK 不作为密码、请求头或请求体发送。
-- `python -m swr_builder.cloud -c config.yaml` 可执行认证诊断，结果不输出 Token/AK/SK。
-- 已通过模拟 IAM 与官方 SDK 固定向量测试，但**没有连接用户真实 Stack 环境**。
-- SWR Registry、HCS IAM、Kubernetes 使用独立凭证。SWR/CCE/ECS 的管理面业务 API、ManageOne SSO 仍需按现场组件版本开发。
-- 详细协议、配置、JSON 模板及故障排查见 `docs/华为云Stack8.5.1接口接入设计.md`。
+Kubernetes 部署直接使用系统设置中导入的 kubeconfig，不需要华为云 Stack 的 IAM、CCE 或 SWR 管理 API 配置。HCS 后端代码仅作为可选兼容模块保留，不参与镜像构建或 Kubernetes 发布；系统设置界面不展示 HCS 配置。
 
 ## 13. 测试
 

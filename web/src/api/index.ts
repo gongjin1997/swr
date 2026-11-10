@@ -4,7 +4,7 @@ import type {
   ApiToken, App, AppFields, AuditEntry, BindableUser, Binding, Cluster, DeployProvider, DeployTarget, Deployment,
   DockerfileImport, Job, LogChunk, Namespace, NamespacePolicy, Page, PlatformInfo, Preview, Project, PublicUser,
   RegistryOrg, Revision, RevisionDiff, RolesInfo, Service, SessionProfile, SessionRow, SettingsView, SystemInfo,
-  Tier, Versions,
+  Tier, Versions, RoleCatalog, RoleDefinition, ClusterDiscovery, NamespaceResources,
 } from './types'
 
 const page = <T>(items: T[]): Page<T> => ({ items, total: items.length })
@@ -91,13 +91,20 @@ export const projectApi = {
 
 export interface ClusterRequest {
   name: string
-  server: string
-  auth_type: 'sa_token'
   cce_cluster_id: string
-  credential?: { token: string; ca_pem: string }
+  server?: string
+  auth_type?: 'sa_token' | 'client_cert'
+  config?: string
+  credential?: {
+    token?: string
+    ca_pem?: string
+    client_cert_pem?: string
+    client_key_pem?: string
+  }
 }
 
 export const clusterApi = {
+  discover: (id: number) => http.get<ClusterDiscovery>(`/api/clusters/${id}/discovery`),
   list: () => http.get<Page<Cluster>>('/api/clusters'),
   create: (data: ClusterRequest) => http.post<Cluster>('/api/clusters', data),
   update: (id: number, data: Partial<ClusterRequest>) => http.put<Cluster>(`/api/clusters/${id}`, data),
@@ -111,8 +118,9 @@ export interface RbacReview {
 }
 
 export const namespaceApi = {
+  resources: (id: number) => http.get<NamespaceResources>(`/api/namespaces/${id}/resources`),
   list: () => http.get<Page<Namespace>>('/api/namespaces'),
-  adopt: (data: { name: string; cluster_id: number; tier: Tier; policy: Partial<NamespacePolicy> }) =>
+  adopt: (data: { name: string; cluster_id: number; tier: Tier; policy: Partial<NamespacePolicy>; project_id?: number }) =>
     http.post<Namespace>('/api/namespaces', data),
   update: (id: number, data: { tier: Tier; policy: NamespacePolicy }) => http.put<Namespace>(`/api/namespaces/${id}`, data),
   review: (id: number) => http.post<RbacReview>(`/api/namespaces/${id}/review`),
@@ -120,7 +128,9 @@ export const namespaceApi = {
 }
 
 export const serviceApi = {
-  list: () => http.get<Page<Service>>('/api/services'),
+  list: (query: { project_id?: number; app_id?: number; namespace_id?: number } = {}) => http.get<Page<Service>>('/api/services', query),
+  runtime: (id: number) => http.get<NamespaceResources>(`/api/services/${id}/runtime`),
+  builds: (id: number) => http.get<Page<Job>>(`/api/services/${id}/builds`),
   get: (id: number) => http.get<Service>(`/api/services/${id}`),
   create: (data: { name: string; project_id: number; namespace_id: number; app_id: number; spec: unknown }) =>
     http.post<Service>('/api/services', data),
@@ -140,7 +150,7 @@ export const serviceApi = {
 }
 
 export const deploymentApi = {
-  list: (query: { limit?: number; offset?: number; app_id?: number } = {}) => http.get<Page<Deployment>>('/api/deployments', query),
+  list: (query: { limit?: number; offset?: number; app_id?: number; project_id?: number; namespace_id?: number; service_id?: number; status?: string } = {}) => http.get<Page<Deployment>>('/api/deployments', query),
   get: (id: number) => http.get<Deployment>(`/api/deployments/${id}`),
   log: (id: number, offset: number) => http.get<LogChunk>(`/api/deployments/${id}/log`, { offset }),
   approve: (id: number, comment = '') => http.post<Deployment>(`/api/deployments/${id}/approve`, { comment }),
@@ -152,6 +162,13 @@ export const bindingApi = {
   users: () => http.get<Page<BindableUser>>('/api/bindable-users'),
   create: (data: Omit<Binding, 'id'>) => http.post<Binding>('/api/bindings', data),
   remove: (id: number) => http.del(`/api/bindings/${id}`),
+}
+
+export const roleApi = {
+  list: () => http.get<RoleCatalog>('/api/role-definitions'),
+  save: (code: string | null, data: Pick<RoleDefinition, 'code' | 'name' | 'scope_type' | 'permissions' | 'description' | 'enabled'>) =>
+    code ? http.put<RoleDefinition>(`/api/role-definitions/${code}`, data) : http.post<RoleDefinition>('/api/role-definitions', data),
+  remove: (code: string) => http.del(`/api/role-definitions/${code}`),
 }
 
 export const userApi = {

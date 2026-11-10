@@ -1,10 +1,12 @@
 """旧部署目标（只读迁移核对）、发布记录、审批与发布日志。"""
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Body, Request
 
 from ..auth import has_perm
-from ..authz import has_namespace_permission, has_project_permission, visible_namespace_ids, visible_project_ids
+from ..authz import has_global_permission, has_namespace_permission, has_project_permission, visible_namespace_ids, visible_project_ids
 from ..deploy import list_providers
 from ..errors import DomainError, NotFound
 from ..fileio import read_log
@@ -64,7 +66,11 @@ async def _decide(id: int, request: Request, ctx, user, data: dict, decision: st
     if not record or not record.get("service_id"):
         raise NotFound("发布任务不存在")
     service = ctx.store.get_service(record["service_id"])
-    if not service or not has_namespace_permission(ctx.store, user, service["namespace_id"], "deploy.approve"):
+    if not service:
+        raise NotFound("发布任务不存在")
+    permission = "platform.admin" if decision == "approved" and releases.requires_admin_approval(ctx.store, record) else "deploy.approve"
+    if not (has_global_permission(ctx.store, user, permission) or
+            (permission == "deploy.approve" and has_namespace_permission(ctx.store, user, record["namespace_id"], permission))):
         raise NotFound("发布任务不存在")
     result = releases.decide(ctx.store, record, user, decision, text_field(data, "comment", 500))
     audit(request, "deploy." + decision, id)
@@ -84,17 +90,36 @@ async def reject(id: int, request: Request, ctx: Ctx, user: User, data: dict = B
 # ------------------------------------------------------------------ 发布记录
 @router.get("/api/deployments")
 async def list_deployments(ctx: Ctx, user: User, target_id: int = None, app_id: int = None, limit: int = 30,
-                           offset: int = 0):
-    projects = visible_project_ids(ctx.store, user, "deploy.view")
+                           offset: int = 0, project_id: int = None, namespace_id: int = None,
+                           service_id: int = None, status: str = None):
+    projects = sorted(set(visible_project_ids(ctx.store, user, "deploy.view")) |
+                      set(visible_project_ids(ctx.store, user, "app.view")))
     namespaces = visible_namespace_ids(ctx.store, user, "namespace.view")
     items, total = ctx.store.list_deployments(target_id, app_id, min(max(limit, 1), 100), max(offset, 0),
-                                              projects, namespaces)
+                                              projects, namespaces, project_id=project_id, namespace_id=namespace_id,
+                                              service_id=service_id, status=status)
+    for item in items:
+        _enrich(ctx, user, item)
     return {"items": items, "total": total}
+
+
+def _enrich(ctx, user, record):
+    ns = ctx.store.get_namespace(record.get("namespace_id")) if record.get("namespace_id") else None
+    project = ctx.store.get_project(record.get("project_id"))
+    record.update(project_name=project["name"] if project else "",
+                  namespace_name=ns["name"] if ns else "", cluster_name=ns["cluster_name"] if ns else "",
+                  can_approve=record["status"] == "pending_approval" and releases.can_decide(ctx.store, user, record),
+                  can_reject=record["status"] == "pending_approval" and releases.can_decide(ctx.store, user, record, "rejected"),
+                  require_admin_approval=releases.requires_admin_approval(ctx.store, record) if ns else False)
+    return record
 
 
 def _visible_deployment(ctx, user, id: int):
     record = ctx.store.get_deployment(id)
     if record and has_project_permission(ctx.store, user, record.get("project_id") or 0, "deploy.view"):
+        return record
+    if (record and record.get("service_id") and
+            has_project_permission(ctx.store, user, record["project_id"], "app.view")):
         return record
     if (record and record.get("service_id")
             and has_namespace_permission(ctx.store, user, record.get("namespace_id") or 0, "namespace.view")):
@@ -106,7 +131,7 @@ def _visible_deployment(ctx, user, id: int):
 async def get_deployment(id: int, ctx: Ctx, user: User):
     record = _visible_deployment(ctx, user, id)
     record["approvals"] = ctx.store.list_approvals(id) if record.get("service_id") else []
-    return record
+    return _enrich(ctx, user, record)
 
 
 @router.get("/api/deployments/{id}/log")

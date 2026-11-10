@@ -7,3 +7,5 @@ config.yaml
 *.zip
 web/node_modules/
 swr_builder/webui/
+artifacts/arm64/vendor/
+artifacts/arm64/bundle/

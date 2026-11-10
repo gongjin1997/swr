@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Search } from '@element-plus/icons-vue'
 import { onMounted, reactive, ref } from 'vue'
 import { userApi } from '@/api'
 import type { AuditEntry } from '@/api/types'
@@ -30,15 +31,12 @@ onMounted(() => load(true))
 
 <template>
   <div class="page">
-    <div class="page-heading">
-      <h2>操作审计</h2>
-      <div class="toolbar">
-        <el-input v-model="filters.username" placeholder="账号" clearable style="width: 160px" @keyup.enter="load(true)" />
-        <el-input v-model="filters.action" placeholder="操作前缀，如 deploy." clearable style="width: 200px" @keyup.enter="load(true)" />
-        <el-button :loading="loading" @click="load(true)">查询</el-button>
-      </div>
-    </div>
     <el-card>
+      <div class="filter-bar">
+        <el-input v-model="filters.username" placeholder="账号" clearable aria-label="按账号筛选" @keyup.enter="load(true)" />
+        <el-input v-model="filters.action" placeholder="操作前缀，如 deploy." clearable aria-label="按操作筛选" @keyup.enter="load(true)" />
+        <el-button :icon="Search" :loading="loading" @click="load(true)">查询</el-button><span class="count">共 {{ total }} 条记录</span>
+      </div>
       <el-table v-loading="loading && !items.length" :data="items" empty-text="暂无审计记录">
         <el-table-column label="时间" width="170"><template #default="{ row }">{{ fmtTime(row.created_at) }}</template></el-table-column>
         <el-table-column prop="username" label="账号" width="140" />

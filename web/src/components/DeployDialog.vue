@@ -1,12 +1,12 @@
 <script setup lang="ts">
 /** 发布服务：选择一次成功构建（固定 digest）和配置修订。同一次对话框内重复提交复用幂等键。 */
 import { reactive, ref, watch } from 'vue'
-import { jobApi, serviceApi } from '@/api'
+import { serviceApi } from '@/api'
 import { idempotencyKey } from '@/api/http'
 import type { Job, Service } from '@/api/types'
 import { notifyError, notifySuccess } from '@/composables/useAction'
 
-const props = defineProps<{ service: Service | null }>()
+const props = defineProps<{ service: Service | null; jobId?: number }>()
 const visible = defineModel<boolean>({ required: true })
 const emit = defineEmits<{ submitted: [id: number] }>()
 
@@ -20,8 +20,8 @@ watch(visible, async (open) => {
   key = idempotencyKey()
   Object.assign(form, { jobId: null, useLatest: false, remark: '' })
   try {
-    jobs.value = (await jobApi.list({ app_id: props.service.app_id, status: 'success', limit: 100 })).items
-    form.jobId = jobs.value[0]?.id ?? null
+    jobs.value = (await serviceApi.builds(props.service.id)).items.filter(j => !!j.digest)
+    form.jobId = jobs.value.find(j => j.id === props.jobId)?.id ?? jobs.value[0]?.id ?? null
   } catch (e) {
     notifyError(e)
   }

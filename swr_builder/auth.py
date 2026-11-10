@@ -23,13 +23,15 @@ ROLES: Dict[str, str] = {"admin": "管理员", "developer": "开发者", "viewer
 
 # 权限点：新增功能时在这里登记，再分配给角色
 PERMISSION_LABELS: Dict[str, str] = {
+    "platform.admin": "平台管理员确认",
+    "role.manage": "管理角色与权限定义",
     "app.view": "查看应用和版本",
     "app.manage": "新建/修改/删除应用",
     "build.run": "上传文件并构建镜像",
     "job.view": "查看构建记录和日志",
     "job.cancel.own": "取消自己提交的构建",
     "job.cancel": "取消任何人的构建",
-    "deploy.view": "查看部署目标和部署记录",
+    "deploy.view": "查看发布记录",
     "deploy.run": "执行部署",
     "deploy.manage": "管理部署目标",
     "settings.manage": "修改系统设置",

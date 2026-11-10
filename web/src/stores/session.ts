@@ -7,27 +7,22 @@ import type { SessionProfile } from '@/api/types'
 export const useSession = defineStore('session', () => {
   const profile = ref<SessionProfile | null>(null)
   const siteName = ref('SWR 镜像构建平台')
+  async function loadSiteName() {
+    try { siteName.value = (await authApi.config()).site_name || siteName.value } catch { /* keep the default name */ }
+  }
 
   const permissions = computed(() => new Set(profile.value?.permissions ?? []))
   const can = (permission: string) => permissions.value.has(permission)
   const canAny = (...list: string[]) => list.some(can)
+  const canNamespace = (id: number, permission: string) => can('platform.admin') ||
+    !!profile.value?.namespaces.find(n => n.id === id)?.perms.includes(permission)
   const mustChangePassword = computed(() => !!profile.value?.must_change_password)
   const deployEnabled = computed(() => !!profile.value?.deploy_enabled)
 
   async function load(): Promise<SessionProfile> {
     profile.value = await authApi.me()
-    siteName.value = profile.value.site_name
-    document.title = profile.value.site_name
+    siteName.value = profile.value.site_name || siteName.value
     return profile.value
-  }
-
-  async function loadSiteName(): Promise<void> {
-    try {
-      const config = await authApi.config()
-      siteName.value = config.site_name
-    } catch {
-      /* 登录页拿不到站点名时使用默认值 */
-    }
   }
 
   function clear(): void {
@@ -39,5 +34,5 @@ export const useSession = defineStore('session', () => {
     clear()
   }
 
-  return { profile, siteName, can, canAny, mustChangePassword, deployEnabled, load, loadSiteName, clear, logout }
+  return { profile, siteName, loadSiteName, can, canAny, canNamespace, mustChangePassword, deployEnabled, load, clear, logout }
 })

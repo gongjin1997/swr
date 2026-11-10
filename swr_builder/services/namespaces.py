@@ -13,7 +13,8 @@ from ..validation import DNS_LABEL_RE
 TIERS = ("dev", "test", "staging", "prod")
 
 DEFAULT_POLICY: Dict[str, Any] = {
-    "require_approval": True, "min_approvals": 1, "allow_auto_deploy": False, "allowed_registry_orgs": [],
+    "require_approval": True, "require_admin_approval": False, "min_approvals": 1,
+    "allow_auto_deploy": False, "allowed_registry_orgs": [],
     "service_types": ["ClusterIP"], "ingress": {"enabled": False, "host_suffixes": [], "ingress_class": ""},
     "hpa_enabled": False, "resources": {"require_limits": True}, "max_replicas": 10,
     "require_readiness_probe": True, "image_pull_secrets": [], "managed_pull_secret": False,
@@ -21,7 +22,7 @@ DEFAULT_POLICY: Dict[str, Any] = {
     "rollout_timeout": 600,
 }
 POLICY_KEYS = set(DEFAULT_POLICY)
-_BOOL_KEYS = ("require_approval", "allow_auto_deploy", "hpa_enabled", "require_readiness_probe",
+_BOOL_KEYS = ("require_approval", "require_admin_approval", "allow_auto_deploy", "hpa_enabled", "require_readiness_probe",
               "managed_pull_secret", "auto_rollback")
 _NESTED_DEFAULTS = ("ingress", "resources", "freeze")
 _QUANTITY_RE = re.compile(r"^(?:[0-9]+(?:\.[0-9]+)?|[0-9]+m)(?:Ki|Mi|Gi|Ti|Pi|Ei)?$")
@@ -42,8 +43,8 @@ def effective_policy(policy: Any) -> Dict[str, Any]:
 
 
 def required_approvals(policy: Dict[str, Any], tier: str) -> int:
-    """发布需要的审批人数。生产环境（prod）始终至少需要 1 人审批。"""
-    if policy.get("require_approval", True) or tier == "prod":
+    """UAT/预生产与生产发布始终至少需要一名独立审批人。"""
+    if policy.get("require_approval", True) or policy.get("require_admin_approval", False) or tier in {"staging", "uat", "prod"}:
         return max(1, int(policy.get("min_approvals", 1)))
     return 0
 

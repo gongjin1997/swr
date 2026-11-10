@@ -5,11 +5,15 @@ import { appApi } from '@/api'
 import type { App, AppFields } from '@/api/types'
 import { notifyError, notifySuccess } from '@/composables/useAction'
 import { usePlatform } from '@/stores/platform'
+import { useSession } from '@/stores/session'
 
-const props = defineProps<{ app: App | null }>()
+const props = defineProps<{ app: App | null; projectId?: number }>()
 const visible = defineModel<boolean>({ required: true })
 const emit = defineEmits<{ saved: [app: App] }>()
 const platform = usePlatform()
+const session = useSession()
+const projectId = ref<number | null>(null)
+const writableProjects = computed(() => (session.profile?.projects ?? []).filter(p => p.perms.includes('app.manage')))
 
 const FIELD_KEYS: (keyof AppFields)[] = [
   'name', 'repository', 'organization', 'description', 'base_image', 'default_mode', 'max_layers', 'target_dir',
@@ -58,6 +62,7 @@ watch(visible, async (open) => {
   if (!open) return
   importing.open = false
   importing.warnings = []
+  projectId.value = props.app?.project_id ?? writableProjects.value.find(p => p.id === props.projectId)?.id ?? writableProjects.value[0]?.id ?? null
   try {
     const defaults = await platform.loadAppDefaults()
     const source = { ...defaults, ...(props.app ?? {}) } as AppFields
@@ -90,11 +95,12 @@ async function runImport() {
 }
 
 async function save() {
+  if (!projectId.value) return notifyError(new Error('请选择有应用管理权限的项目'))
   if (!(await formRef.value?.validate().catch(() => false))) return
   saving.value = true
   try {
     const data = { ...form, max_layers: Number(form.max_layers || 0) }
-    const saved = props.app ? await appApi.update(props.app.id, data) : await appApi.create(data)
+    const saved = props.app ? await appApi.update(props.app.id, data) : await appApi.create({ ...data, project_id: projectId.value })
     notifySuccess('应用已保存')
     visible.value = false
     emit('saved', saved)
@@ -123,6 +129,7 @@ async function save() {
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
       <h4>基本信息</h4>
       <div class="form-grid">
+        <el-form-item label="所属项目" required><el-select v-model="projectId" :disabled="!!app" placeholder="选择所属项目"><el-option v-for="project in writableProjects" :key="project.id" :value="project.id" :label="project.name" /></el-select></el-form-item>
         <el-form-item label="应用名称" prop="name"><el-input v-model="form.name" placeholder="如 cnnc-coding-chc-fin" /></el-form-item>
         <el-form-item label="镜像名称" prop="repository">
           <el-input v-model="form.repository" placeholder="SWR 中的镜像名（小写）" />

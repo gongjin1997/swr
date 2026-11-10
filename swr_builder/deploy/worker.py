@@ -24,6 +24,7 @@ from ..builder import JobLog
 from ..policy import deployment_policy_block
 from ..registry import parse_image_ref
 from ..services.namespaces import effective_policy, required_approvals
+from ..services.releases import valid_approval_count
 from ..store import utcnow
 from .k8s_client import KubeClient, deployment_path
 
@@ -112,8 +113,11 @@ class ServiceDeploymentWorker:
                 raise ValueError("部署快照引用的服务、构建、修订、命名空间或集群已不存在")
             if revision["spec"].get("mode") != "image_only":
                 raise ValueError("managed 清单渲染与 Server-Side Apply 尚未在此 worker 阶段启用")
-            if cluster["auth_type"] != "sa_token" or not credential.get("token"):
+            if (cluster["auth_type"] == "sa_token" and not credential.get("token")) or \
+                    cluster["auth_type"] not in ("sa_token", "client_cert"):
                 raise ValueError("集群凭据类型不受当前 worker 支持")
+            if cluster["auth_type"] == "client_cert" and not (credential.get("client_cert_pem") and credential.get("client_key_pem")):
+                raise ValueError("集群客户端证书凭据不完整")
             self._precheck(deployment, namespace)
             await self._apply(deployment, revision, namespace, cluster, credential, log, progress)
             if self.store.complete_service_deployment(deployment_id, self.worker_id, token, service["id"],
@@ -178,8 +182,10 @@ class ServiceDeploymentWorker:
         blocked = deployment_policy_block(policy)
         if blocked:
             raise ValueError(blocked)
-        required = required_approvals(policy, namespace["tier"])
-        if required and self.store.count_approvals(deployment["id"], "approved") < required:
+        snapshot = json.loads(deployment.get("policy_snapshot") or "{}")
+        required = max(required_approvals(policy, namespace["tier"]),
+                       required_approvals(snapshot, namespace["tier"]))
+        if required and valid_approval_count(self.store, deployment) < required:
             raise ReturnedToApproval()
         image_ref = parse_image_ref(deployment["image"])
         image_org = image_ref.repo.split("/", 1)[0] if image_ref else ""

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 /** 拖拽或点击选择上传文件；同名文件替换；超过上传上限的文件直接拒绝。 */
+import { UploadFilled } from '@element-plus/icons-vue'
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fmtSize } from '@/utils/format'
@@ -58,6 +59,7 @@ function remove(index: number) {
       @drop.prevent="onDrop"
     >
       <input ref="input" type="file" multiple hidden @change="onPick" />
+      <el-icon class="upload-icon" :size="28"><UploadFilled /></el-icon>
       <div><b>拖拽文件到这里</b>，或点击选择</div>
       <div class="hint">jar / war / zip / 配置文件，可多选<template v-if="maxMb">，单个文件不超过 {{ maxMb }} MB</template></div>
     </div>
@@ -77,7 +79,8 @@ function remove(index: number) {
 .dropzone {
   border: 1.5px dashed var(--el-border-color);
   border-radius: 8px;
-  padding: 22px;
+  padding: 24px 16px;
+  background: var(--hi-bg-soft);
   text-align: center;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
@@ -101,4 +104,6 @@ function remove(index: number) {
   padding: 6px 0;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
+.upload-icon { color: var(--el-color-primary); margin-bottom: 8px; }
+.files li > div { min-width: 0; overflow-wrap: anywhere; }
 </style>

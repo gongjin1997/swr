@@ -108,12 +108,20 @@ def _idempotency_hash(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE deployments ADD COLUMN request_hash TEXT")
 
 
+def _custom_roles(db: sqlite3.Connection) -> None:
+    db.execute("CREATE TABLE IF NOT EXISTS custom_roles (code TEXT PRIMARY KEY,name TEXT NOT NULL,"
+               "scope_type TEXT NOT NULL CHECK(scope_type IN ('global','project','namespace')),"
+               "permissions TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',"
+               "enabled INTEGER NOT NULL DEFAULT 1,updated_at TEXT NOT NULL)")
+
+
 MIGRATIONS: List[Migration] = [
     (1, "default-project-and-scoped-bindings-v1", _project_scopes),
     (2, "clusters-namespaces-project-allocation-v1", _cluster_namespaces),
     (3, "service-revisions-approvals-deployment-scope-v1", _services_and_deployments),
     (4, "project-scope-integrity-guards-v1", _scope_guards),
     (5, "deployment-idempotency-payload-hash-v1", _idempotency_hash),
+    (6, "custom-scoped-role-definitions-v1", _custom_roles),
 ]
 
 

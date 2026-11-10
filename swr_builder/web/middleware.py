@@ -19,7 +19,7 @@ from ..authz import has_global_permission, visible_namespace_ids, visible_projec
 from ..context import AppContext
 from .permissions import AUTHENTICATED_ROUTE, PUBLIC_ROUTE, SCOPED_PERMISSIONS, route_permission
 
-PUBLIC_PATHS = ("/login", "/healthz", "/favicon.ico")
+PUBLIC_PATHS = ("/login", "/healthz", "/favicon.ico", "/favicon.svg")
 PUBLIC_PREFIXES = ("/assets/",)
 PASSWORD_CHANGE_ALLOWED = ("/api/auth/me", "/api/auth/logout", "/api/account/password")
 # 这些接口在处理函数里写了更具体的审计（或本身是登录类操作），不再补记通用审计

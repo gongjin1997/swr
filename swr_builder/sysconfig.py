@@ -36,9 +36,12 @@ def field(section, key, type, label, help='', minimum=0, maximum=0):
 
 for key, typ, label in [('address','str','SWR 地址'), ('organization','str','默认组织'),
     ('username','str','登录用户名'), ('password','secret','长期登录密钥'), ('project','str','区域项目名'),
-    ('ak','secret','AK'), ('sk','secret','SK'), ('ca_file','str','CA 文件路径')]:
+    ('ak','secret','AK'), ('sk','secret','SK')]:
     field('registry', key, typ, label, '敏感值留空不修改；勾选清空可移除。' if typ == 'secret' else '')
-field('registry','insecure','bool','跳过 TLS 校验','仅测试环境使用；生产环境请配置信任 CA。')
+field('registry','ca_file','str','Registry API CA 文件路径',
+      '仅供平台读取 Registry API；Docker daemon 的 CA 请安装到 /etc/docker/certs.d/<仓库地址>/ca.crt。')
+field('registry','insecure','bool','跳过 Registry API TLS 校验',
+      '平台跳过 Registry API 校验，并将 BuildKit 认证令牌请求交给构建引擎。Docker/BuildKit 仍需配置仓库 CA 或 insecure-registries。')
 field('registry','timeout','float','仓库请求超时（秒）',minimum=1,maximum=300)
 field('build','docker_bin','str','Docker 命令路径','由管理员配置构建机上的可执行文件。')
 for key,label,lo,hi in [('max_concurrent','并行构建数',1,32),('login_timeout','登录超时（秒）',1,3600),
@@ -52,8 +55,8 @@ for key,label,lo,hi in [('session_hours','普通登录有效期（小时）',1,1
     ('password_min_length','密码最小长度',8,64),('max_login_failures','失败锁定阈值（0 为关闭）',0,100),
     ('lock_minutes','失败锁定时间（分钟）',1,1440)]:
     field('security',key,'int',label,minimum=lo,maximum=hi)
-field('general','site_name','str','站点名称')
-field('general','deploy_enabled','bool','启用部署模块（预览）','只启用模块；不会自动创建或执行部署。')
+field('general','site_name','str','系统名称')
+field('general','deploy_enabled','bool','启用部署中心','开放服务发布、审批与运行状态。')
 field('hcs','enabled','bool','启用 HCS 连接','默认关闭；当前仅认证与只读客户端扩展点，不会创建云资源。')
 for key,label in [('version','平台版本标识'),('region','区域标识'),('iam_endpoint','IAM Endpoint'),
     ('swr_endpoint','SWR 管理 API Endpoint（预留）'),('cce_endpoint','CCE 管理 API Endpoint（预留）'),

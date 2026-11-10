@@ -3,7 +3,7 @@
   "version": "1.3.0",
   "private": true,
   "type": "module",
-  "description": "SWR 镜像构建平台前端（Vue 3）",
+  "description": "管理控制台前端（Vue 3）",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
     "element-plus": "^2.9.7",
     "pinia": "^3.0.1",
     "vue": "^3.5.13",

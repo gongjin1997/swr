@@ -129,6 +129,11 @@ class BuildManager:
         if user and password:
             # 平台使用独立的 docker 配置目录，不影响构建机上其他用户的登录状态
             env["DOCKER_CONFIG"] = str(self.docker_config)
+        if self.settings.registry.insecure or self.settings.registry.ca_file:
+            # BuildKit normally obtains OAuth tokens in the client process, which
+            # does not inherit daemon registry TLS settings. Delegate token auth
+            # to the configured builder so its registry trust policy also applies.
+            env["BUILDKIT_NO_CLIENT_TOKEN"] = "1"
         return env
 
     def _secrets(self) -> List[str]:
@@ -265,6 +270,8 @@ class BuildManager:
 
         self.store.update_job(job_id, step="build")
         log.step(3, total, "构建镜像")
+        if self.settings.registry.insecure or self.settings.registry.ca_file:
+            log.info("仓库认证令牌由构建引擎申请，沿用构建引擎的仓库证书配置")
         args = [docker, "build", "-f", str(context / "Dockerfile"), "-t", plan.image]
         if app.get("platform"):
             args += ["--platform", app["platform"]]
@@ -280,8 +287,13 @@ class BuildManager:
             args += ["--label", f"{key}={value}"]
         args += list(self.settings.build.extra_build_args)
         args.append(str(context))
-        code, _ = await self._run_cmd(job_id, args, log, self.settings.build.build_timeout)
+        code, output = await self._run_cmd(job_id, args, log, self.settings.build.build_timeout)
         if code != 0:
+            if "x509:" in output.lower() or "tls: failed to verify certificate" in output.lower():
+                raise BuildError("基础镜像仓库或认证服务的 TLS 证书校验失败。已将令牌请求交由构建引擎；"
+                                 "请检查当前 builder 的仓库配置：Docker driver 使用 daemon.json 的 insecure-registries/CA，"
+                                 "独立 BuildKit 使用 buildkitd.toml 的 registry insecure/ca。"
+                                 "证书缺少匹配域名的 SAN 时，仅上传 CA 不能修复域名校验。")
             raise BuildError(f"docker build 失败（退出码 {code}），请查看日志")
         await self._verify_arch(job_id, plan, log)
 
@@ -315,8 +327,17 @@ class BuildManager:
             log.warn("没有配置 SWR 用户名/密钥，跳过 docker login（使用构建机上已有的登录状态）")
             return
         args = [self.settings.build.docker_bin, "login", self.settings.registry.host, "-u", user, "--password-stdin"]
-        code, _ = await self._run_cmd(job_id, args, log, self.settings.build.login_timeout, stdin=password + "\n")
+        code, output = await self._run_cmd(job_id, args, log, self.settings.build.login_timeout, stdin=password + "\n")
         if code != 0:
+            if "x509:" in output.lower() or "certificate is not valid for any names" in output.lower():
+                if self.settings.registry.insecure:
+                    raise BuildError(
+                        f"宿主机 Docker daemon 不信任仓库 {self.settings.registry.host} 的证书。"
+                        "系统设置的跳过 TLS 仅作用于平台 Registry API；请在 Docker daemon 的 daemon.json "
+                        "将该仓库加入 insecure-registries 并重启 Docker，或修复仓库证书 SAN/信任链。")
+                raise BuildError(
+                    f"宿主机 Docker daemon 无法验证仓库 {self.settings.registry.host} 的 TLS 证书；"
+                    "请修复证书 SAN/信任链，或在仅限测试环境时配置 daemon insecure-registries。")
             raise BuildError("docker login 失败：请检查 SWR 用户名和密钥（需要长期有效登录密钥），"
                              "以及构建机能否访问仓库地址")
 

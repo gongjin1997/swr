@@ -11,8 +11,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import FastAPI
-from fastapi.routing import APIRoute
-from starlette.routing import Match
+from starlette.routing import compile_path
 
 PUBLIC_ROUTE = "public"
 AUTHENTICATED_ROUTE = "authenticated"
@@ -40,6 +39,10 @@ ROUTE_PERMISSIONS = {
     ("DELETE", "/api/account/tokens/{id}"): _A,
     # 账号管理
     ("GET", "/api/roles"): "user.manage",
+    ("GET", "/api/role-definitions"): _A,
+    ("POST", "/api/role-definitions"): "role.manage",
+    ("PUT", "/api/role-definitions/{code}"): "role.manage",
+    ("DELETE", "/api/role-definitions/{code}"): "role.manage",
     ("GET", "/api/users"): "user.manage",
     ("POST", "/api/users"): "user.manage",
     ("PUT", "/api/users/{id}"): "user.manage",
@@ -56,7 +59,7 @@ ROUTE_PERMISSIONS = {
     ("GET", "/api/info"): _A,
     ("POST", "/api/registry/test"): "settings.manage",
     # 旧部署目标与发布记录
-    ("GET", "/api/deploy/providers"): "deploy.view",
+    ("GET", "/api/deploy/providers"): "settings.manage",
     ("GET", "/api/deploy/targets"): "deploy.view",
     ("POST", "/api/deploy/targets"): "deploy.manage",
     ("PUT", "/api/deploy/targets/{id}"): "deploy.manage",
@@ -79,6 +82,7 @@ ROUTE_PERMISSIONS = {
     ("GET", "/api/clusters"): "cluster.manage",
     ("POST", "/api/clusters"): "cluster.manage",
     ("GET", "/api/clusters/{id}"): "cluster.manage",
+    ("GET", "/api/clusters/{id}/discovery"): "cluster.manage",
     ("PUT", "/api/clusters/{id}"): "cluster.manage",
     ("POST", "/api/clusters/{id}/test"): "cluster.manage",
     ("POST", "/api/clusters/{id}/rotate"): "cluster.manage",
@@ -86,6 +90,7 @@ ROUTE_PERMISSIONS = {
     ("GET", "/api/namespaces"): "namespace.view",
     ("POST", "/api/namespaces"): "cluster.manage",
     ("GET", "/api/namespaces/{id}"): "namespace.view",
+    ("GET", "/api/namespaces/{id}/resources"): "namespace.view",
     ("PUT", "/api/namespaces/{id}"): "cluster.manage",
     ("POST", "/api/namespaces/{id}/review"): "cluster.manage",
     ("GET", "/api/namespaces/{id}/rbac-yaml"): "cluster.manage",
@@ -93,6 +98,8 @@ ROUTE_PERMISSIONS = {
     ("GET", "/api/services"): _A,
     ("POST", "/api/services"): _A,
     ("GET", "/api/services/{id}"): _A,
+    ("GET", "/api/services/{id}/runtime"): _A,
+    ("GET", "/api/services/{id}/builds"): _A,
     ("PUT", "/api/services/{id}"): _A,
     ("DELETE", "/api/services/{id}"): _A,
     ("GET", "/api/services/{id}/revisions"): _A,
@@ -125,14 +132,15 @@ ROUTE_PERMISSIONS = {
     ("POST", "/api/jobs/{job_id}/cancel"): "job.cancel.own",
 }
 
+_ROUTE_PATTERNS = tuple(
+    (method, compile_path(path)[0], permission)
+    for (method, path), permission in ROUTE_PERMISSIONS.items()
+)
+
 
 def route_permission(app: FastAPI, path: str, method: str) -> Optional[str]:
-    """返回请求命中的 /api 路由所登记的权限；未命中或未登记返回 None。"""
-    scope = {"type": "http", "path": path, "root_path": "", "method": method}
-    for route in app.routes:
-        if not isinstance(route, APIRoute) or not route.path.startswith("/api/"):
-            continue
-        match, _ = route.matches(scope)
-        if match is Match.FULL:
-            return ROUTE_PERMISSIONS.get((method, route.path))
+    """返回权限表中匹配的 /api 路由权限；未命中或未登记返回 None。"""
+    for route_method, pattern, permission in _ROUTE_PATTERNS:
+        if method == route_method and pattern.fullmatch(path):
+            return permission
     return None

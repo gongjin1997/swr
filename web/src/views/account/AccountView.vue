@@ -8,6 +8,7 @@ import { confirmAction, notifyError, useAction } from '@/composables/useAction'
 import { useSession } from '@/stores/session'
 import { fmtTime } from '@/utils/format'
 
+const tab = ref('profile')
 const session = useSession()
 const profile = reactive({ display_name: session.profile?.display_name ?? '', email: session.profile?.email ?? '' })
 const sessions = ref<SessionRow[]>([])
@@ -66,13 +67,8 @@ onMounted(load)
 
 <template>
   <div class="page">
-    <div class="page-heading">
-      <div>
-        <h2>我的账号</h2>
-        <div class="hint">{{ session.profile?.username }} · {{ session.profile?.role_label }}</div>
-      </div>
-    </div>
-    <div class="grid-2">
+    <el-tabs v-model="tab" class="account-tabs"><el-tab-pane label="个人资料与安全" name="profile" /><el-tab-pane label="API 令牌" name="tokens" /><el-tab-pane label="登录设备" name="sessions" /></el-tabs>
+    <div v-show="tab === 'profile'" class="grid-2">
       <el-card>
         <template #header><span class="card-title">基本资料</span></template>
         <el-form label-position="top" @submit.prevent="saveProfile">
@@ -87,7 +83,7 @@ onMounted(load)
       </el-card>
     </div>
 
-    <el-card class="section-gap">
+    <el-card v-show="tab === 'tokens'" class="account-panel">
       <template #header>
         <div class="card-title">
           <span>API 令牌</span>
@@ -96,17 +92,17 @@ onMounted(load)
       </template>
       <p class="hint">用于自动化调用，请求头为 Authorization: Bearer &lt;token&gt;。令牌继承账号权限；修改密码会撤销全部令牌。</p>
       <el-table :data="tokens" empty-text="暂无令牌">
-        <el-table-column prop="name" label="名称" />
-        <el-table-column label="前缀"><template #default="{ row }"><span class="mono">{{ row.prefix }}…</span></template></el-table-column>
-        <el-table-column label="到期时间"><template #default="{ row }">{{ fmtTime(row.expires_at) }}</template></el-table-column>
-        <el-table-column label="最近使用"><template #default="{ row }">{{ fmtTime(row.last_used_at) }}</template></el-table-column>
+        <el-table-column prop="name" label="名称" min-width="140" />
+        <el-table-column label="前缀" min-width="140"><template #default="{ row }"><span class="mono">{{ row.prefix }}…</span></template></el-table-column>
+        <el-table-column label="到期时间" min-width="170"><template #default="{ row }">{{ fmtTime(row.expires_at) }}</template></el-table-column>
+        <el-table-column label="最近使用" min-width="170"><template #default="{ row }">{{ fmtTime(row.last_used_at) }}</template></el-table-column>
         <el-table-column label="操作" width="100">
           <template #default="{ row }"><el-button link type="danger" @click="revokeToken(row)">撤销</el-button></template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <el-card class="section-gap">
+    <el-card v-show="tab === 'sessions'" class="account-panel">
       <template #header><span class="card-title">登录设备</span></template>
       <el-table :data="sessions">
         <el-table-column label="设备" min-width="260">
@@ -145,4 +141,6 @@ onMounted(load)
 .current {
   margin-left: 8px;
 }
+.account-panel { margin-top: 0 !important; }
+.account-tabs { margin-bottom: 16px; }
 </style>

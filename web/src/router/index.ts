@@ -11,7 +11,7 @@ declare module 'vue-router' {
     perms?: string[]
     /** 需要启用部署模块 */
     deploy?: boolean
-    /** 在顶部导航中显示 */
+    /** 用于路由回退及侧栏入口 */
     nav?: boolean
   }
 }
@@ -24,7 +24,7 @@ const resourceChildren: RouteRecordRaw[] = [
   { path: 'namespaces', name: 'namespaces', component: () => import('@/views/resources/NamespacesView.vue'),
     meta: { title: '命名空间', perms: ['namespace.view'] } },
   { path: 'services', name: 'services', component: () => import('@/views/resources/ServicesView.vue'),
-    meta: { title: '服务', perms: ['service.config', 'namespace.view'] } },
+        meta: { title: '服务', perms: ['service.config', 'namespace.view', 'app.view'] } },
   { path: 'services/:id(\\d+)', name: 'service-detail', component: () => import('@/views/resources/ServiceDetailView.vue'),
     meta: { title: '服务详情', perms: ['service.config', 'namespace.view', 'app.view'] }, props: (r) => ({ id: Number(r.params.id) }) },
   { path: 'bindings', name: 'bindings', component: () => import('@/views/resources/BindingsView.vue'),
@@ -39,6 +39,8 @@ export const routes: RouteRecordRaw[] = [
     children: [
       // 首页按权限跳转（在全局守卫里处理，因为需要先加载用户权限）
       { path: '', name: 'home', component: { render: () => null } },
+      { path: 'dashboard', name: 'dashboard', component: () => import('@/views/dashboard/DashboardView.vue'),
+        meta: { title: '工作台概览', perms: ['job.view', 'app.view'], nav: true } },
       { path: 'build', name: 'build', component: () => import('@/views/build/BuildView.vue'),
         meta: { title: '构建镜像', perms: ['build.run'], nav: true } },
       { path: 'jobs', name: 'jobs', component: () => import('@/views/jobs/JobListView.vue'),
@@ -47,8 +49,10 @@ export const routes: RouteRecordRaw[] = [
         meta: { title: '应用管理', perms: ['app.view'], nav: true } },
       { path: 'resources', name: 'resources', component: () => import('@/views/resources/ResourcesLayout.vue'),
         meta: { title: '资源管理', perms: ['project.view', 'namespace.view'], nav: true }, children: resourceChildren },
-      { path: 'deploy', name: 'deploy', component: () => import('@/views/deploy/LegacyDeployView.vue'),
-        meta: { title: '部署中心', perms: ['deploy.view'], deploy: true, nav: true } },
+      { path: 'deploy', name: 'deploy', component: () => import('@/views/deploy/DeployCenterView.vue'),
+        meta: { title: '部署中心', perms: ['deploy.view', 'namespace.view', 'app.view'], deploy: true, nav: true } },
+      { path: 'admin/roles', name: 'roles', component: () => import('@/views/admin/RolesView.vue'),
+        meta: { title: '角色管理', perms: ['role.manage'], nav: true } },
       { path: 'settings', name: 'settings', component: () => import('@/views/settings/SettingsView.vue'),
         meta: { title: '系统设置', perms: ['settings.manage'], nav: true } },
       { path: 'admin/users', name: 'users', component: () => import('@/views/admin/UsersView.vue'),
@@ -90,7 +94,7 @@ const router = createRouter({
 router.beforeEach(async (to: RouteLocationNormalized) => {
   const session = useSession()
   if (to.meta.public) {
-    if (to.name === 'login' && !session.profile) await session.loadSiteName()
+    await session.loadSiteName()
     return true
   }
   if (!session.profile) {
@@ -101,7 +105,7 @@ router.beforeEach(async (to: RouteLocationNormalized) => {
     }
   }
   if (session.mustChangePassword && to.name !== 'change-password') return { name: 'change-password' }
-  if (to.name === 'home') return { name: session.can('build.run') ? 'build' : 'jobs' }
+  if (to.name === 'home') return { name: session.canAny('job.view', 'app.view') ? 'dashboard' : 'account' }
   if (to.name === 'resources') return { name: firstAllowed(resourceChildren) ?? 'account' }
   const denied = to.matched.find((record) => !allowed(record))
   if (denied) {
@@ -109,11 +113,6 @@ router.beforeEach(async (to: RouteLocationNormalized) => {
     return fallback && fallback.name !== to.name ? { name: fallback.name } : { name: 'account' }
   }
   return true
-})
-
-router.afterEach((to) => {
-  const session = useSession()
-  document.title = to.meta.title ? `${to.meta.title} · ${session.siteName}` : session.siteName
 })
 
 onAuthFailure(

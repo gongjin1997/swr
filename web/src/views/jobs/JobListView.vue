@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { Plus, Refresh } from '@element-plus/icons-vue'
+import { useSession } from '@/stores/session'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { jobApi } from '@/api'
@@ -10,14 +12,17 @@ import { JOB_FINAL, MODE_TEXT, STATUS_TEXT } from '@/constants'
 import { usePlatform } from '@/stores/platform'
 import { copyText, fmtDuration, fmtTime } from '@/utils/format'
 
+const session = useSession()
 const PAGE = 30
 const platform = usePlatform()
 const route = useRoute()
 const router = useRouter()
-const filters = reactive({ appId: null as number | null, status: '' })
+const filters = reactive({ appId: Number(route.query.app) || null as number | null, status: '' })
 const jobs = ref<Job[]>([])
 const total = ref(0)
 const loading = ref(false)
+let requestSequence = 0
+let disposed = false
 let timer: ReturnType<typeof setTimeout> | null = null
 
 const detailId = computed<number | null>(() => (route.query.detail ? Number(route.query.detail) : null))
@@ -29,20 +34,22 @@ const drawer = computed({
 })
 
 async function load(reset = true) {
+  const current = ++requestSequence
   if (timer) clearTimeout(timer)
   loading.value = true
   try {
     const limit = reset ? Math.max(PAGE, jobs.value.length) : PAGE
     const data = await jobApi.list({ app_id: filters.appId, status: filters.status, limit, offset: reset ? 0 : jobs.value.length })
+    if (disposed || current !== requestSequence) return
     jobs.value = reset ? data.items : jobs.value.concat(data.items)
     total.value = data.total
   } catch (e) {
-    notifyError(e)
+    if (!disposed && current === requestSequence) notifyError(e)
   } finally {
-    loading.value = false
+    if (current === requestSequence) loading.value = false
   }
   // 有未结束的任务时每 4 秒刷新
-  if (jobs.value.some((j) => !JOB_FINAL.has(j.status))) timer = setTimeout(() => load(true), 4000)
+  if (!disposed && current === requestSequence && jobs.value.some((j) => !JOB_FINAL.has(j.status))) timer = setTimeout(() => load(true), 4000)
 }
 
 async function copyImage(image: string) {
@@ -59,30 +66,28 @@ function openDetail(id: number) {
 }
 
 watch(filters, () => load(true))
+watch(() => route.query.app, app => { filters.appId = Number(app) || null })
 onMounted(async () => {
   platform.loadApps().catch(notifyError)
   await load(true)
 })
 onBeforeUnmount(() => {
+  disposed = true
+  requestSequence++
   if (timer) clearTimeout(timer)
 })
 </script>
 
 <template>
   <div class="page">
-    <div class="page-heading">
-      <h2>构建记录</h2>
-      <div class="toolbar">
-        <el-select v-model="filters.appId" clearable placeholder="全部应用" style="width: 220px" aria-label="按应用筛选">
-          <el-option v-for="a in platform.apps" :key="a.id" :label="a.name" :value="a.id" />
-        </el-select>
-        <el-select v-model="filters.status" clearable placeholder="全部状态" style="width: 140px" aria-label="按状态筛选">
-          <el-option v-for="s in ['running', 'queued', 'success', 'failed', 'cancelled']" :key="s" :label="STATUS_TEXT[s]" :value="s" />
-        </el-select>
-        <el-button :loading="loading" @click="load(true)">刷新</el-button>
-      </div>
-    </div>
     <el-card>
+      <div class="filter-bar">
+        <el-select v-model="filters.appId" clearable placeholder="全部应用" aria-label="按应用筛选"><el-option v-for="app in platform.apps" :key="app.id" :label="app.name" :value="app.id" /></el-select>
+        <el-select v-model="filters.status" clearable placeholder="全部状态" aria-label="按状态筛选"><el-option v-for="status in ['running', 'queued', 'success', 'failed', 'cancelled']" :key="status" :label="STATUS_TEXT[status]" :value="status" /></el-select>
+        <el-button :icon="Refresh" :loading="loading" @click="load(true)">刷新</el-button><span class="count">共 {{ total }} 条记录</span>
+
+        <el-button v-if="session.can('build.run')" type="primary" :icon="Plus" @click="router.push('/build')">新建构建</el-button>
+      </div>
       <el-table v-loading="loading && !jobs.length" :data="jobs" empty-text="暂无构建记录">
         <el-table-column label="#" width="80"><template #default="{ row }"><span class="mono">#{{ row.id }}</span></template></el-table-column>
         <el-table-column prop="app_name" label="应用" min-width="160" />

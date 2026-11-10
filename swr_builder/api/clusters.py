@@ -1,12 +1,15 @@
 """集群与命名空间纳管。"""
 from __future__ import annotations
 
+import sqlite3
+
 from fastapi import APIRouter, Body, Request
 
-from ..authz import has_namespace_permission, visible_namespace_ids
+from ..authz import has_namespace_permission, has_project_permission, visible_namespace_ids
 from ..deploy.k8s_client import KubeClient
-from ..errors import DomainError, NotFound, NotImplementedYet, Unavailable
+from ..errors import Conflict, DomainError, NotFound, NotImplementedYet, Unavailable
 from ..services import clusters as cluster_service
+from ..services.discovery import discover_cluster, namespace_resources
 from ..services.namespaces import TIERS, normalize_namespace_policy, rbac_checks, rbac_yaml
 from ..validation import DNS_LABEL_RE, reject_unknown, require_empty, text_field
 from ..web.deps import Ctx, User, audit
@@ -23,8 +26,7 @@ async def list_clusters(ctx: Ctx):
 
 @router.post("/api/clusters", status_code=201)
 async def create_cluster(request: Request, ctx: Ctx, data: dict = Body(...)):
-    name, server, auth_type, duration = cluster_service.cluster_fields(data)
-    credential = cluster_service.normalize_credential(data.get("credential"))
+    name, server, auth_type, duration, credential = cluster_service.normalize_cluster_input(data)
     cluster_id = ctx.store.create_cluster({
         "name": name, "server": server, "auth_type": auth_type,
         "credential_encrypted": cluster_service.encrypt_credential(ctx.box, credential),
@@ -44,10 +46,10 @@ async def update_cluster(id: int, request: Request, ctx: Ctx, data: dict = Body(
     existing = ctx.store.get_cluster_record(id)
     if not existing:
         raise NotFound("集群不存在")
-    name, server, auth_type, duration = cluster_service.cluster_fields(data, existing)
+    name, server, auth_type, duration, credential = cluster_service.normalize_cluster_input(data, existing)
     encrypted = existing["credential_encrypted"]
-    if "credential" in data:
-        encrypted = cluster_service.encrypt_credential(ctx.box, cluster_service.normalize_credential(data["credential"]))
+    if credential is not None:
+        encrypted = cluster_service.encrypt_credential(ctx.box, credential)
     ctx.store.update_cluster(id, {
         "name": name, "server": server, "auth_type": auth_type, "credential_encrypted": encrypted,
         "cce_cluster_id": text_field(data, "cce_cluster_id", 128) or existing["cce_cluster_id"],
@@ -67,6 +69,11 @@ async def test_cluster(id: int, request: Request, ctx: Ctx, data: dict = Body(..
     return {"ok": True, "version": version, "warnings": []}
 
 
+@router.get("/api/clusters/{id}/discovery")
+async def cluster_discovery(id: int, ctx: Ctx):
+    return await discover_cluster(ctx, id)
+
+
 @router.post("/api/clusters/{id}/rotate")
 async def rotate_credential(id: int, request: Request, ctx: Ctx, data: dict = Body(...)):
     if set(data) - {"credential"} or "credential" not in data:
@@ -74,7 +81,7 @@ async def rotate_credential(id: int, request: Request, ctx: Ctx, data: dict = Bo
     cluster = ctx.store.get_cluster_record(id)
     if not cluster:
         raise NotFound("集群不存在")
-    credential = cluster_service.normalize_credential(data["credential"])
+    credential = cluster_service.normalize_credential(data["credential"], cluster["auth_type"])
     candidate = cluster_service.encrypt_credential(ctx.box, credential)
     version = await cluster_service.test_connection(cluster, credential, ctx.deploy_transport)
     ctx.store.update_cluster(id, {**cluster, "credential_encrypted": candidate, "status": "ready"})
@@ -103,10 +110,11 @@ async def list_namespaces(ctx: Ctx, user: User, cluster_id: int = None, tier: st
 
 
 @router.post("/api/namespaces", status_code=201)
-async def adopt_namespace(request: Request, ctx: Ctx, data: dict = Body(...)):
+async def adopt_namespace(request: Request, ctx: Ctx, user: User, data: dict = Body(...)):
     """纳管集群中已存在的 namespace（不会创建 namespace）。"""
-    reject_unknown(data, {"name", "cluster_id", "tier", "policy"}, "命名空间请求包含未知字段")
+    reject_unknown(data, {"name", "cluster_id", "tier", "policy", "project_id"}, "命名空间请求包含未知字段")
     name, cluster_id, tier = text_field(data, "name", 63).lower(), data.get("cluster_id"), data.get("tier")
+    tier = "staging" if tier == "uat" else tier
     if not DNS_LABEL_RE.fullmatch(name):
         raise ValueError("namespace 必须是 DNS-1123 label")
     if type(cluster_id) is not int or not ctx.store.get_cluster(cluster_id):
@@ -114,6 +122,10 @@ async def adopt_namespace(request: Request, ctx: Ctx, data: dict = Body(...)):
     if tier not in TIERS:
         raise ValueError("tier 必须为 dev/test/staging/prod")
     policy = normalize_namespace_policy(data.get("policy"))
+    project_id = data.get("project_id")
+    if project_id is not None and (type(project_id) is not int or not ctx.store.get_project(project_id)
+            or not has_project_permission(ctx.store, user, project_id, "project.manage")):
+        raise NotFound("可分配的项目不存在")
     cluster, credential = cluster_service.load_cluster(ctx.store, ctx.box, cluster_id)
     version = await cluster_service.test_connection(cluster, credential, ctx.deploy_transport)
     async with KubeClient(cluster["server"], credential, ctx.deploy_transport) as kube:
@@ -122,7 +134,12 @@ async def adopt_namespace(request: Request, ctx: Ctx, data: dict = Body(...)):
         raise DomainError("目标 namespace 在集群中不存在；本接口只纳管现有 namespace")
     if status != 200:
         raise Unavailable(f"读取目标 namespace 失败，HTTP {status}")
-    namespace_id = ctx.store.create_namespace(cluster_id, name, tier, policy)
+    try:
+        namespace_id = ctx.store.create_namespace(cluster_id, name, tier, policy, project_id)
+    except sqlite3.IntegrityError as exc:
+        if "UNIQUE constraint failed" in str(exc):
+            raise Conflict("此命名空间已纳管，请刷新列表") from None
+        raise
     ctx.store.set_cluster_status(cluster_id, "ready")
     audit(request, "namespace.adopt", namespace_id, f"cluster={cluster_id} version={version}")
     return ctx.store.get_namespace(namespace_id)
@@ -143,12 +160,21 @@ async def update_namespace(id: int, request: Request, ctx: Ctx, data: dict = Bod
     if not current:
         raise NotFound("命名空间不存在")
     tier = data.get("tier", current["tier"])
+    tier = "staging" if tier == "uat" else tier
     if tier not in TIERS:
         raise ValueError("tier 无效")
     policy = normalize_namespace_policy(data.get("policy", current["policy"]))
     ctx.store.update_namespace(id, tier, policy)
     audit(request, "namespace.policy.update", id)
     return ctx.store.get_namespace(id)
+
+
+@router.get("/api/namespaces/{id}/resources")
+async def discover_namespace_resources(id: int, ctx: Ctx, user: User):
+    namespace = ctx.store.get_namespace(id)
+    if not namespace or not has_namespace_permission(ctx.store, user, id, "namespace.view"):
+        raise NotFound("命名空间不存在")
+    return await namespace_resources(ctx, namespace)
 
 
 @router.post("/api/namespaces/{id}/review")

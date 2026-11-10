@@ -2,8 +2,10 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { deploymentApi, serviceApi } from '@/api'
 import { idempotencyKey } from '@/api/http'
-import type { Deployment, Revision, RevisionDiff, Service } from '@/api/types'
+import type { Deployment, Revision, RevisionDiff, Service, NamespaceResources } from '@/api/types'
 import DeployDialog from '@/components/DeployDialog.vue'
+import KubeResourcePanel from '@/components/KubeResourcePanel.vue'
+import { TIER_TEXT } from '@/constants'
 import DeploymentLogDialog from '@/components/DeploymentLogDialog.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import { confirmAction, notifyError, useAction } from '@/composables/useAction'
@@ -27,6 +29,21 @@ const secret = reactive({ visible: false, key: '', value: '' })
 
 const imageOnly = computed(() => service.value?.spec && (service.value.spec as { mode?: string }).mode === 'image_only')
 const target = computed(() => (service.value?.spec as { target?: { name: string; container: string } } | undefined)?.target)
+const runtime = ref<NamespaceResources | null>(null)
+const runtimeLoading = ref(false)
+const runtimeError = ref('')
+let runtimeSequence = 0
+async function refreshRuntime() {
+  const request = ++runtimeSequence
+  runtimeLoading.value = true
+  runtimeError.value = ''
+  runtime.value = null
+  try {
+    const result = await serviceApi.runtime(props.id)
+    if (request === runtimeSequence) runtime.value = result
+  } catch (e) { if (request === runtimeSequence) runtimeError.value = e instanceof Error ? e.message : '集群信息获取失败' }
+  finally { if (request === runtimeSequence) runtimeLoading.value = false }
+}
 const secretKeys = computed(() => Object.entries(revisions.value[0]?.secret_versions ?? {}))
 
 async function load() {
@@ -35,10 +52,11 @@ async function load() {
     const [s, r, d] = await Promise.all([
       serviceApi.get(props.id),
       serviceApi.revisions(props.id),
-      deploymentApi.list({ limit: 100 }).catch(() => ({ items: [] as Deployment[], total: 0 })),
-      platform.loadApps(),
+      deploymentApi.list({ limit: 100, service_id: props.id }).catch(() => ({ items: [] as Deployment[], total: 0 })),
+      session.can('app.view') ? platform.loadApps() : Promise.resolve([]),
     ])
     service.value = s
+    void refreshRuntime()
     revisions.value = r.items
     deployments.value = d.items.filter((x) => x.service_id === props.id)
     if (r.items.length >= 2 && compare.from === null) {
@@ -131,16 +149,19 @@ onMounted(load)
         <div class="card-title">
           <span>服务 {{ service.name }}</span>
           <div class="toolbar">
-            <el-button v-if="session.can('service.deploy')" type="primary" @click="deployOpen = true">发布</el-button>
-            <el-button v-if="session.can('service.operate')" @click="restart">重新发布</el-button>
-            <el-button v-if="session.can('service.config')" @click="openEditor">创建配置修订</el-button>
-            <el-button v-if="session.can('secret.manage')" @click="secret.visible = true">设置密钥</el-button>
-            <el-button v-if="session.can('service.delete')" type="danger" plain @click="remove">删除</el-button>
+            <el-button v-if="session.canNamespace(service.namespace_id, 'service.deploy')" type="primary" @click="deployOpen = true">发布</el-button>
+            <el-button v-if="session.canNamespace(service.namespace_id, 'service.operate')" @click="restart">重新发布</el-button>
+            <el-button v-if="session.canNamespace(service.namespace_id, 'service.config')" @click="openEditor">创建配置修订</el-button>
+            <el-button v-if="session.canNamespace(service.namespace_id, 'secret.manage')" @click="secret.visible = true">设置密钥</el-button>
+            <el-button v-if="session.canNamespace(service.namespace_id, 'service.delete')" type="danger" plain @click="remove">删除</el-button>
           </div>
         </div>
       </template>
       <el-descriptions :column="3" border size="small">
-        <el-descriptions-item label="应用">{{ platform.appName(service.app_id) }}</el-descriptions-item>
+        <el-descriptions-item label="项目"><RouterLink :to="{ name: 'apps', query: { project: service.project_id } }">{{ service.project_name }}</RouterLink></el-descriptions-item>
+        <el-descriptions-item label="应用"><RouterLink :to="{ name: 'apps', query: { app: service.app_id } }">{{ service.app_name }}</RouterLink></el-descriptions-item>
+        <el-descriptions-item label="环境">{{ TIER_TEXT[service.tier] }}</el-descriptions-item>
+        <el-descriptions-item label="集群 / 命名空间">{{ service.cluster_name }} / {{ service.namespace_name }}</el-descriptions-item>
         <el-descriptions-item label="当前配置修订"><span class="mono">{{ service.current_revision_id }}</span></el-descriptions-item>
         <el-descriptions-item label="已部署修订"><span class="mono">{{ service.deployed_revision_id ?? '尚未发布' }}</span></el-descriptions-item>
         <el-descriptions-item v-if="target" label="Deployment"><span class="mono">{{ target.name }}</span></el-descriptions-item>
@@ -150,11 +171,12 @@ onMounted(load)
           <span v-if="!secretKeys.length" class="hint">无</span>
         </el-descriptions-item>
       </el-descriptions>
-      <pre class="code-block section-gap">{{ JSON.stringify(service.spec, null, 2) }}</pre>
+      <el-collapse class="section-gap"><el-collapse-item title="查看服务配置（JSON）" name="spec"><pre class="code-block">{{ JSON.stringify(service.spec, null, 2) }}</pre></el-collapse-item></el-collapse>
     </el-card>
 
+    <KubeResourcePanel :data="runtime" :loading="runtimeLoading" :error="runtimeError" @refresh="refreshRuntime" />
     <el-card>
-      <template #header><span class="card-title">发布记录</span></template>
+      <template #header><div class="card-title"><span>发布记录</span><RouterLink :to="{ name: 'deploy', query: { service: id } }"><el-button>前往部署中心</el-button></RouterLink></div></template>
       <el-table :data="deployments" empty-text="暂无发布">
         <el-table-column label="#" width="80"><template #default="{ row }"><span class="mono">#{{ row.id }}</span></template></el-table-column>
         <el-table-column prop="kind" label="类型" width="90" />
@@ -166,9 +188,9 @@ onMounted(load)
         <el-table-column label="提交" width="170"><template #default="{ row }">{{ fmtTime(row.created_at) }}<div class="hint">{{ row.operator }}</div></template></el-table-column>
         <el-table-column label="操作" width="160">
           <template #default="{ row }">
-            <template v-if="row.status === 'pending_approval' && session.can('deploy.approve')">
-              <el-button link type="primary" :disabled="busy" @click="decide(row, true)">批准</el-button>
-              <el-button link type="danger" :disabled="busy" @click="decide(row, false)">拒绝</el-button>
+            <template v-if="row.can_approve || row.can_reject">
+              <el-button v-if="row.can_approve" link type="primary" :disabled="busy" @click="decide(row, true)">批准</el-button>
+              <el-button v-if="row.can_reject" link type="danger" :disabled="busy" @click="decide(row, false)">拒绝</el-button>
             </template>
             <el-button v-if="row.status !== 'pending_approval'" link @click="logId = row.id">日志</el-button>
             <el-button v-if="row.status === 'success' && session.can('service.rollback')" link type="warning" @click="rollback(row)">回滚到此</el-button>

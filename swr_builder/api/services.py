@@ -5,11 +5,12 @@ import re
 
 from fastapi import APIRouter, Body, Header, Query, Request, Response
 
-from ..authz import has_namespace_permission, visible_namespace_ids, visible_project_ids
+from ..authz import has_namespace_permission, has_project_permission, visible_namespace_ids, visible_project_ids
 from ..errors import Conflict, Forbidden, NotFound, NotImplementedYet, RevisionConflict, Unprocessable
 from ..services import releases
 from ..services.access import service_or_404
 from ..services.catalog import normalize_service_spec, revision_diff, service_response
+from ..services.discovery import service_runtime
 from ..validation import DNS_LABEL_RE, reject_unknown, text_field
 from ..web.deps import Ctx, User, audit
 
@@ -23,18 +24,24 @@ def _require(ctx, user, service, permission: str, message: str) -> None:
 
 
 @router.get("/api/services")
-async def list_services(ctx: Ctx, user: User, project_id: int = None, namespace_id: int = None):
+async def list_services(ctx: Ctx, user: User, project_id: int = None, namespace_id: int = None, app_id: int = None):
     """项目上有 app.view 或命名空间上有 namespace.view 的服务都可见。"""
     projects = set(visible_project_ids(ctx.store, user, "app.view"))
     namespaces = set(visible_namespace_ids(ctx.store, user, "namespace.view"))
-    if project_id is not None:
-        projects &= {project_id}
-        namespaces = set()
-    if namespace_id is not None:
-        namespaces &= {namespace_id}
-        projects = set()
     rows = ctx.store.list_services(sorted(projects), sorted(namespaces))
-    return {"items": [service_response(row) for row in rows], "total": len(rows)}
+    rows = [s for s in rows if (project_id is None or s["project_id"] == project_id)
+            and (namespace_id is None or s["namespace_id"] == namespace_id)
+            and (app_id is None or s["app_id"] == app_id)]
+    return {"items": [_linked_service(ctx, row) for row in rows], "total": len(rows)}
+
+
+def _linked_service(ctx, row):
+    ns = ctx.store.get_namespace(row["namespace_id"])
+    project = ctx.store.get_project(row["project_id"])
+    app = ctx.store.get_app(row["app_id"])
+    return dict(service_response(row), project_name=project["name"] if project else "",
+                app_name=app["name"] if app else "", cluster_name=ns["cluster_name"] if ns else "",
+                namespace_name=ns["name"] if ns else "", tier=ns["tier"] if ns else "")
 
 
 @router.post("/api/services", status_code=201)
@@ -60,7 +67,25 @@ async def create_service(request: Request, ctx: Ctx, user: User, data: dict = Bo
 
 @router.get("/api/services/{id}")
 async def get_service(id: int, ctx: Ctx, user: User):
-    return service_response(service_or_404(ctx.store, user, id))
+    return _linked_service(ctx, service_or_404(ctx.store, user, id))
+
+
+@router.get("/api/services/{id}/runtime")
+async def get_service_runtime(id: int, ctx: Ctx, user: User):
+    service = service_or_404(ctx.store, user, id)
+    return await service_runtime(ctx, service)
+
+
+@router.get("/api/services/{id}/builds")
+async def service_builds(id: int, ctx: Ctx, user: User, limit: int = 100, offset: int = 0):
+    service = service_or_404(ctx.store, user, id)
+    if not (has_namespace_permission(ctx.store, user, service["namespace_id"], "service.deploy") or
+            has_project_permission(ctx.store, user, service["project_id"], "job.view")):
+        raise Forbidden("没有查看此服务可发布构建的权限")
+    rows, total = ctx.store.list_jobs(service["app_id"], "success", min(max(limit, 1), 100),
+                                      max(offset, 0), [service["project_id"]])
+    fields = ("id", "app_id", "project_id", "app_name", "status", "image", "digest", "new_tag", "created_at")
+    return {"items": [{key: row.get(key) for key in fields} for row in rows], "total": total}
 
 
 @router.put("/api/services/{id}")

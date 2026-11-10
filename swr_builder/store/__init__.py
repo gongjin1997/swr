@@ -11,12 +11,13 @@ from .clusters import ClustersMixin
 from .deployments import DeploymentsMixin
 from .jobs import JobsMixin
 from .projects import ProjectsMixin
+from .roles import RolesMixin
 from .schema import DEPLOYMENT_FIELDS, JOB_FIELDS, SCHEMA, SCHEMA_EXT, USER_FIELDS, utcnow
 from .services import ServicesMixin
 from .system import SystemMixin
 
 
-class Store(AppsMixin, ProjectsMixin, ClustersMixin, BindingsMixin, ServicesMixin, JobsMixin, AccountsMixin,
+class Store(RolesMixin, AppsMixin, ProjectsMixin, ClustersMixin, BindingsMixin, ServicesMixin, JobsMixin, AccountsMixin,
             SystemMixin, DeploymentsMixin, Database):
     pass
 

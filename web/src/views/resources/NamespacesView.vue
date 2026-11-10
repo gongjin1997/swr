@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
-import { clusterApi, namespaceApi, type RbacReview } from '@/api'
-import type { Cluster, Namespace, NamespacePolicy, Tier } from '@/api/types'
+import { onMounted, reactive, ref, watch } from 'vue'
+import { clusterApi, namespaceApi, projectApi, type RbacReview } from '@/api'
+import type { Cluster, Namespace, NamespacePolicy, Tier, ClusterDiscovery, Project } from '@/api/types'
 import NamespacePolicyForm from '@/components/NamespacePolicyForm.vue'
 import { notifyError, notifySuccess, useAction } from '@/composables/useAction'
 import { TIER_TEXT, TIERS } from '@/constants'
@@ -10,17 +10,23 @@ import { useSession } from '@/stores/session'
 const session = useSession()
 const namespaces = ref<Namespace[]>([])
 const clusters = ref<Cluster[]>([])
+const projects = ref<Project[]>([])
+const discovery = ref<ClusterDiscovery | null>(null)
+const discovering = ref(false)
+const discoveryError = ref('')
+let discoveryRequest = 0
 const loading = ref(false)
 const { busy, run } = useAction()
 
 const defaultPolicy = (): NamespacePolicy => ({
-  require_approval: true, min_approvals: 1, max_replicas: 10, allowed_registry_orgs: [], rollout_timeout: 600,
+  require_approval: true, require_admin_approval: false, min_approvals: 1,
+  max_replicas: 10, allowed_registry_orgs: [], rollout_timeout: 600,
   freeze: { enabled: false, until: null, reason: '' }, deploy_windows: [],
 })
 
 const editor = reactive({
   visible: false, namespace: null as Namespace | null, name: '', clusterId: null as number | null,
-  tier: 'dev' as Tier, policy: defaultPolicy(),
+  tier: 'dev' as Tier, policy: defaultPolicy(), projectId: null as number | null,
 })
 const review = reactive({ visible: false, title: '', result: null as RbacReview | null, yaml: '', warning: '' })
 
@@ -29,6 +35,7 @@ async function load() {
   try {
     namespaces.value = (await namespaceApi.list()).items
     if (session.can('cluster.manage')) clusters.value = (await clusterApi.list()).items
+    if (session.can('project.manage')) projects.value = (await projectApi.list()).items
   } catch (e) {
     notifyError(e)
   } finally {
@@ -40,10 +47,35 @@ function open(namespace: Namespace | null) {
   if (!namespace && !clusters.value.length) return notifyError(new Error('请先纳管并测试一个集群'))
   const source = namespace ? (JSON.parse(JSON.stringify(namespace.policy)) as NamespacePolicy) : defaultPolicy()
   Object.assign(editor, {
+    projectId: projects.value[0]?.id ?? null,
     visible: true, namespace, name: namespace?.name ?? '', clusterId: namespace?.cluster_id ?? clusters.value[0]?.id ?? null,
     tier: namespace?.tier ?? 'dev', policy: { ...defaultPolicy(), ...source, freeze: { ...defaultPolicy().freeze, ...source.freeze } },
   })
+  if (editor.tier === 'staging' || editor.tier === 'prod') editor.policy.require_approval = true
+  if (!namespace) void discover()
 }
+
+async function discover() {
+  const id = editor.clusterId
+  const request = ++discoveryRequest
+  discovery.value = null
+  discoveryError.value = ''
+  editor.name = ''
+  if (!id) return
+  discovering.value = true
+  try {
+    const result = await clusterApi.discover(id)
+    if (request === discoveryRequest) discovery.value = result
+  } catch (e) {
+    if (request === discoveryRequest) discoveryError.value = e instanceof Error ? e.message : '集群资源读取失败'
+  } finally { if (request === discoveryRequest) discovering.value = false }
+}
+watch(() => editor.tier, tier => {
+  if (tier === 'staging' || tier === 'prod') editor.policy.require_approval = true
+})
+watch(() => editor.projectId, id => {
+  if (!editor.namespace) editor.policy.allowed_registry_orgs = projects.value.find(p => p.id === id)?.registry_orgs.map(o => o.namespace) ?? []
+})
 
 function cleanedPolicy(): NamespacePolicy {
   const policy = JSON.parse(JSON.stringify(editor.policy)) as NamespacePolicy
@@ -64,6 +96,7 @@ async function save() {
     } else {
       if (!editor.clusterId) throw new Error('请选择集群')
       await namespaceApi.adopt({ name: editor.name.trim(), cluster_id: editor.clusterId, tier: editor.tier,
+        project_id: editor.projectId ?? undefined,
         policy: { ...policy, service_types: ['ClusterIP'] } })
     }
   }, editor.namespace ? '命名空间策略已更新' : '命名空间已纳管')
@@ -106,9 +139,9 @@ onMounted(load)
     <el-table v-loading="loading" :data="namespaces" empty-text="暂无可见命名空间">
       <el-table-column prop="name" label="命名空间" min-width="140" />
       <el-table-column prop="cluster_name" label="集群" min-width="140" />
-      <el-table-column label="环境" width="90"><template #default="{ row }">{{ TIER_TEXT[row.tier] }}</template></el-table-column>
-      <el-table-column label="审批" width="120">
-        <template #default="{ row }">{{ row.policy.require_approval || row.tier === 'prod' ? `需 ${row.policy.min_approvals} 人` : '无需审批' }}</template>
+      <el-table-column label="环境" width="140"><template #default="{ row }">{{ TIER_TEXT[row.tier] }}</template></el-table-column>
+      <el-table-column label="审批" width="160">
+        <template #default="{ row }">{{ row.policy.require_admin_approval || row.tier === 'prod' ? '平台管理员确认' : row.policy.require_approval || row.tier === 'staging' ? `需 ${row.policy.min_approvals} 人` : '无需审批' }}</template>
       </el-table-column>
       <el-table-column label="策略" min-width="260"><template #default="{ row }"><span class="hint">{{ policySummary(row) }}</span></template></el-table-column>
       <el-table-column v-if="session.can('cluster.manage')" label="操作" width="160">
@@ -124,12 +157,13 @@ onMounted(load)
     <el-form label-position="top">
       <div class="form-grid">
         <template v-if="!editor.namespace">
-          <el-form-item label="Namespace 名称"><el-input v-model="editor.name" maxlength="63" /></el-form-item>
           <el-form-item label="集群">
-            <el-select v-model="editor.clusterId">
+            <el-select v-model="editor.clusterId" @change="discover">
               <el-option v-for="c in clusters" :key="c.id" :label="`${c.name} · ${c.status}`" :value="c.id" />
             </el-select>
           </el-form-item>
+          <el-form-item label="集群命名空间"><el-select v-model="editor.name" filterable :loading="discovering" placeholder="从集群自动获取"><el-option v-for="n in discovery?.namespaces ?? []" :key="n.name" :label="n.name + (n.managed_id ? '（已纳管）' : '')" :value="n.name" :disabled="!!n.managed_id || n.status === 'Terminating'" /></el-select><el-button link @click="discover">重新获取</el-button></el-form-item>
+          <el-form-item v-if="session.can('project.manage')" label="分配项目"><el-select v-model="editor.projectId" clearable placeholder="选择关联项目"><el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" /></el-select></el-form-item>
         </template>
         <el-form-item label="环境">
           <el-select v-model="editor.tier">
@@ -137,13 +171,12 @@ onMounted(load)
           </el-select>
         </el-form-item>
       </div>
-      <NamespacePolicyForm v-model="editor.policy" />
-      <el-alert v-if="!editor.namespace" type="info" :closable="false" class="section-gap"
-        title="平台只纳管已存在的 namespace；请先在集群中创建并配置最小 RBAC（纳管后可用“权限自检”核对）。" />
+      <el-alert v-if="discoveryError && !editor.namespace" type="error" :closable="false" :title="discoveryError" />
+      <NamespacePolicyForm v-model="editor.policy" :tier="editor.tier" />
     </el-form>
     <template #footer>
       <el-button @click="editor.visible = false">取消</el-button>
-      <el-button type="primary" :loading="busy" @click="save">{{ editor.namespace ? '保存策略' : '连接并纳管' }}</el-button>
+      <el-button type="primary" :loading="busy" :disabled="!editor.namespace && (!editor.name || discovering)" @click="save">{{ editor.namespace ? '保存策略' : '连接并纳管' }}</el-button>
     </template>
   </el-dialog>
 

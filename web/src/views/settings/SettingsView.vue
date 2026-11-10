@@ -1,13 +1,20 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import { Box, Connection, Lock, Monitor, Refresh, Setting } from '@element-plus/icons-vue'
+import SettingInput from './SettingInput.vue'
+import KubernetesSettings from './KubernetesSettings.vue'
+import AdapterSettings from './AdapterSettings.vue'
 import { ElMessage } from 'element-plus'
 import { settingsApi, type SettingsChange } from '@/api'
 import type { SettingField, SettingsView, SystemInfo } from '@/api/types'
-import { notifyError, useAction } from '@/composables/useAction'
+import { confirmAction, notifyError, useAction } from '@/composables/useAction'
 import { usePlatform } from '@/stores/platform'
 import { useSession } from '@/stores/session'
 import { fmtSize } from '@/utils/format'
 
+const route = useRoute()
+const router = useRouter()
 const session = useSession()
 const platform = usePlatform()
 const view = ref<SettingsView | null>(null)
@@ -20,11 +27,56 @@ const loading = ref(false)
 const saving = useAction()
 const testing = useAction()
 
-const SELECTS: Record<string, [string, string][]> = {
-  'hcs.auth_mode': [['aksk', 'AK/SK 签名换 Token（默认）'], ['password', '用户名密码'], ['token', '预置 Token']],
-  'hcs.token_scope': [['project', '项目级（project）'], ['domain', '账号级（domain）']],
+const sections = [
+  { key: 'general', title: '通用设置', description: '配置系统名称与平台功能入口。', icon: Setting },
+  { key: 'registry', title: '镜像仓库', description: '管理 SWR 仓库地址、登录凭证与连接参数。', icon: Box },
+  { key: 'build', title: '构建参数', description: '配置构建引擎、并发任务与制品上传限制。', icon: Monitor },
+  { key: 'security', title: '安全设置', description: '管理登录会话、密码要求与登录保护。', icon: Lock },
+  { key: 'kubernetes', title: 'Kubernetes', description: '管理全局 kubeconfig、集群连接、命名空间与发布审批。', icon: Connection },
+  { key: 'adapters', title: '适配器', description: '查看发布适配器及关联集群配置。', icon: Connection },
+]
+const active = computed(() => sections.some(s => s.key === route.query.section) ? String(route.query.section) : 'general')
+const selected = computed(() => sections.find(s => s.key === active.value)!)
+const fields = computed(() => view.value?.sections.find(s => s.key === active.value)?.fields ?? [])
+const dirtyPaths = computed(() => (view.value?.sections ?? []).flatMap(s => s.fields).filter(f =>
+  !f.locked_by && (clears[f.path] || JSON.stringify(values[f.path]) !== JSON.stringify(initial(f))),
+).map(f => f.path))
+const dirty = computed(() => dirtyPaths.value.length > 0)
+const changedIn = (section: string) => dirtyPaths.value.some(path => path.startsWith(section + '.'))
+const groups = computed(() => {
+  const definitions: Record<string, { title: string; keys: string[] }[]> = {
+    general: [{ title: '系统信息', keys: ['site_name', 'deploy_enabled'] }],
+    registry: [
+      { title: '仓库连接', keys: ['address', 'organization'] },
+      { title: '登录凭证', keys: ['username', 'password', 'project', 'ak', 'sk'] },
+      { title: '连接选项', keys: ['ca_file', 'timeout', 'insecure'] },
+    ],
+    build: [
+      { title: '构建引擎', keys: ['docker_bin', 'max_concurrent', 'max_upload_mb', 'extra_build_args'] },
+      { title: '超时控制', keys: ['login_timeout', 'build_timeout', 'push_timeout'] },
+      { title: '构建清理', keys: ['keep_context', 'cleanup_local_images'] },
+    ],
+    security: [
+      { title: '登录会话', keys: ['session_hours', 'remember_days'] },
+      { title: '密码与登录保护', keys: ['password_min_length', 'max_login_failures', 'lock_minutes'] },
+    ],
+  }
+  const result = (definitions[active.value] ?? []).map(g => ({ title: g.title, fields: g.keys.flatMap(key => fields.value.filter(f => f.key === key)) }))
+  const known = new Set(result.flatMap(g => g.fields.map(f => f.key)))
+  const extra = fields.value.filter(f => !known.has(f.key))
+  if (extra.length) result.push({ title: '其他设置', fields: extra })
+  return result
+})
+async function discard() {
+  if (dirty.value && !await confirmAction('放弃尚未保存的设置修改？', '放弃修改')) return
+  await load()
 }
-const SOURCE_TEXT: Record<string, string> = { db: '页面设置', file: '配置文件 / 默认值', env: '环境变量' }
+onBeforeRouteLeave(async () => !dirty.value || await confirmAction('当前有未保存的修改，确认离开？', '离开设置'))
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (dirty.value) { event.preventDefault(); event.returnValue = '' }
+}
+onMounted(() => window.addEventListener('beforeunload', beforeUnload))
+onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
 
 function initial(f: SettingField): unknown {
   if (f.type === 'list') return JSON.stringify(f.value ?? [])
@@ -71,6 +123,7 @@ function collect(section?: string): SettingsChange {
       if (f.type === 'list') {
         try {
           v = JSON.parse(String(v))
+          if (!Array.isArray(v)) throw new Error('not an array')
         } catch {
           throw new Error(`${f.label}请填写 JSON 数组`)
         }
@@ -94,11 +147,11 @@ async function save() {
   })
 }
 
-async function test(section: 'registry' | 'hcs') {
+async function testRegistry() {
   await testing.run(async () => {
-    const change = collect(section)
-    const r = section === 'registry' ? await settingsApi.testRegistry(change) : await settingsApi.testHcs(change)
-    const ok = section === 'registry' ? r.ok : (r as { validated?: boolean }).validated
+    const change = collect('registry')
+    const r = await settingsApi.testRegistry(change)
+    const ok = r.ok
     ElMessage({ type: ok ? 'success' : 'error', message: r.message, duration: 8000, showClose: true })
   })
 }
@@ -107,74 +160,64 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="page" v-loading="loading">
-    <div class="page-heading">
-      <div>
-        <h2>系统设置</h2>
-        <div v-if="system" class="hint">{{ system.config_priority }} · v{{ system.version }} · 可用磁盘 {{ fmtSize(system.disk.free) }}</div>
-      </div>
-      <el-button type="primary" :loading="saving.busy.value" @click="save">保存修改</el-button>
-    </div>
-    <el-alert type="info" :closable="false" class="section-gap"
-      title="仓库或构建参数请在没有构建任务时修改。已存在的登录会话有效期不会被追溯缩短。TLS / 端口 / 数据目录仍在服务器配置文件中设置。" />
-    <div class="grid-2 section-gap">
-      <el-card v-for="sec in view?.sections ?? []" :key="sec.key">
+  <section class="page settings-page" v-loading="loading">
+    <aside class="settings-nav" aria-label="设置分类">
+      <button v-for="section in sections" :key="section.key" type="button" :aria-label="section.title" :class="{ active: active === section.key }" :aria-current="active === section.key ? 'page' : undefined" @click="router.replace({ query: { ...route.query, section: section.key } })"><el-icon :size="18"><component :is="section.icon" /></el-icon>{{ section.title }}<i v-if="changedIn(section.key)" aria-label="有未保存修改" /></button>
+      <div v-if="system" class="system-info"><b>平台信息</b><span>可用磁盘 <em>{{ fmtSize(system.disk.free) }}</em></span><span>构建记录 <em>{{ system.jobs }}</em></span></div>
+    </aside>
+    <el-card v-if="!['kubernetes', 'adapters'].includes(active)" class="settings-panel">
         <template #header>
-          <div class="card-title">
-            <span>{{ sec.label }}</span>
-            <el-button v-if="sec.key === 'registry'" :loading="testing.busy.value" @click="test('registry')">测试当前表单</el-button>
-            <el-button v-if="sec.key === 'hcs'" :loading="testing.busy.value" @click="test('hcs')">测试 IAM 认证</el-button>
-          </div>
-        </template>
-        <el-form label-position="top">
-          <el-form-item v-for="f in sec.fields" :key="f.path" :label="f.label">
-            <el-select v-if="SELECTS[f.path]" v-model="values[f.path]" :disabled="!!f.locked_by">
-              <el-option v-for="[value, label] in SELECTS[f.path]" :key="value" :label="label" :value="value" />
-            </el-select>
-            <el-switch v-else-if="f.type === 'bool'" v-model="values[f.path]" :disabled="!!f.locked_by" />
-            <el-input-number
-              v-else-if="f.type === 'int' || f.type === 'float'"
-              v-model="values[f.path]"
-              :min="f.minimum"
-              :max="f.maximum"
-              :step="f.type === 'int' ? 1 : 0.5"
-              :disabled="!!f.locked_by"
-            />
-            <el-input
-              v-else-if="f.type === 'list' || f.path === 'hcs.aksk_request_body'"
-              v-model="values[f.path]"
-              type="textarea"
-              :rows="2"
-              class="mono"
-              spellcheck="false"
-              :placeholder="f.type === 'list' ? '[&quot;--network&quot;, &quot;host&quot;]' : ''"
-              :disabled="!!f.locked_by"
-            />
-            <el-input
-              v-else-if="f.type === 'secret'"
-              v-model="values[f.path]"
-              type="password"
-              show-password
-              autocomplete="new-password"
-              :placeholder="f.is_set ? '已设置，留空保持不变' : '未设置'"
-              :disabled="!!f.locked_by || clears[f.path]"
-            />
-            <el-input v-else v-model="values[f.path]" :disabled="!!f.locked_by" />
-            <div class="hint field-hint">
-              {{ f.help }}
-              <template v-if="f.locked_by">由环境变量 {{ f.locked_by }} 控制（只读）</template>
-              <template v-else>来源：{{ SOURCE_TEXT[f.source] ?? f.source }}</template>
+            <div class="page-card-header">
+              <div class="page-card-header-content"><div class="settings-heading"><div><h2>{{ selected.title }}</h2><p>{{ selected.description }}</p></div><el-button v-if="active === 'registry'" :icon="Box" :loading="testing.busy.value" :disabled="loading || !view" @click="testRegistry">测试仓库连接</el-button></div></div>
+              <div class="page-card-actions">
+                <el-button :icon="Refresh" :disabled="saving.busy.value" @click="discard">重新加载</el-button>
+              </div>
             </div>
-            <el-checkbox v-if="f.type === 'secret' && !f.locked_by && f.is_set" v-model="clears[f.path]" size="small">清空已保存的值</el-checkbox>
-          </el-form-item>
+          </template>
+        <el-alert v-if="active === 'registry' || active === 'build'" title="请在没有进行中的构建任务时修改仓库和构建参数。" type="info" show-icon :closable="false" class="settings-notice" />
+        <el-alert v-if="active === 'security'" title="登录有效期的修改不会缩短已经存在的会话。" type="info" show-icon :closable="false" class="settings-notice" />
+        <el-form label-position="top" :disabled="saving.busy.value" @submit.prevent="save">
+          <section v-for="group in groups" :key="group.title" class="settings-group"><h3>{{ group.title }}</h3><div class="form-grid"><SettingInput v-for="field in group.fields" :key="field.path" :field="field" v-model="values[field.path]" v-model:clear="clears[field.path]" :class="{ wide: field.type === 'list' || field.path === 'general.site_name' }" /></div></section>
+          <el-empty v-if="!loading && !view" description="设置加载失败，请重新加载。" />
+          <div class="settings-save"><span :class="{ changed: dirty }">{{ !view ? '尚未加载设置' : dirty ? `有 ${dirtyPaths.length} 项未保存修改` : '所有修改已保存' }}</span><div class="toolbar"><el-button :disabled="!dirty || saving.busy.value" @click="discard">放弃修改</el-button><el-button type="primary" native-type="submit" :loading="saving.busy.value" :disabled="!view || !dirty">保存修改</el-button></div></div>
         </el-form>
-      </el-card>
-    </div>
-  </div>
+    </el-card>
+    <KubernetesSettings v-else-if="active === 'kubernetes'" />
+    <AdapterSettings v-else />
+    <p class="settings-footnote">设置优先级：环境变量 &gt; 页面设置 &gt; 配置文件。敏感值不会回显，留空保留原值。</p>
+  </section>
 </template>
 
 <style scoped>
-.field-hint {
-  width: 100%;
+.settings-page { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 22px; align-items: start; }
+.settings-page > :not(.settings-nav):not(.settings-footnote) { grid-column: 2; min-width: 0; }
+.settings-page > .settings-footnote { grid-column: 1 / -1; }
+.settings-nav { background: var(--hi-bg-card); border: 1px solid var(--hi-border); border-radius: 10px; padding: 12px; }
+.settings-nav button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 13px 12px; margin-bottom: 3px; border: 0; background: none; border-radius: 6px; color: var(--hi-text-2); cursor: pointer; font-size: 13px; text-align: left; }
+.settings-nav button:hover { background: var(--hi-bg-soft); }
+.settings-nav button.active { background: var(--hi-sider-active-bg); color: var(--el-color-primary); font-weight: 600; }
+.settings-nav i:not(.el-icon) { width: 5px; height: 5px; background: var(--el-color-warning); border-radius: 50%; margin-left: auto; }
+.system-info { display: grid; gap: 12px; border-top: 1px solid var(--hi-border-light); padding: 20px 10px 8px; margin-top: 20px; font-size: 11px; color: var(--hi-text-3); }
+.system-info b { color: var(--hi-text-2); font-size: 12px; font-weight: 500; }
+.system-info span { display: flex; justify-content: space-between; }
+.system-info em { font-style: normal; color: var(--hi-text-2); }
+.settings-panel { min-width: 0; }
+.settings-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.settings-heading h2 { font-size: 17px; margin: 0; }
+.settings-heading p { font-size: 12px; color: var(--hi-text-3); margin: 6px 0 0; }
+.settings-notice { margin-bottom: 24px; }
+.settings-group + .settings-group { border-top: 1px solid var(--hi-border-light); padding-top: 22px; }
+.settings-group h3 { font-size: 13px; margin: 0 0 20px; font-weight: 600; }
+.settings-group .form-grid { column-gap: 28px; }
+.settings-save { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding-top: 20px; border-top: 1px solid var(--hi-border); }
+.settings-save > span { font-size: 12px; color: var(--hi-text-3); }
+.settings-save > span.changed { color: var(--el-color-warning); }
+.settings-footnote { text-align: center; font-size: 11px; color: var(--hi-text-3); margin-top: 22px; }
+@media (max-width: 1000px) {
+  .settings-page { grid-template-columns: minmax(0, 1fr); }
+  .settings-page > :not(.settings-nav):not(.settings-footnote) { grid-column: 1; }
+  .settings-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+  .settings-nav button { justify-content: flex-start; white-space: normal; width: 100%; min-width: 0; margin: 0; }
+  .system-info { display: none; }
 }
 </style>

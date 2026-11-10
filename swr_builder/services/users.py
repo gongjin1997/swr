@@ -4,11 +4,16 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from ..auth import permissions_of, public_user
-from ..authz import (GLOBAL_ROLE_PERMISSIONS, NAMESPACE_ROLE_PERMISSIONS, PROJECT_ROLE_PERMISSIONS,
-                     visible_namespace_ids, visible_project_ids)
+from ..authz import role_permissions, visible_namespace_ids, visible_project_ids
 from ..config import Settings
 from ..store import Store
 from .bindings import binding_view
+
+
+def administrator_account(store: Store, target: Dict[str, Any]) -> bool:
+    """Include disabled accounts so delegated managers cannot reactivate an administrator."""
+    return target["role"] == "admin" or any(b["scope_type"] == "global" and b["role"] == "platform_admin"
+                                            for b in store.list_bindings(user_id=target["id"]))
 
 
 def protect_user(store: Store, actor: Dict[str, Any], target: Dict[str, Any], role: str, enabled: bool,
@@ -24,27 +29,31 @@ def protect_user(store: Store, actor: Dict[str, Any], target: Dict[str, Any], ro
 def session_profile(store: Store, settings: Settings, user: Dict[str, Any]) -> Dict[str, Any]:
     """/api/auth/me：账号信息 + 合并后的有效权限 + 可见项目/命名空间及其权限。"""
     bindings = store.list_bindings(user_id=user["id"])
+    tables = {scope: role_permissions(store, scope) for scope in ("global", "project", "namespace")}
     effective = set(permissions_of(user["role"]) if user["role"] == "admin" else [])
     for binding in bindings:
-        table = {"global": GLOBAL_ROLE_PERMISSIONS, "project": PROJECT_ROLE_PERMISSIONS}.get(
-            binding["scope_type"], NAMESPACE_ROLE_PERMISSIONS)
+        table = tables[binding["scope_type"]]
         granted = table.get(binding["role"], set())
         effective.update(permissions_of("admin") if "*" in granted else granted)
 
     def scoped(scope_type: str, scope_id: int, table: Dict[str, set]) -> list:
-        roles = [b["role"] for b in bindings if b["scope_type"] == scope_type and b["scope_id"] == scope_id]
-        return sorted({p for role in roles for p in table.get(role, set())})
+        if user["role"] == "admin":
+            return permissions_of("admin")
+        roles = [b["role"] for b in bindings if b["scope_type"] == "global" or
+                 (b["scope_type"] == scope_type and b["scope_id"] == scope_id)]
+        grants = {p for role in roles for p in table.get(role, set())}
+        return sorted(permissions_of("admin") if "*" in grants else grants)
 
     projects = []
     for project_id in visible_project_ids(store, user):
         project = store.get_project(project_id)
-        perms = scoped("project", project_id, PROJECT_ROLE_PERMISSIONS)
+        perms = scoped("project", project_id, tables["project"])
         effective.update(perms)
         projects.append({"id": project_id, "name": project["name"], "perms": perms})
     namespaces = []
     for namespace_id in visible_namespace_ids(store, user):
         namespace = store.get_namespace(namespace_id)
-        perms = scoped("namespace", namespace_id, NAMESPACE_ROLE_PERMISSIONS)
+        perms = scoped("namespace", namespace_id, tables["namespace"])
         effective.update(perms)
         namespaces.append({"id": namespace_id, "name": namespace["name"], "cluster": namespace["cluster_name"],
                            "tier": namespace["tier"], "perms": perms})

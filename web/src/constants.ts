@@ -42,7 +42,7 @@ export const BUILD_STEPS: [string, string][] = [
 export const TIERS: [string, string][] = [
   ['dev', '开发'],
   ['test', '测试'],
-  ['staging', '预发布'],
+  ['staging', 'UAT（预生产）'],
   ['prod', '生产'],
 ]
 export const TIER_TEXT: Record<string, string> = Object.fromEntries(TIERS)
@@ -53,9 +53,9 @@ export const WEEKDAYS: [number, string][] = [
 
 /** 授权范围 → 可授予的角色。与后端 services/bindings.ALLOWED_ROLES 一致。 */
 export const SCOPE_ROLES: Record<string, [string, string][]> = {
-  global: [['platform_admin', '平台管理员'], ['auditor', '审计员']],
+  global: [['platform_admin', '平台管理员'], ['deployment_approver', '发布审批员'], ['auditor', '审计员']],
   project: [['project_admin', '项目管理员'], ['developer', '开发者'], ['project_viewer', '项目只读']],
-  namespace: [['namespace_owner', '命名空间管理员'], ['deployer', '部署员'], ['namespace_viewer', '命名空间只读']],
+  namespace: [['namespace_owner', '命名空间管理员'], ['namespace_approver', '环境审批员'], ['deployer', '部署员'], ['namespace_viewer', '命名空间只读']],
 }
 export const ROLE_TEXT: Record<string, string> = Object.fromEntries(Object.values(SCOPE_ROLES).flat())
 

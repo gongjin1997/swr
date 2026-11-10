@@ -9,7 +9,7 @@ from ..apps import APP_DEFAULTS
 from ..authz import has_project_permission, visible_project_ids
 from ..builder import FINAL_STATUSES
 from ..dockerfile import import_dockerfile
-from ..errors import DomainError, Forbidden, NotFound
+from ..errors import Conflict, DomainError, Forbidden, NotFound
 from ..fileio import read_log
 from ..services import apps as app_service
 from ..services.access import app_or_404, job_or_404
@@ -45,6 +45,8 @@ async def update_app(app_id: int, ctx: Ctx, user: User, payload: Dict[str, Any] 
 @router.delete("/api/apps/{app_id}")
 async def delete_app(app_id: int, ctx: Ctx, user: User):
     app_or_404(ctx.store, user, app_id, "app.manage")
+    if any(s["app_id"] == app_id for s in ctx.store.list_services()):
+        raise Conflict("应用仍有关联服务，请先处理服务关联")
     if not ctx.store.delete_app(app_id):
         raise NotFound("应用不存在")
     return {"ok": True}

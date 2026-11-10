@@ -7,6 +7,7 @@ import re
 import sqlite3
 from typing import Any, Dict, Optional
 
+from ..authz import has_global_permission, has_namespace_permission
 from ..errors import Conflict, Forbidden, NotFound, NotImplementedYet, Unprocessable
 from ..policy import deployment_policy_block
 from ..registry import parse_image_ref
@@ -25,6 +26,32 @@ def deployment_response(deployment: Dict[str, Any]) -> Dict[str, Any]:
 def request_hash(kind: str, payload: Dict[str, Any]) -> str:
     raw = json.dumps({"kind": kind, "payload": payload}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def requires_admin_approval(store: Store, deployment: Dict[str, Any]) -> bool:
+    snapshot = json.loads(deployment.get("policy_snapshot") or "{}")
+    namespace = store.get_namespace(deployment.get("namespace_id"))
+    return bool(snapshot.get("require_admin_approval")) or bool(namespace and (
+        namespace["tier"] == "prod" or namespace["policy"].get("require_admin_approval")))
+
+
+def valid_approval_count(store: Store, deployment: Dict[str, Any]) -> int:
+    count = 0
+    for approval in store.list_approvals(deployment["id"]):
+        actor = store.get_user(approval["approver_id"])
+        if (approval["decision"] == "approved" and actor and actor["enabled"]
+                and not actor["must_change_password"] and can_decide(store, actor, deployment)):
+            count += 1
+    return count
+
+
+def can_decide(store: Store, actor: Dict[str, Any], deployment: Dict[str, Any], decision="approved") -> bool:
+    if actor["id"] == deployment.get("created_by"):
+        return False
+    if decision == "approved" and requires_admin_approval(store, deployment):
+        return has_global_permission(store, actor, "platform.admin")
+    return (has_global_permission(store, actor, "deploy.approve") or
+            has_namespace_permission(store, actor, deployment.get("namespace_id") or 0, "deploy.approve"))
 
 
 def check_idempotency_key(key: str) -> None:
@@ -62,6 +89,9 @@ def queue_deployment(store: Store, service: Dict[str, Any], job: Dict[str, Any],
     if not image_ref:
         raise Unprocessable("成功构建记录的镜像引用无效")
     image = image_ref.host + "/" + image_ref.repo + "@" + digest
+    approval_policy = dict(namespace["policy"])
+    approval_policy["require_admin_approval"] = (
+        bool(approval_policy.get("require_admin_approval")) or namespace["tier"] == "prod")
     payload_hash = request_hash(kind, {"job_id": job["id"], "revision_id": revision["id"], "remark": remark})
     existing = store.find_deployment_idempotency(actor["id"], service["id"], idempotency_key)
     if existing:
@@ -77,7 +107,7 @@ def queue_deployment(store: Store, service: Dict[str, Any], job: Dict[str, Any],
             app_id=service["app_id"], app_name=job["app_name"], job_id=job["id"], image=image,
             project_id=service["project_id"], service_id=service["id"], namespace_id=service["namespace_id"],
             revision_id=revision["id"], kind=kind, digest=digest, idempotency_key=idempotency_key,
-            request_hash=payload_hash, policy_snapshot=json.dumps(namespace["policy"], ensure_ascii=False),
+            request_hash=payload_hash, policy_snapshot=json.dumps(approval_policy, ensure_ascii=False),
             status=status, trigger="manual", operator=actor.get("display_name") or actor["username"],
             created_by=actor["id"], remark=remark[:200])
     except sqlite3.IntegrityError as exc:
@@ -93,8 +123,16 @@ def decide(store: Store, deployment: Dict[str, Any], actor: Dict[str, Any], deci
     """记录审批意见。拒绝立即结束任务；批准数达到策略快照中的 min_approvals 后进入发布队列。"""
     if deployment["status"] != "pending_approval":
         raise Conflict("发布任务不在待审批状态")
+    permission = "platform.admin" if decision == "approved" and requires_admin_approval(store, deployment) else "deploy.approve"
+    if actor["id"] == deployment.get("created_by"):
+        raise Forbidden("发布发起人不能审批自己的任务")
+    if not can_decide(store, actor, deployment, decision):
+        raise Forbidden("此发布需要平台管理员审批" if permission == "platform.admin" else "没有全局发布审批权限")
     snapshot = json.loads(deployment.get("policy_snapshot") or "{}")
-    required = max(1, int(snapshot.get("min_approvals", 1)))
+    namespace = store.get_namespace(deployment["namespace_id"])
+    required = max(1, int(snapshot.get("min_approvals", 1)),
+                   required_approvals(effective_policy(namespace["policy"]), namespace["tier"]))
+    required += store.count_approvals(deployment["id"], "approved") - valid_approval_count(store, deployment)
     try:
         result = store.record_approval_transition(deployment["id"], actor["id"], decision, comment, required)
     except LookupError:

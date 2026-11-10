@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { Plus, Search } from '@element-plus/icons-vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { userApi } from '@/api'
 import type { PublicUser, RolesInfo } from '@/api/types'
 import OneTimeSecret from '@/components/OneTimeSecret.vue'
@@ -9,6 +10,12 @@ import { fmtTime } from '@/utils/format'
 
 const session = useSession()
 const users = ref<PublicUser[]>([])
+const keyword = ref('')
+const roleFilter = ref('')
+const filteredUsers = computed(() => users.value.filter(user =>
+  (!roleFilter.value || user.role === roleFilter.value) &&
+  `${user.username} ${user.display_name} ${user.email}`.toLowerCase().includes(keyword.value.trim().toLowerCase()),
+))
 const roles = ref<RolesInfo | null>(null)
 const loading = ref(false)
 const { busy, run } = useAction()
@@ -68,15 +75,11 @@ onMounted(load)
 
 <template>
   <div class="page">
-    <div class="page-heading">
-      <div>
-        <h2>账号管理</h2>
-        <div class="hint">管理员、开发者、只读用户。新增账号首次登录必须修改密码。项目和命名空间级权限在“资源管理 › 成员授权”中分配。</div>
-      </div>
-      <el-button type="primary" @click="open(null)">新增账号</el-button>
-    </div>
     <el-card>
-      <el-table v-loading="loading" :data="users">
+      <div class="filter-bar"><el-input v-model="keyword" :prefix-icon="Search" placeholder="搜索账号、姓名或邮箱" clearable aria-label="搜索账号" /><el-select v-model="roleFilter" placeholder="全部角色" clearable aria-label="按角色筛选"><el-option v-for="role in roles?.roles ?? []" :key="role.value" :label="role.label" :value="role.value" /></el-select><span class="count">共 {{ filteredUsers.length }} 个账号</span>
+        <el-button type="primary" :icon="Plus" @click="open(null)">新增账号</el-button>
+      </div>
+      <el-table v-loading="loading" :data="filteredUsers" empty-text="没有匹配的账号">
         <el-table-column prop="username" label="用户名" min-width="140" />
         <el-table-column prop="display_name" label="显示名称" min-width="140" />
         <el-table-column prop="role_label" label="角色" width="120" />
@@ -99,7 +102,7 @@ onMounted(load)
       </el-table>
     </el-card>
 
-    <el-card v-if="roles">
+    <el-collapse v-if="roles" class="section-gap"><el-collapse-item title="基础角色权限说明" name="roles"><el-card>
       <template #header><span class="card-title">基础角色权限</span></template>
       <el-table :data="Object.entries(roles.permissions)" size="small">
         <el-table-column label="权限" min-width="200"><template #default="{ row }">{{ row[1] }}</template></el-table-column>
@@ -107,7 +110,7 @@ onMounted(load)
           <template #default="{ row }">{{ r.permissions.includes(row[0]) ? '✓' : '—' }}</template>
         </el-table-column>
       </el-table>
-    </el-card>
+    </el-card></el-collapse-item></el-collapse>
 
     <el-dialog v-model="form.visible" :title="form.user ? '编辑账号' : '新增账号'" width="520px">
       <el-form label-position="top">

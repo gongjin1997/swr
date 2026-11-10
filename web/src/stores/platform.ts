@@ -26,7 +26,14 @@ export const usePlatform = defineStore('platform', () => {
     return appDefaults.value
   }
 
+  function reset() {
+    info.value = null
+    apps.value = []
+    appDefaults.value = null
+    appsLoaded.value = false
+  }
+
   const appName = (id: number) => apps.value.find((a) => a.id === id)?.name ?? `#${id}`
 
-  return { info, apps, appDefaults, loadInfo, loadApps, loadAppDefaults, appName }
+  return { reset, info, apps, appDefaults, loadInfo, loadApps, loadAppDefaults, appName }
 })

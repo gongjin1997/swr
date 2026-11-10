@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { bindingApi, namespaceApi, projectApi } from '@/api'
-import type { BindableUser, Binding, Namespace, Project } from '@/api/types'
+import { bindingApi, namespaceApi, projectApi, roleApi } from '@/api'
+import type { BindableUser, Binding, Namespace, Project, RoleDefinition } from '@/api/types'
 import { confirmAction, notifyError, useAction } from '@/composables/useAction'
-import { ROLE_TEXT, SCOPE_ROLES } from '@/constants'
 import { useSession } from '@/stores/session'
 import { fmtTime } from '@/utils/format'
 
@@ -12,6 +11,9 @@ const bindings = ref<Binding[]>([])
 const users = ref<BindableUser[]>([])
 const projects = ref<Project[]>([])
 const namespaces = ref<Namespace[]>([])
+const roleDefinitions = ref<RoleDefinition[]>([])
+const scopeRoles = computed(() => roleDefinitions.value.filter(r => r.enabled && r.scope_type === form.scope))
+const roleLabel = (code: string) => roleDefinitions.value.find(r => r.code === code)?.name ?? code
 const loading = ref(false)
 const { busy, run } = useAction()
 const form = reactive({ visible: false, userId: null as number | null, scope: 'project' as Binding['scope_type'],
@@ -34,7 +36,7 @@ const targets = computed(() =>
 const candidates = computed(() => users.value.filter((u) => u.enabled && u.id !== session.profile?.id))
 
 watch(() => form.scope, (scope) => {
-  form.role = SCOPE_ROLES[scope][0][0]
+  form.role = roleDefinitions.value.find(r => r.enabled && r.scope_type === scope)?.code ?? ''
   form.targetId = targets.value[0]?.id ?? null
 })
 
@@ -42,13 +44,15 @@ async function load() {
   loading.value = true
   try {
     const empty = { items: [], total: 0 }
-    const [b, u, p, n] = await Promise.all([
+    const [b, u, p, n, roles] = await Promise.all([
       bindingApi.list(), bindingApi.users(), projectApi.list().catch(() => empty), namespaceApi.list().catch(() => empty),
+      roleApi.list(),
     ])
     bindings.value = b.items
     users.value = u.items
     projects.value = p.items as Project[]
     namespaces.value = n.items as Namespace[]
+    roleDefinitions.value = roles.items
   } catch (e) {
     notifyError(e)
   } finally {
@@ -72,7 +76,7 @@ function open() {
   if (!candidates.value.length) return notifyError(new Error('没有可授权的其他启用用户'))
   const scope = scopes.value.find(([s]) => s === 'project')?.[0] ?? scopes.value[0]?.[0] ?? 'project'
   Object.assign(form, { visible: true, userId: candidates.value[0].id, scope, expires: null, note: '' })
-  form.role = SCOPE_ROLES[scope][0][0]
+  form.role = roleDefinitions.value.find(r => r.enabled && r.scope_type === scope)?.code ?? ''
   form.targetId = targets.value[0]?.id ?? null
 }
 
@@ -90,7 +94,7 @@ async function save() {
 }
 
 async function revoke(b: Binding) {
-  if (!(await confirmAction(`撤销 ${userLabel(b.subject_id)} 的“${ROLE_TEXT[b.role] ?? b.role}”授权？`, '撤销授权', true))) return
+  if (!(await confirmAction(`撤销 ${userLabel(b.subject_id)} 的“${roleLabel(b.role)}”授权？`, '撤销授权', true))) return
   if (await run(() => bindingApi.remove(b.id), '授权已撤销')) await load()
 }
 
@@ -104,7 +108,7 @@ onMounted(load)
     <template #header><div class="card-title"><span>成员授权</span><el-button type="primary" @click="open">新增授权</el-button></div></template>
     <el-table v-loading="loading" :data="bindings" empty-text="暂无授权记录">
       <el-table-column label="用户" min-width="180"><template #default="{ row }">{{ userLabel(row.subject_id) }}</template></el-table-column>
-      <el-table-column label="角色" width="140"><template #default="{ row }">{{ ROLE_TEXT[row.role] ?? row.role }}</template></el-table-column>
+      <el-table-column label="角色" width="140"><template #default="{ row }">{{ roleLabel(row.role) }}</template></el-table-column>
       <el-table-column label="范围" min-width="200"><template #default="{ row }">{{ scopeLabel(row) }}</template></el-table-column>
       <el-table-column label="过期时间" width="170"><template #default="{ row }">{{ row.expires_at ? fmtTime(row.expires_at) : '永不过期' }}</template></el-table-column>
       <el-table-column prop="note" label="说明" min-width="160" />
@@ -131,7 +135,7 @@ onMounted(load)
       </el-form-item>
       <el-form-item label="角色">
         <el-select v-model="form.role">
-          <el-option v-for="[value, label] in SCOPE_ROLES[form.scope]" :key="value" :label="label" :value="value" />
+          <el-option v-for="role in scopeRoles" :key="role.code" :label="role.name" :value="role.code" />
         </el-select>
       </el-form-item>
       <el-form-item label="过期时间（可选）">

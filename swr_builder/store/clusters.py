@@ -65,11 +65,13 @@ class ClustersMixin:
         rows = self.list_namespaces([namespace_id])
         return rows[0] if rows else None
 
-    def create_namespace(self, cluster_id: int, name: str, tier: str, policy: Dict[str, Any]) -> int:
+    def create_namespace(self, cluster_id: int, name: str, tier: str, policy: Dict[str, Any], project_id: Optional[int] = None) -> int:
         now=utcnow()
         with self._db() as db:
             cur=db.execute("INSERT INTO namespaces(cluster_id,name,tier,policy_json,created_at,updated_at) VALUES(?,?,?,?,?,?)",
                 (cluster_id,name,tier,json.dumps(policy,ensure_ascii=False),now,now))
+            if project_id is not None:
+                db.execute("INSERT INTO project_namespaces(project_id,namespace_id,created_at) VALUES(?,?,?)", (project_id, cur.lastrowid, now))
             return int(cur.lastrowid)
 
     def update_namespace(self, namespace_id: int, tier: str, policy: Dict[str, Any]) -> bool:

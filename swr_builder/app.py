@@ -88,7 +88,7 @@ def create_app(settings: Optional[Settings] = None, registry_transport: Any = No
         await ctx.registry.aclose()
 
     docs = settings.server.api_docs
-    app = FastAPI(title="SWR 镜像构建平台", version=__version__, lifespan=lifespan,
+    app = FastAPI(title="构建管理平台", version=__version__, lifespan=lifespan,
                   docs_url="/docs" if docs else None, redoc_url="/redoc" if docs else None,
                   openapi_url="/openapi.json" if docs else None)
     app.state.ctx = ctx

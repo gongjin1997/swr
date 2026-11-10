@@ -8,11 +8,12 @@ from ..authz import has_global_permission, has_namespace_permission, has_project
 from ..errors import Forbidden, NotFound
 from ..store import Store
 from .access import project_or_404
+from .roles import role_catalog
 
 ALLOWED_ROLES = {
-    "global": {"platform_admin", "auditor"},
+    "global": {"platform_admin", "auditor", "deployment_approver"},
     "project": {"project_admin", "developer", "project_viewer"},
-    "namespace": {"namespace_owner", "deployer", "namespace_viewer"},
+    "namespace": {"namespace_owner", "namespace_approver", "deployer", "namespace_viewer"},
 }
 BINDING_FIELDS = ("id", "subject_type", "subject_id", "role", "scope_type", "scope_id", "expires_at", "note")
 REQUEST_FIELDS = {"subject_type", "subject_id", "role", "scope_type", "scope_id", "expires_at", "note"}
@@ -23,6 +24,8 @@ def binding_view(binding: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def can_manage(store: Store, user: Dict[str, Any], binding: Dict[str, Any]) -> bool:
+    if binding["scope_type"] == "global" and binding["role"] == "platform_admin":
+        return has_global_permission(store, user, "platform.admin")
     if has_global_permission(store, user, "user.manage"):
         return True
     if binding["scope_type"] == "project":
@@ -34,15 +37,20 @@ def can_manage(store: Store, user: Dict[str, Any], binding: Dict[str, Any]) -> b
 
 def check_grant(store: Store, actor: Dict[str, Any], scope_type: str, scope_id: int, role: str) -> int:
     """校验 actor 能否在该范围授予该角色；返回规范化后的 scope_id。管理员角色只能由平台管理员授予。"""
-    if scope_type not in ALLOWED_ROLES or role not in ALLOWED_ROLES[scope_type]:
+    definition = next((r for r in role_catalog(store) if r["code"] == role and r["scope_type"] == scope_type
+                       and r["enabled"]), None)
+    if not definition:
         raise ValueError("角色与授权范围不匹配")
-    platform_admin = has_global_permission(store, actor, "user.manage")
+    platform_admin = has_global_permission(store, actor, "platform.admin")
     if scope_type == "global":
         if not platform_admin:
             raise Forbidden("只有平台管理员可以授予全局角色")
         return 0
     if scope_type == "project":
         project_or_404(store, actor, scope_id, "project.member.manage")
+        if not platform_admin and any(not has_project_permission(store, actor, scope_id, p)
+                                      for p in definition["permissions"]):
+            raise Forbidden("不能授予超出自身项目权限的角色")
         if role == "project_admin" and not platform_admin:
             raise Forbidden("项目成员管理员不能授予同级管理员角色")
         return scope_id
@@ -51,6 +59,9 @@ def check_grant(store: Store, actor: Dict[str, Any], scope_type: str, scope_id: 
         raise NotFound("命名空间不存在")
     if role == "namespace_owner" and not platform_admin:
         raise Forbidden("命名空间管理员不能授予同级管理员角色")
+    if not platform_admin and any(not has_namespace_permission(store, actor, scope_id, p)
+                                  for p in definition["permissions"]):
+        raise Forbidden("不能授予超出自身命名空间权限的角色")
     return scope_id
 
 

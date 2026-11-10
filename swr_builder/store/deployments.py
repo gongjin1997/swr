@@ -200,7 +200,8 @@ class DeploymentsMixin:
     def list_deployments(self, target_id: Optional[int] = None, app_id: Optional[int] = None,
                          limit: int = 30, offset: int = 0,
                          project_ids: Optional[List[int]] = None,
-                         namespace_ids: Optional[List[int]] = None) -> Tuple[List[Dict[str, Any]], int]:
+                         namespace_ids: Optional[List[int]] = None, *, project_id=None, namespace_id=None,
+                         service_id=None, status=None) -> Tuple[List[Dict[str, Any]], int]:
         where, args = [], []
         if project_ids is not None or namespace_ids is not None:
             project_ids=project_ids or []
@@ -219,6 +220,10 @@ class DeploymentsMixin:
         if app_id:
             where.append("app_id = ?")
             args.append(app_id)
+        for key, value in (("project_id", project_id), ("namespace_id", namespace_id), ("service_id", service_id), ("status", status)):
+            if value is not None:
+                where.append(f"{key} = ?")
+                args.append(value)
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         with self._db() as db:
             total = db.execute(f"SELECT COUNT(*) FROM deployments {clause}", args).fetchone()[0]
