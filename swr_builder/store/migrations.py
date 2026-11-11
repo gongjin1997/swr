@@ -12,7 +12,7 @@ import hashlib
 import logging
 from typing import Any, Callable, List, Tuple
 
-from .schema import BASELINE, utcnow
+from .schema import BASELINE, ENVIRONMENT_CONFIG, utcnow
 
 logger = logging.getLogger("swr_builder.store")
 
@@ -27,8 +27,14 @@ def _baseline(db: Any) -> None:
                (now, now))
 
 
+def _environment_config(db: Any) -> None:
+    for statement in ENVIRONMENT_CONFIG:
+        db.execute(statement)
+
+
 MIGRATIONS: List[Migration] = [
     (1, "v2-postgresql-baseline", _baseline),
+    (2, "v2-environment-profiles-config-sets-certificates", _environment_config),
 ]
 
 

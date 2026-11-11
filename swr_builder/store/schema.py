@@ -270,6 +270,89 @@ BASELINE = [
     )""",
 ]
 
+# 迁移 2：环境档案、负载均衡入口、分层配置集、证书
+ENVIRONMENT_CONFIG = [
+    """CREATE TABLE ingress_profiles (
+        id BIGSERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        spec TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_ingress_profiles_name UNIQUE (name)
+    )""",
+    """CREATE TABLE environment_profiles (
+        namespace_id BIGINT PRIMARY KEY REFERENCES namespaces(id) ON DELETE CASCADE,
+        ingress_profile_id BIGINT REFERENCES ingress_profiles(id) ON DELETE RESTRICT,
+        profile TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_by BIGINT,
+        updated_at TIMESTAMPTZ NOT NULL
+    )""",
+    "CREATE INDEX idx_environment_profiles_ingress ON environment_profiles (ingress_profile_id)",
+    """CREATE TABLE certificates (
+        id BIGSERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('x509', 'pkcs12', 'jks', 'key', 'file')),
+        description TEXT NOT NULL DEFAULT '',
+        current_version_id BIGINT,
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_certificates_name UNIQUE (name)
+    )""",
+    """CREATE TABLE certificate_versions (
+        id BIGSERIAL PRIMARY KEY,
+        certificate_id BIGINT NOT NULL REFERENCES certificates(id) ON DELETE CASCADE,
+        number INTEGER NOT NULL,
+        filename TEXT NOT NULL,
+        ciphertext TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        metadata TEXT NOT NULL,
+        not_after TIMESTAMPTZ,
+        note TEXT NOT NULL DEFAULT '',
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_certificate_versions_number UNIQUE (certificate_id, number)
+    )""",
+    """CREATE TABLE config_sets (
+        id BIGSERIAL PRIMARY KEY,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('platform', 'project', 'environment', 'service')),
+        scope_id BIGINT NOT NULL DEFAULT 0,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('env', 'secret_env', 'files', 'secret_files')),
+        description TEXT NOT NULL DEFAULT '',
+        current_version_id BIGINT,
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_config_sets_scope_name UNIQUE (scope_type, scope_id, name)
+    )""",
+    """CREATE TABLE config_set_versions (
+        id BIGSERIAL PRIMARY KEY,
+        config_set_id BIGINT NOT NULL REFERENCES config_sets(id) ON DELETE CASCADE,
+        number INTEGER NOT NULL,
+        entries TEXT NOT NULL,
+        checksum TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_config_set_versions_number UNIQUE (config_set_id, number)
+    )""",
+    # 配置版本引用的证书版本：证书被引用时不能删除，"被谁使用"可以直接查询
+    """CREATE TABLE config_certificate_refs (
+        config_set_version_id BIGINT NOT NULL REFERENCES config_set_versions(id) ON DELETE CASCADE,
+        certificate_id BIGINT NOT NULL REFERENCES certificates(id) ON DELETE RESTRICT,
+        certificate_version_id BIGINT NOT NULL REFERENCES certificate_versions(id) ON DELETE RESTRICT,
+        entry_key TEXT NOT NULL,
+        PRIMARY KEY (config_set_version_id, entry_key)
+    )""",
+    "CREATE INDEX idx_config_certificate_refs_certificate ON config_certificate_refs (certificate_id)",
+]
+
 # 有自增主键的表：导入旧数据后要重置序列
 SERIAL_TABLES = ("projects", "users", "api_tokens", "audit_logs", "apps", "jobs", "role_bindings", "clusters",
                  "namespaces", "services", "service_revisions", "service_secrets", "deploy_targets", "deployments",

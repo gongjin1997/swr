@@ -101,7 +101,7 @@ class ProjectsMixin:
             self.add_project_registry_org(project_id, namespace, sorted(prefixes))
 
     def delete_project(self, project_id: int) -> bool:
-        """默认项目，以及仍有应用、构建、发布记录或成员授权的项目不能删除。"""
+        """默认项目，以及仍有应用、构建、服务、发布记录、成员授权或项目层配置的项目不能删除。"""
         with self._db() as db:
             project = db.execute("SELECT slug FROM projects WHERE id = %s FOR UPDATE", (project_id,)).fetchone()
             if not project or project["slug"] == "default":
@@ -111,8 +111,9 @@ class ProjectsMixin:
                 "EXISTS(SELECT 1 FROM jobs WHERE project_id = %s) OR "
                 "EXISTS(SELECT 1 FROM deployments WHERE project_id = %s) OR "
                 "EXISTS(SELECT 1 FROM services WHERE project_id = %s) OR "
-                "EXISTS(SELECT 1 FROM role_bindings WHERE scope_type = 'project' AND scope_id = %s)",
-                (project_id, project_id, project_id, project_id, project_id),
+                "EXISTS(SELECT 1 FROM role_bindings WHERE scope_type = 'project' AND scope_id = %s) OR "
+                "EXISTS(SELECT 1 FROM config_sets WHERE scope_type = 'project' AND scope_id = %s)",
+                (project_id, project_id, project_id, project_id, project_id, project_id),
             ).fetchone()[0]
             if referenced:
                 return False

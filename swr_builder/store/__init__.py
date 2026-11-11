@@ -7,6 +7,7 @@ from .accounts import LEGACY_ROLE_BINDINGS, AccountsMixin
 from .apps import AppsMixin
 from .bindings import BindingsMixin
 from .clusters import ClustersMixin
+from .configs import ConfigMixin
 from .db import Database, IntegrityViolation, close_all, redact_url
 from .deployments import DeploymentsMixin
 from .jobs import JobsMixin
@@ -17,8 +18,8 @@ from .services import ServicesMixin
 from .system import SystemMixin
 
 
-class Store(RolesMixin, AppsMixin, ProjectsMixin, ClustersMixin, BindingsMixin, ServicesMixin, JobsMixin, AccountsMixin,
-            SystemMixin, DeploymentsMixin, Database):
+class Store(RolesMixin, AppsMixin, ProjectsMixin, ClustersMixin, ConfigMixin, BindingsMixin, ServicesMixin, JobsMixin,
+            AccountsMixin, SystemMixin, DeploymentsMixin, Database):
     pass
 
 
