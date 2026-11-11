@@ -7,7 +7,7 @@ from ..access import Principal
 from ..apps import AppValidationError, normalize_app
 from ..config import Settings
 from ..dockerfile import plan_files, render_dockerfile
-from ..errors import DomainError, Forbidden, NotFound, UpstreamError
+from ..errors import Conflict, DomainError, Forbidden, NotFound, UpstreamError
 from ..images import dockerfile_from_images
 from ..planner import PlanError, find_latest, image_repo_of, repo_path_of, resolve_plan
 from ..registry import RegistryClient, RegistryError, parse_image_ref
@@ -116,8 +116,27 @@ def create_app(store: Store, settings: Settings, me: Principal, payload: Dict[st
     validate_image_policy(store, settings, data)
     data.pop("project_id", None)
     if store.find_app_by_name(data["name"]):
-        raise DomainError("应用名称已存在")
+        raise Conflict("应用名称已存在")
     return decorate(settings, store.create_app(data, project_id))
+
+
+def list_apps(store: Store, settings: Settings, me: Principal, project_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """当前账号可见的应用；可按项目筛选。"""
+    visible = me.project_ids("app.view")
+    if project_id is not None:
+        visible = [project_id] if me.can_project(project_id, "app.view") else []
+    return [decorate(settings, a) for a in store.list_apps(visible)]
+
+
+def delete_app(store: Store, me: Principal, app_id: int) -> Dict[str, Any]:
+    """删除应用记录（不删除 SWR 中的镜像与历史构建记录）；仍有关联服务时不能删除。"""
+    data = store.get_app(app_id)
+    if not data or not me.can_project(data["project_id"], "app.manage"):
+        raise NotFound("应用不存在")
+    if store.app_has_services(app_id):
+        raise Conflict("应用仍有关联服务，请先删除这些服务")
+    store.delete_app(app_id)
+    return data
 
 
 def update_app(store: Store, settings: Settings, existing: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -127,7 +146,7 @@ def update_app(store: Store, settings: Settings, existing: Dict[str, Any], paylo
     data.pop("project_id", None)
     same = store.find_app_by_name(data["name"])
     if same and same["id"] != existing["id"]:
-        raise DomainError("应用名称已存在")
+        raise Conflict("应用名称已存在")
     return decorate(settings, store.update_app(existing["id"], data, existing["project_id"]))
 
 

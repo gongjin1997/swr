@@ -1,16 +1,31 @@
-"""命名空间发布策略与 RBAC 自检。"""
+"""命名空间：纳管、环境与发布策略、RBAC 自检。"""
 from __future__ import annotations
 
 import re
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from ..access import Principal
 from ..apps import ORG_RE
-from ..validation import DNS_LABEL_RE
+from ..deploy.k8s_client import KubeClient
+from ..errors import DomainError, NotFound, Unavailable
+from ..security import SecretBox
+from ..store import Store
+from ..validation import DNS_LABEL_RE, reject_unknown, text_field
+from .clusters import load_cluster, test_connection
 
 TIERS = ("dev", "test", "staging", "prod")
+RBAC_WARNING = "权限模板供集群管理员审核；写 Secret 权限与 Pod 创建存在间接读取 Secret 的风险。"
+
+
+def normalize_tier(value: Any) -> str:
+    """环境：dev / test / staging（UAT，也接受 uat）/ prod。"""
+    tier = "staging" if value == "uat" else value
+    if tier not in TIERS:
+        raise ValueError("环境必须为 dev / test / staging（UAT）/ prod")
+    return tier
 
 DEFAULT_POLICY: Dict[str, Any] = {
     "require_approval": True, "require_admin_approval": False, "min_approvals": 1,
@@ -155,6 +170,79 @@ def rbac_checks(policy: Dict[str, Any]) -> List[Tuple[str, str, str]]:
     if policy.get("ingress", {}).get("enabled"):
         checks += [("networking.k8s.io", "ingresses", verb) for verb in _CRUD]
     return checks
+
+
+async def adopt_namespace(store: Store, box: SecretBox, me: Principal, data: Any, transport: Any = None
+                          ) -> Tuple[Dict[str, Any], str]:
+    """纳管集群中已存在的 namespace（不会创建 namespace），可同时分配给一个项目。返回 (命名空间, 集群版本)。"""
+    if not isinstance(data, dict):
+        raise ValueError("命名空间请求格式错误")
+    reject_unknown(data, {"name", "cluster_id", "tier", "policy", "project_id"}, "命名空间请求包含未知字段")
+    name, cluster_id = text_field(data, "name", 63).lower(), data.get("cluster_id")
+    if not DNS_LABEL_RE.fullmatch(name):
+        raise ValueError("namespace 必须是 DNS-1123 label")
+    if type(cluster_id) is not int or not store.get_cluster(cluster_id):
+        raise ValueError("集群不存在")
+    tier = normalize_tier(data.get("tier"))
+    policy = normalize_namespace_policy(data.get("policy", {}))
+    project_id = data.get("project_id")
+    if project_id is not None and (type(project_id) is not int or not store.get_project(project_id)
+                                   or not me.can_project(project_id, "project.manage")):
+        raise NotFound("可分配的项目不存在")
+    cluster, credential = load_cluster(store, box, cluster_id)
+    version = await test_connection(cluster, credential, transport)
+    async with KubeClient(cluster["server"], credential, transport) as kube:
+        status = await kube.namespace_status(name)
+    if status == 404:
+        raise DomainError("目标 namespace 在集群中不存在；本接口只纳管现有 namespace")
+    if status != 200:
+        raise Unavailable(f"读取目标 namespace 失败，HTTP {status}")
+    namespace_id = store.create_namespace(cluster_id, name, tier, policy, project_id)
+    store.set_cluster_status(cluster_id, "ready")
+    return store.get_namespace(namespace_id), version  # type: ignore[return-value]
+
+
+def update_namespace(store: Store, namespace_id: int, data: Any) -> Dict[str, Any]:
+    """修改环境与发布策略。UAT 与生产环境始终需要审批（见 required_approvals）。"""
+    if not isinstance(data, dict):
+        raise ValueError("命名空间请求格式错误")
+    reject_unknown(data, {"tier", "policy"}, "命名空间请求包含未知字段")
+    current = store.get_namespace(namespace_id)
+    if not current:
+        raise NotFound("命名空间不存在")
+    tier = normalize_tier(data.get("tier", current["tier"]))
+    policy = normalize_namespace_policy(data.get("policy", current["policy"]))
+    store.update_namespace(namespace_id, tier, policy)
+    return store.get_namespace(namespace_id)  # type: ignore[return-value]
+
+
+async def review_namespace(store: Store, box: SecretBox, namespace_id: int, transport: Any = None) -> Dict[str, Any]:
+    """用集群凭据做 SelfSubjectAccessReview，检查平台需要的 RBAC 权限是否齐全。"""
+    namespace = store.get_namespace(namespace_id)
+    if not namespace:
+        raise NotFound("命名空间不存在")
+    cluster, credential = load_cluster(store, box, namespace["cluster_id"])
+    checks: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    async with KubeClient(cluster["server"], credential, transport) as kube:
+        for group, resource, verb in rbac_checks(namespace["policy"]):
+            status = await kube.access_review(namespace["name"], group, resource, verb)
+            checks.append({"group": group, "resource": resource, "verb": verb, "allowed": status.get("allowed") is True})
+            if status.get("evaluationError"):
+                warnings.append(f"{resource}/{verb}: {status['evaluationError'][:200]}")
+    allowed = all(c["allowed"] for c in checks)
+    return {"ok": allowed and not warnings, "checks": checks, "warnings": warnings}
+
+
+def rbac_template(store: Store, namespace_id: int) -> Dict[str, str]:
+    namespace = store.get_namespace(namespace_id)
+    if not namespace:
+        raise NotFound("命名空间不存在")
+    return {"yaml": rbac_yaml(namespace["name"]), "warning": RBAC_WARNING}
+
+
+def namespace_label(namespace: Optional[Dict[str, Any]]) -> str:
+    return f"{namespace['cluster_name']} / {namespace['name']}" if namespace else ""
 
 
 def rbac_yaml(namespace: str) -> str:

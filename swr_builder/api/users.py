@@ -1,30 +1,19 @@
 """账号管理。规则见 services/accounts.py。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, Request, Response
 
-from ..access import BUILTIN_ROLES, PERMISSIONS
 from ..services import accounts
 from ..web.deps import Ctx, Me, audit, requires
 
 router = APIRouter()
 
 
-@router.get("/api/roles")
-@requires("user.manage")
-async def legacy_roles():
-    """v1.3 的基础角色说明，仅为旧客户端保留；新页面使用 /api/role-definitions。"""
-    mapping = {"admin": "platform_admin", "developer": "developer", "viewer": "project_viewer"}
-    labels = {"admin": "管理员", "developer": "开发者", "viewer": "只读用户"}
-    return {"roles": [{"value": value, "label": labels[value],
-                       "permissions": sorted(BUILTIN_ROLES[role].effective)} for value, role in mapping.items()],
-            "permissions": {code: p.label for code, p in PERMISSIONS.items()}, "deprecated": True}
-
-
 @router.get("/api/users")
 @requires("user.manage")
 async def list_users(ctx: Ctx, me: Me):
-    return accounts.list_accounts(ctx.store, me)
+    items = accounts.list_accounts(ctx.store, me)
+    return {"items": items, "total": len(items)}
 
 
 @router.get("/api/users/{id}")
@@ -50,12 +39,12 @@ async def update_user(id: int, request: Request, ctx: Ctx, me: Me, data: dict = 
     return account
 
 
-@router.delete("/api/users/{id}")
+@router.delete("/api/users/{id}", status_code=204)
 @requires("user.manage")
 async def delete_user(id: int, request: Request, ctx: Ctx, me: Me):
     user = accounts.delete_account(ctx.store, me, id)
     audit(request, "user.delete", user["username"])
-    return {"ok": True}
+    return Response(status_code=204)
 
 
 @router.post("/api/users/{id}/reset-password")

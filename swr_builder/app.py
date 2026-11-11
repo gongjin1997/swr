@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from contextlib import asynccontextmanager
 from typing import Any, List, Optional
 
@@ -106,6 +107,13 @@ def create_app(settings: Optional[Settings] = None, registry_transport: Any = No
     @app.exception_handler(ValueError)
     async def validation_error(_request: Request, exc: ValueError):
         return JSONResponse({"detail": str(exc), "code": "BAD_REQUEST"}, status_code=400)
+
+    @app.exception_handler(sqlite3.IntegrityError)
+    async def integrity_error(request: Request, exc: sqlite3.IntegrityError):
+        # 数据层已把已知的唯一约束转换为 Conflict；这里兜底，避免并发写入等情况返回 500
+        logger.warning("数据约束冲突 %s %s：%s", request.method, request.url.path, exc)
+        return JSONResponse({"detail": "数据冲突：名称或标识已存在，或关联数据不允许此操作", "code": "CONFLICT"},
+                            status_code=409)
 
     middleware.install(app, ctx)
     include_routers(app)

@@ -1,4 +1,4 @@
-"""平台信息、系统设置、审计日志与 HCS 诊断。"""
+"""平台信息、工作台概览、系统设置、审计日志与 HCS 诊断。"""
 from __future__ import annotations
 
 import platform
@@ -9,8 +9,10 @@ from fastapi.responses import Response
 
 from .. import __version__
 from ..cloud import HCSClient
+from ..errors import UpstreamError
 from ..registry import RegistryClient, RegistryError
-from ..web.deps import Ctx, User, audit, authenticated, display_name, requires
+from ..services.overview import overview as build_overview
+from ..web.deps import Ctx, Me, User, audit, authenticated, display_name, requires
 
 router = APIRouter()
 
@@ -50,15 +52,26 @@ async def info(ctx: Ctx, user: User):
     }
 
 
+@router.get("/api/overview")
+@authenticated
+async def overview(ctx: Ctx, me: Me):
+    """工作台概览：可见范围内的项目、应用、服务、构建统计与待我审批的发布。"""
+    return build_overview(ctx.store, me)
+
+
+async def _ping(client: RegistryClient, message: str):
+    try:
+        await client.ping()
+    except RegistryError as exc:
+        raise UpstreamError(str(exc)) from None
+    return {"ok": True, "message": message}
+
+
 @router.post("/api/registry/test")
 @requires("settings.manage")
 async def registry_test_current(ctx: Ctx):
-    """用当前生效的仓库配置测试连接。"""
-    try:
-        await ctx.registry.ping()
-    except RegistryError as exc:
-        return {"ok": False, "message": str(exc)}
-    return {"ok": True, "message": "连接成功"}
+    """用当前生效的仓库配置测试连接；失败返回 502 和原因。"""
+    return await _ping(ctx.registry, "连接成功")
 
 
 @router.get("/api/settings")
@@ -88,10 +101,7 @@ async def registry_test_candidate(ctx: Ctx, data: dict = Body(default={})):
     cfg = ctx.sysconfig.candidate_registry(data.get("values", {}), data.get("clear", []))
     client = RegistryClient(cfg, transport=ctx.registry_transport)
     try:
-        await client.ping()
-        return {"ok": True, "message": "连接成功（仅验证 Registry API；不验证 Docker 推送权限）"}
-    except RegistryError as exc:
-        return {"ok": False, "message": str(exc)}
+        return await _ping(client, "连接成功（仅验证 Registry API；不验证 Docker 推送权限）")
     finally:
         await client.aclose()
 
@@ -110,8 +120,7 @@ async def system(ctx: Ctx):
     disk = shutil.disk_usage(data_path)
     return {"version": __version__, "python": platform.python_version(), "data_dir": str(data_path),
             "disk": {"total": disk.total, "free": disk.free}, "users": ctx.store.count_users(),
-            "jobs": ctx.store.count_jobs(), "config_priority": "环境变量 > 页面设置（数据库） > config.yaml",
-            "deployment_preview": True}
+            "jobs": ctx.store.count_jobs(), "config_priority": "环境变量 > 页面设置（数据库） > config.yaml"}
 
 
 @router.post("/api/cloud/hcs/test")

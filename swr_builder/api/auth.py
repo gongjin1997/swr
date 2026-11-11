@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .. import __version__
 from ..auth import SESSION_COOKIE, AuthError
@@ -85,13 +85,14 @@ async def change_password(request: Request, ctx: Ctx, user: User, data: dict = B
 @authenticated
 async def list_sessions(request: Request, ctx: Ctx, user: User):
     current = session_hash(request)
-    return [{"id": row["token_hash"], "ip": row["ip"], "user_agent": row["user_agent"],
-             "created_at": row["created_at"], "last_seen_at": row["last_seen_at"], "expires_at": row["expires_at"],
-             "current": row["token_hash"] == current}
-            for row in ctx.store.list_sessions(user["id"])]
+    items = [{"id": row["token_hash"], "ip": row["ip"], "user_agent": row["user_agent"],
+              "created_at": row["created_at"], "last_seen_at": row["last_seen_at"], "expires_at": row["expires_at"],
+              "current": row["token_hash"] == current}
+             for row in ctx.store.list_sessions(user["id"])]
+    return {"items": items, "total": len(items)}
 
 
-@router.delete("/api/account/sessions/{id}")
+@router.delete("/api/account/sessions/{id}", status_code=204)
 @authenticated
 async def revoke_session(id: str, request: Request, ctx: Ctx, user: User):
     row = ctx.store.get_session(id)
@@ -99,13 +100,14 @@ async def revoke_session(id: str, request: Request, ctx: Ctx, user: User):
         raise NotFound("会话不存在")
     ctx.store.delete_session(id)
     audit(request, "account.session_revoke")
-    return {"ok": True}
+    return Response(status_code=204)
 
 
 @router.get("/api/account/tokens")
 @authenticated
 async def list_tokens(ctx: Ctx, user: User):
-    return ctx.store.list_api_tokens(user["id"])
+    items = ctx.store.list_api_tokens(user["id"])
+    return {"items": items, "total": len(items)}
 
 
 @router.post("/api/account/tokens", status_code=201)
@@ -124,10 +126,10 @@ async def create_token(request: Request, ctx: Ctx, user: User, data: dict = Body
     return {"id": token_id, "token": token}
 
 
-@router.delete("/api/account/tokens/{id}")
+@router.delete("/api/account/tokens/{id}", status_code=204)
 @authenticated
 async def revoke_token(id: int, request: Request, ctx: Ctx, user: User):
     if not ctx.store.delete_api_token(id, user["id"]):
         raise NotFound("令牌不存在")
     audit(request, "account.token_revoke", id)
-    return {"ok": True}
+    return Response(status_code=204)

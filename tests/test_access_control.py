@@ -147,7 +147,7 @@ def test_delegated_account_manager_cannot_take_over_stronger_accounts(platform):
                     lambda: c.delete(f"/api/users/{auditor['id']}")):
         assert request().status_code == 403
     assert c.post(f"/api/users/{plain['id']}/reset-password", json={}).status_code == 200
-    rows = {row['username']: row for row in c.get('/api/users').json()}
+    rows = {row['username']: row for row in c.get('/api/users').json()['items']}
     assert rows['plain']['can_manage'] and not rows['auditor1']['can_manage'] and not rows['admin']['can_manage']
     assert rows['auditor1']['global_roles'] == ['auditor'] and rows['admin']['is_platform_admin']
     # 旧接口的 role=developer 会授予默认项目开发者权限，账号管理员没有该项目的成员管理权限

@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any, Dict, List, Optional
 
 from ..images import registry_path_parts
 from .schema import utcnow
+
+PROJECT_UNIQUE = "项目 slug 或名称已存在"
 
 
 class ProjectsMixin:
@@ -20,52 +23,62 @@ class ProjectsMixin:
             else:
                 rows = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchall()
             orgs = db.execute("SELECT * FROM project_registry_orgs" + where + " ORDER BY namespace", args).fetchall()
-            allocations = db.execute("SELECT project_id,namespace_id FROM project_namespaces" + where
+            allocations = db.execute("SELECT project_id, namespace_id FROM project_namespaces" + where
                                      + " ORDER BY namespace_id", args).fetchall()
-        by_project: Dict[int, List[Dict[str, Any]]] = {}
+        registry: Dict[int, List[Dict[str, Any]]] = {}
         for row in orgs:
-            by_project.setdefault(row["project_id"], []).append({
-                "namespace": row["namespace"], "base_prefixes": json.loads(row["base_prefixes_json"])
-            })
-        namespace_ids: Dict[int,List[int]]={}
-        for row in allocations:namespace_ids.setdefault(row['project_id'],[]).append(row['namespace_id'])
-        result = []
-        for row in rows:
-            item = dict(row)
-            item["registry_orgs"] = by_project.get(item["id"], [])
-            item["namespace_ids"] = namespace_ids.get(item["id"],[])
-            result.append(item)
-        return result
+            registry.setdefault(row["project_id"], []).append(
+                {"namespace": row["namespace"], "base_prefixes": json.loads(row["base_prefixes_json"])})
+        namespaces: Dict[int, List[int]] = {}
+        for row in allocations:
+            namespaces.setdefault(row["project_id"], []).append(row["namespace_id"])
+        return [dict(row, registry_orgs=registry.get(row["id"], []), namespace_ids=namespaces.get(row["id"], []))
+                for row in rows]
 
-    def get_project(self, project_id: int) -> Optional[Dict[str, Any]]:
+    def get_project(self, project_id: Optional[int]) -> Optional[Dict[str, Any]]:
+        if not project_id:
+            return None
         rows = self._load_projects(project_id)
         return rows[0] if rows else None
 
+    @staticmethod
+    def _write_registry_orgs(db: sqlite3.Connection, project_id: int, registry_orgs: List[Dict[str, Any]]) -> None:
+        db.execute("DELETE FROM project_registry_orgs WHERE project_id = ?", (project_id,))
+        for item in registry_orgs:
+            db.execute("INSERT INTO project_registry_orgs(project_id, namespace, base_prefixes_json) VALUES (?, ?, ?)",
+                       (project_id, item["namespace"], json.dumps(item["base_prefixes"], ensure_ascii=False)))
+
     def create_project(self, slug: str, name: str, registry_orgs: List[Dict[str, Any]]) -> Dict[str, Any]:
         now = utcnow()
-        with self._db() as db:
-            project_id = db.execute(
-                "INSERT INTO projects(slug, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                (slug, name, now, now),
-            ).lastrowid
-            for item in registry_orgs:
-                db.execute("INSERT INTO project_registry_orgs(project_id, namespace, base_prefixes_json) VALUES (?, ?, ?)",
-                           (project_id, item["namespace"], json.dumps(item["base_prefixes"], ensure_ascii=False)))
+        with self._db() as db, self._unique(PROJECT_UNIQUE):
+            project_id = db.execute("INSERT INTO projects(slug, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                                    (slug, name, now, now)).lastrowid
+            self._write_registry_orgs(db, project_id, registry_orgs)
         return self.get_project(project_id)  # type: ignore[return-value]
 
+    def update_project(self, project_id: int, slug: str, name: str,
+                       registry_orgs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        with self._db() as db, self._unique(PROJECT_UNIQUE):
+            changed = db.execute("UPDATE projects SET slug = ?, name = ?, updated_at = ? WHERE id = ?",
+                                 (slug, name, utcnow(), project_id)).rowcount
+            if not changed:
+                return None
+            self._write_registry_orgs(db, project_id, registry_orgs)
+        return self.get_project(project_id)
+
     def add_project_registry_org(self, project_id: int, namespace: str, prefixes: List[str]) -> None:
+        """合并（不覆盖）项目的 SWR 组织授权：已有前缀保留，新前缀追加。"""
         with self._db() as db:
             row = db.execute("SELECT base_prefixes_json FROM project_registry_orgs WHERE project_id = ? AND namespace = ?",
                              (project_id, namespace)).fetchone()
             current = set(json.loads(row["base_prefixes_json"])) if row else set()
             current.update(prefixes)
-            db.execute(
-                "INSERT INTO project_registry_orgs(project_id, namespace, base_prefixes_json) VALUES (?, ?, ?) "
-                "ON CONFLICT(project_id, namespace) DO UPDATE SET base_prefixes_json = excluded.base_prefixes_json",
-                (project_id, namespace, json.dumps(sorted(current), ensure_ascii=False)),
-            )
+            db.execute("INSERT INTO project_registry_orgs(project_id, namespace, base_prefixes_json) VALUES (?, ?, ?) "
+                       "ON CONFLICT(project_id, namespace) DO UPDATE SET base_prefixes_json = excluded.base_prefixes_json",
+                       (project_id, namespace, json.dumps(sorted(current), ensure_ascii=False)))
 
     def ensure_default_project_registry_orgs(self, default_namespace: str) -> None:
+        """默认项目兼容 v1.1：按已有应用补齐输出仓库组织与基础镜像组织的授权。"""
         if not default_namespace:
             return
         project_id = self.default_project_id()
@@ -78,8 +91,7 @@ class ProjectsMixin:
         for row in rows:
             app = json.loads(row["data"])
             namespace = app.get("organization") or default_namespace
-            repository = app.get("repository")
-            if namespace and repository:
+            if namespace and app.get("repository"):
                 grouped.setdefault(namespace, set())
             parts = registry_path_parts(app.get("base_image", ""))
             if parts:
@@ -87,30 +99,18 @@ class ProjectsMixin:
         for namespace, prefixes in grouped.items():
             self.add_project_registry_org(project_id, namespace, sorted(prefixes))
 
-    def update_project(self, project_id: int, slug: str, name: str,
-                       registry_orgs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        now = utcnow()
-        with self._db() as db:
-            changed = db.execute("UPDATE projects SET slug = ?, name = ?, updated_at = ? WHERE id = ?",
-                                 (slug, name, now, project_id)).rowcount
-            if not changed:
-                return None
-            db.execute("DELETE FROM project_registry_orgs WHERE project_id = ?", (project_id,))
-            for item in registry_orgs:
-                db.execute("INSERT INTO project_registry_orgs(project_id, namespace, base_prefixes_json) VALUES (?, ?, ?)",
-                           (project_id, item["namespace"], json.dumps(item["base_prefixes"], ensure_ascii=False)))
-        return self.get_project(project_id)
-
     def delete_project(self, project_id: int) -> bool:
+        """默认项目，以及仍有应用、构建、发布记录或成员授权的项目不能删除。"""
         with self._db() as db:
-            project=db.execute("SELECT slug FROM projects WHERE id=?",(project_id,)).fetchone()
-            if not project or project['slug']=='default':return False
+            project = db.execute("SELECT slug FROM projects WHERE id = ?", (project_id,)).fetchone()
+            if not project or project["slug"] == "default":
+                return False
             referenced = db.execute(
                 "SELECT EXISTS(SELECT 1 FROM apps WHERE project_id = ?) OR "
                 "EXISTS(SELECT 1 FROM jobs WHERE project_id = ?) OR "
                 "EXISTS(SELECT 1 FROM deployments WHERE project_id = ?) OR "
-                "EXISTS(SELECT 1 FROM role_bindings WHERE scope_type='project' AND scope_id=?)",
-                (project_id, project_id, project_id,project_id),
+                "EXISTS(SELECT 1 FROM role_bindings WHERE scope_type = 'project' AND scope_id = ?)",
+                (project_id, project_id, project_id, project_id),
             ).fetchone()[0]
             if referenced:
                 return False
@@ -125,15 +125,21 @@ class ProjectsMixin:
 
     def project_namespace_ids(self, project_id: int) -> List[int]:
         with self._db() as db:
-            return [row['namespace_id'] for row in db.execute("SELECT namespace_id FROM project_namespaces WHERE project_id=? ORDER BY namespace_id",(project_id,))]
+            rows = db.execute("SELECT namespace_id FROM project_namespaces WHERE project_id = ? ORDER BY namespace_id",
+                              (project_id,)).fetchall()
+        return [row["namespace_id"] for row in rows]
 
     def assign_namespace(self, project_id: int, namespace_id: int) -> None:
         with self._db() as db:
-            db.execute("INSERT OR IGNORE INTO project_namespaces(project_id,namespace_id,created_at) VALUES(?,?,?)",
-                (project_id,namespace_id,utcnow()))
+            db.execute("INSERT OR IGNORE INTO project_namespaces(project_id, namespace_id, created_at) VALUES (?, ?, ?)",
+                       (project_id, namespace_id, utcnow()))
 
     def unassign_namespace(self, project_id: int, namespace_id: int) -> bool:
+        """项目在该命名空间仍有服务时不能取消分配。"""
         with self._db() as db:
-            linked=db.execute("SELECT EXISTS(SELECT 1 FROM services WHERE namespace_id=?)",(namespace_id,)).fetchone()[0] if self._table_exists(db,'services') else 0
-            if linked:return False
-            return db.execute("DELETE FROM project_namespaces WHERE project_id=? AND namespace_id=?",(project_id,namespace_id)).rowcount>0
+            linked = db.execute("SELECT EXISTS(SELECT 1 FROM services WHERE project_id = ? AND namespace_id = ?)",
+                                (project_id, namespace_id)).fetchone()[0]
+            if linked:
+                return False
+            return db.execute("DELETE FROM project_namespaces WHERE project_id = ? AND namespace_id = ?",
+                              (project_id, namespace_id)).rowcount > 0

@@ -1,23 +1,58 @@
-"""创建构建任务：校验参数 → 建任务记录 → 保存/解压上传文件 → 提交到构建队列。"""
+"""构建任务：提交（校验 → 建任务记录 → 保存/解压上传文件 → 入队）、构建记录、取消。"""
 from __future__ import annotations
 
 import asyncio
 import functools
 import shutil
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
+from ..access import Principal, same_user
 from ..apps import MODES
-from ..builder import BuildManager
+from ..builder import FINAL_STATUSES, BuildManager
 from ..config import Settings
 from ..dockerfile import extract_zip_safe, plan_files
-from ..errors import DomainError
-from ..fileio import save_upload
+from ..errors import DomainError, Forbidden
+from ..fileio import read_log, save_upload
 from ..planner import PlanError, image_repo_of
 from ..store import Store, utcnow
 from ..versioning import is_valid_tag
+from .access import app_or_404, job_or_404
 from .apps import validate_image_policy
 
 TRUE_VALUES = ("1", "true", "yes", "on")
+JOB_STATUSES = ("queued", "running", "success", "failed", "cancelled")
+
+
+def list_jobs(store: Store, me: Principal, *, app_id: Optional[int] = None, project_id: Optional[int] = None,
+              status: Optional[str] = None, limit: int = 30, offset: int = 0) -> Tuple[List[Dict[str, Any]], int]:
+    """当前账号可见的构建记录；可按应用、项目、状态筛选。"""
+    if status is not None and status not in JOB_STATUSES:
+        raise ValueError("构建状态无效")
+    projects = me.project_ids("job.view")
+    if app_id is not None:
+        app = app_or_404(store, me, app_id)
+        project_id = app["project_id"] if project_id in (None, app["project_id"]) else -1
+    if project_id is not None:
+        projects = [project_id] if me.can_project(project_id, "job.view") else []
+    return store.list_jobs(app_id, status, min(max(limit, 1), 100), max(offset, 0), projects)
+
+
+def job_log(store: Store, manager: BuildManager, me: Principal, job_id: int, offset: int) -> Dict[str, Any]:
+    job = job_or_404(store, me, job_id)
+    text, new_offset, size = read_log(manager.log_path(job_id), offset)
+    return {"text": text, "offset": new_offset, "status": job["status"], "step": job["step"],
+            "finished": job["status"] in FINAL_STATUSES and new_offset >= size}
+
+
+async def cancel_job(store: Store, manager: BuildManager, me: Principal, job_id: int) -> None:
+    """项目上有 job.cancel 可取消任何任务；只有 job.cancel.own 时只能取消自己提交的任务。"""
+    job = job_or_404(store, me, job_id)
+    any_job = me.can_project(job["project_id"], "job.cancel")
+    own_job = me.can_project(job["project_id"], "job.cancel.own") and same_user(job.get("created_by"), me.id)
+    if not any_job and not own_job:
+        raise Forbidden("只能取消自己提交的构建")
+    if not await manager.cancel(job_id):
+        raise DomainError("任务已经结束，无法取消")
 
 
 async def submit_build(store: Store, settings: Settings, manager: BuildManager, user: Dict[str, Any],

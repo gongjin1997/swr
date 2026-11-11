@@ -47,14 +47,14 @@ class AppsMixin:
     def create_app(self, data: Dict[str, Any], project_id: Optional[int] = None) -> Dict[str, Any]:
         now = utcnow()
         project_id = project_id or self.default_project_id()
-        with self._db() as db:
+        with self._db() as db, self._unique("应用名称已存在"):
             cur = db.execute("INSERT INTO apps(name, data, created_at, updated_at, project_id) VALUES (?, ?, ?, ?, ?)",
                              (data["name"], self._app_data(data), now, now, project_id))
             app_id = cur.lastrowid
         return self.get_app(app_id)  # type: ignore[return-value]
 
     def update_app(self, app_id: int, data: Dict[str, Any], project_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
-        with self._db() as db:
+        with self._db() as db, self._unique("应用名称已存在"):
             cur = db.execute("UPDATE apps SET name = ?, data = ?, updated_at = ?, project_id = COALESCE(?, project_id) WHERE id = ?",
                              (data["name"], self._app_data(data), utcnow(), project_id, app_id))
             if cur.rowcount == 0:

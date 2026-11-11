@@ -1,4 +1,9 @@
-"""数据库连接、锁与通用插入/更新。"""
+"""数据库连接、锁与通用插入/更新。
+
+约定：数据层只抛出两类错误给上层——
+- 约束冲突转换为 errors.Conflict（409），消息可直接展示；
+- 参数或程序错误保持原样（ValueError 由全局处理器转换为 400，其他为 500）。
+"""
 from __future__ import annotations
 
 import sqlite3
@@ -7,6 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, Tuple
 
+from ..errors import Conflict
 from .migrations import apply_migrations
 from .schema import SCHEMA, SCHEMA_EXT
 
@@ -46,6 +52,17 @@ class Database:
             finally:
                 conn.close()
                 self._local.active = False
+
+    @staticmethod
+    @contextmanager
+    def _unique(message: str) -> Iterator[None]:
+        """把唯一约束冲突转换为 Conflict(message)。"""
+        try:
+            yield
+        except sqlite3.IntegrityError as exc:
+            if "UNIQUE constraint failed" in str(exc):
+                raise Conflict(message) from None
+            raise
 
     def _insert(self, table: str, allowed: Tuple[str, ...], fields: Dict[str, Any]) -> int:
         unknown = set(fields) - set(allowed)

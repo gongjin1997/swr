@@ -64,7 +64,7 @@ def test_project_membership_scopes_apps_jobs_and_registry_policy(setup):
     assert c.delete('/api/projects/'+str(app.state.store.default_project_id())).status_code==409
     created=c.post('/api/apps',json={**payload,'project_id':project['id']})
     assert created.status_code==201,created.text
-    assert [row['id'] for row in c.get('/api/apps').json()]==[created.json()['id']]
+    assert [row['id'] for row in c.get('/api/apps').json()['items']]==[created.json()['id']]
     second=c.post('/api/projects',json={'slug':'team-blue','name':'Team Blue','registry_orgs':[
         {'namespace':'blue','base_prefixes':['worker']}]}).json()
     denied=c.post('/api/apps',json={'name':'blue-worker','organization':'blue','repository':'worker/api',
@@ -80,7 +80,7 @@ def test_project_membership_scopes_apps_jobs_and_registry_policy(setup):
     assert binding.status_code==201,binding.text
     login(c,'reddev','UserPass123')
     assert c.put('/api/account/password',json={'old_password':'UserPass123','new_password':'RedDev123'}).status_code==200
-    apps=c.get('/api/apps').json()
+    apps=c.get('/api/apps').json()['items']
     assert [row['id'] for row in apps]==[created.json()['id']]
     jobs=app.state.store
     red_job=jobs.create_job(app_id=created.json()['id'],app_name='red-api',project_id=project['id'],
@@ -264,7 +264,7 @@ def test_cluster_namespace_foreign_keys_and_repeat_migrations(tmp_path):
 def test_session_ownership_and_own_cancel(setup):
     _,app,c=setup;login(c)
     admin=app.state.store.get_user_by_name('admin')
-    admin_session=c.get('/api/account/sessions').json()[0]['id']
+    admin_session=c.get('/api/account/sessions').json()['items'][0]['id']
     u=app.state.store.create_user(username='devtest',role='developer',enabled=1,must_change_password=0,password_hash=hash_password('Developer123'))
     login(c,'devtest','Developer123')
     assert c.delete('/api/account/sessions/'+admin_session).status_code==404
