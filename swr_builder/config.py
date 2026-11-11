@@ -97,12 +97,26 @@ class GeneralConfig:
 
 
 @dataclass
+class DatabaseConfig:
+    # PostgreSQL 14+，或 PG 兼容模式（DBCOMPATIBILITY 'PG'）的 GaussDB / openGauss。
+    # 例如 postgresql://swr@127.0.0.1:5432/swr；口令建议用环境变量 BUILDER_DATABASE_PASSWORD 单独提供
+    url: str = ""
+    password: str = ""
+    # psycopg（默认）：PostgreSQL，以及允许 MD5（password_encryption_type=0/1）认证的 GaussDB；
+    # gaussdb：华为 GaussDB Python 驱动，需另装 GaussDB 客户端 libpq，可用 SHA256 认证
+    driver: str = ""
+    pool_size: int = 10
+    connect_timeout: int = 10
+
+
+@dataclass
 class Settings:
     server: ServerConfig = field(default_factory=ServerConfig)
     registry: RegistryConfig = field(default_factory=RegistryConfig)
     build: BuildConfig = field(default_factory=BuildConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     general: GeneralConfig = field(default_factory=GeneralConfig)
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
     hcs: HCSProfile = field(default_factory=HCSProfile)
     apps: List[Dict[str, Any]] = field(default_factory=list)  # 首次启动时导入的应用
     config_path: Optional[str] = None
@@ -112,6 +126,23 @@ class Settings:
     @property
     def data_path(self) -> Path:
         return Path(self.build.data_dir).expanduser().resolve()
+
+    @property
+    def database_url(self) -> str:
+        """配置文件中的连接串；未配置时读取环境变量 BUILDER_DATABASE_URL（便于测试与容器部署）。"""
+        url = self.database.url or os.environ.get("BUILDER_DATABASE_URL", "")
+        if not url:
+            raise RuntimeError("未配置数据库：请在 config.yaml 的 database.url 或环境变量 BUILDER_DATABASE_URL 中"
+                               "填写 PostgreSQL / GaussDB 连接串")
+        return url
+
+    @property
+    def database_password(self) -> str:
+        return self.database.password or os.environ.get("BUILDER_DATABASE_PASSWORD", "")
+
+    @property
+    def database_driver(self) -> str:
+        return self.database.driver or os.environ.get("BUILDER_DATABASE_DRIVER", "") or "psycopg"
 
 
 ENV_OVERRIDES = {
@@ -134,6 +165,9 @@ ENV_OVERRIDES = {
     "BUILDER_DOCKER_BIN": ("build", "docker_bin"),
     "BUILDER_PORT": ("server", "port"),
     "BUILDER_ADMIN_PASSWORD": ("server", "admin_password"),
+    "BUILDER_DATABASE_URL": ("database", "url"),
+    "BUILDER_DATABASE_PASSWORD": ("database", "password"),
+    "BUILDER_DATABASE_DRIVER": ("database", "driver"),
 }
 
 
@@ -187,6 +221,7 @@ def load_settings(path: Optional[str] = None) -> Settings:
     _fill(settings.build, data.get("build"), "build")
     _fill(settings.security, data.get("security"), "security")
     _fill(settings.general, data.get("general"), "general")
+    _fill(settings.database, data.get("database"), "database")
     _fill(settings.hcs, data.get("hcs"), "hcs")
     settings.apps = list(data.get("apps") or [])
     for env, (section, key) in ENV_OVERRIDES.items():

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 from contextlib import asynccontextmanager
 from typing import Any, List, Optional
 
@@ -23,16 +22,24 @@ from .events import EventBus
 from .registry import RegistryClient
 from .security import SecretBox
 from .services.docker import DockerStatus
-from .store import Store
+from .store import IntegrityViolation, Store
 from .sysconfig import SysConfig
 from .web import middleware, spa
 
 logger = logging.getLogger("swr_builder")
 
 
+def open_store(settings: Settings, migrate: bool = True) -> Store:
+    """按配置连接 PostgreSQL / GaussDB；migrate=True 时执行未应用的迁移。"""
+    db = settings.database
+    return Store(settings.database_url, driver=settings.database_driver, password=settings.database_password,
+                 pool_size=db.pool_size, connect_timeout=db.connect_timeout, migrate=migrate)
+
+
 def build_context(settings: Settings, registry_transport: Any = None, deploy_transport: Any = None,
                   hcs_transport: Any = None) -> AppContext:
-    store = Store(settings.data_path / "builder.db")
+    settings.data_path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    store = open_store(settings)
     box = SecretBox.load(settings.data_path / "secret.key", os.environ.get("BUILDER_SECRET_KEY", ""))
     sysconfig = SysConfig(settings, store, box)
     sysconfig.load()
@@ -108,8 +115,8 @@ def create_app(settings: Optional[Settings] = None, registry_transport: Any = No
     async def validation_error(_request: Request, exc: ValueError):
         return JSONResponse({"detail": str(exc), "code": "BAD_REQUEST"}, status_code=400)
 
-    @app.exception_handler(sqlite3.IntegrityError)
-    async def integrity_error(request: Request, exc: sqlite3.IntegrityError):
+    @app.exception_handler(IntegrityViolation)
+    async def integrity_error(request: Request, exc: IntegrityViolation):
         # 数据层已把已知的唯一约束转换为 Conflict；这里兜底，避免并发写入等情况返回 500
         logger.warning("数据约束冲突 %s %s：%s", request.method, request.url.path, exc)
         return JSONResponse({"detail": "数据冲突：名称或标识已存在，或关联数据不允许此操作", "code": "CONFLICT"},

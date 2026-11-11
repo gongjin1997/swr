@@ -125,7 +125,7 @@ def queue_deployment(store: Store, service: Dict[str, Any], job: Dict[str, Any],
     blocked = deployment_policy_block(policy)
     if blocked:
         raise Forbidden(blocked, code="POLICY_BLOCKED")
-    return store.create_idempotent_service_deployment(
+    created = store.create_idempotent_service_deployment(
         target_id=None, target_name=service["name"], target_type="kubernetes", environment=namespace["tier"],
         app_id=service["app_id"], app_name=job["app_name"], job_id=job["id"],
         image=image_ref.host + "/" + image_ref.repo + "@" + digest,
@@ -134,6 +134,10 @@ def queue_deployment(store: Store, service: Dict[str, Any], job: Dict[str, Any],
         request_hash=payload_hash, policy_snapshot=json.dumps(approval_policy, ensure_ascii=False),
         status=status, trigger="manual", operator=actor.get("display_name") or actor["username"],
         created_by=actor["id"], remark=remark[:200])
+    # 同一幂等键的并发请求由数据库唯一约束决定先后，后到的请求拿到的是先写入的记录，需要再核对一次请求内容
+    if created["request_hash"] != payload_hash:
+        raise Conflict("幂等键已用于不同的部署请求", code="IDEMPOTENCY_CONFLICT")
+    return created
 
 
 def _bool(data: Dict[str, Any], key: str) -> bool:

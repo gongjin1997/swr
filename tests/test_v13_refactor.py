@@ -1,6 +1,5 @@
 """v1.3 重构新增行为：前端托管、错误码、设置回滚、构建排队顺序、发布 worker 容错与租约。"""
 import asyncio
-import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,8 +11,9 @@ from swr_builder.events import EventBus
 from swr_builder.images import dockerfile_from_images, registry_path_parts
 from swr_builder.main import create_app
 from swr_builder.services.namespaces import effective_policy, required_approvals
-from swr_builder.store import Store, utcnow
+from swr_builder.store import utcnow
 from swr_builder.web import spa
+from tests.dbutil import new_store
 from tests.test_accounts_settings import HEAD, login
 
 
@@ -116,7 +116,7 @@ def test_same_repository_queue_does_not_hold_concurrency_slot(tmp_path):
     settings.build.data_dir = str(tmp_path / "data")
     settings.build.max_concurrent = 2
     settings.registry.organization = "org"
-    store = Store(settings.data_path / "builder.db")
+    store = new_store()
     manager = BuildManager(settings, store, registry=None, events=EventBus())
     running, release = [], asyncio.Event()
 
@@ -156,14 +156,14 @@ def test_same_repository_queue_does_not_hold_concurrency_slot(tmp_path):
 # ------------------------------------------------------------------ 发布 worker（B4/B5/B6/B7）
 def test_worker_loop_survives_store_errors(tmp_path, monkeypatch):
     monkeypatch.setattr(worker_module, "ERROR_BACKOFF_SECONDS", 0.01)
-    store = Store(tmp_path / "builder.db")
+    store = new_store()
     calls = {"n": 0}
     original = store.claim_next_service_deployment
 
     def flaky_claim(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise sqlite3.OperationalError("database is locked")
+            raise RuntimeError("database temporarily unavailable")
         return original(*args, **kwargs)
 
     store.claim_next_service_deployment = flaky_claim
@@ -190,7 +190,7 @@ def _active_deployment(store, lease_until, status="applying"):
 
 
 def test_lease_renewal_and_stale_lease_expiry(tmp_path):
-    store = Store(tmp_path / "builder.db")
+    store = new_store()
     live = _active_deployment(store, "2999-01-01T00:00:00+00:00")
     assert store.renew_service_deployment_lease(live, "w1", 3, 300)
     assert not store.renew_service_deployment_lease(live, "w1", 2, 300)  # 旧 fencing token

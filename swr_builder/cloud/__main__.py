@@ -5,14 +5,15 @@ import json
 import os
 from ..config import load_settings
 from ..security import SecretBox
-from ..store import Store
 from ..sysconfig import SysConfig
 from .hcs import HCSClient
 
 
 async def check(path):
+    from ..app import open_store
+
     settings = load_settings(path)
-    store = Store(settings.data_path / 'builder.db')
+    store = open_store(settings, migrate=False)
     box = SecretBox.load(settings.data_path / 'secret.key',os.environ.get('BUILDER_SECRET_KEY',''))
     SysConfig(settings,store,box).load()
     client = HCSClient(settings.hcs)
