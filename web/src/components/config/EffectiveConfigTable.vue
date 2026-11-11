@@ -17,6 +17,7 @@ const rows = computed<(EffectiveEntry & { secretRow: boolean })[]>(() => [
   ...(data.value?.secret_env ?? []).map((e) => ({ ...e, secretRow: true })),
 ])
 
+const originTag = (origin: ConfigOrigin) => CONFIG_SCOPE_TAG[origin.scope_type]
 const originText = (origin: ConfigOrigin) => `${CONFIG_SCOPE_TEXT[origin.scope_type]} v${origin.version}`
 const overrideText = (row: EffectiveEntry) => row.overrides.map((o) => CONFIG_SCOPE_TEXT[o.scope_type]).join('、') || '-'
 const kindText = (kind: ConfigKind) => CONFIG_KIND_TEXT[kind]
@@ -62,7 +63,7 @@ defineExpose({ reload: load })
       </el-table-column>
       <el-table-column label="来源" width="110">
         <template #default="{ row }">
-          <el-tag size="small" :type="CONFIG_SCOPE_TAG[row.origin.scope_type]" effect="plain">{{ originText(row.origin) }}</el-tag>
+          <el-tag size="small" :type="originTag(row.origin)" effect="plain">{{ originText(row.origin) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="覆盖了" width="140">
@@ -79,7 +80,7 @@ defineExpose({ reload: load })
       <el-table-column label="文件" min-width="260"><template #default="{ row }"><span class="mono break-word">{{ row.keys.join('、') }}</span></template></el-table-column>
       <el-table-column label="来源" width="110">
         <template #default="{ row }">
-          <el-tag size="small" :type="CONFIG_SCOPE_TAG[row.origin.scope_type]" effect="plain">{{ originText(row.origin) }}</el-tag>
+          <el-tag size="small" :type="originTag(row.origin)" effect="plain">{{ originText(row.origin) }}</el-tag>
         </template>
       </el-table-column>
     </el-table>

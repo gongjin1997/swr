@@ -25,6 +25,7 @@ interface Row {
 
 const FORMATS: FileFormat[] = ['properties', 'yaml', 'json', 'xml', 'text']
 const CHANGE_TEXT: Record<ConfigChange['change'], string> = { added: '新增', removed: '删除', changed: '修改' }
+const changeText = (change: ConfigChange['change']) => CHANGE_TEXT[change]
 
 const secret = computed(() => props.set.kind === 'secret_env' || props.set.kind === 'secret_files')
 const fileKind = computed(() => props.set.kind === 'files' || props.set.kind === 'secret_files')
@@ -289,7 +290,7 @@ async function compareVersions() {
     </div>
     <el-table v-if="history.loaded" :data="history.changes" size="small" empty-text="两个版本没有差异">
       <el-table-column prop="key" label="键" min-width="160" />
-      <el-table-column label="变化" width="80"><template #default="{ row }">{{ CHANGE_TEXT[row.change] }}</template></el-table-column>
+      <el-table-column label="变化" width="80"><template #default="{ row }">{{ changeText(row.change) }}</template></el-table-column>
       <el-table-column label="旧值" min-width="170">
         <template #default="{ row }"><span class="mono break-word">{{ secret ? '（敏感值不显示）' : row.old ?? '' }}</span></template>
       </el-table-column>

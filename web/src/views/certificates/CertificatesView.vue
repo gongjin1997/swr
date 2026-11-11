@@ -3,7 +3,7 @@
 import { Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { certificateApi } from '@/api'
-import type { Certificate, CertificateDetail } from '@/api/types'
+import type { Certificate, CertificateDetail, ConfigKind, ConfigScope, ExpiryStatus } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
 import { confirmAction, notifyError, useAction } from '@/composables/useAction'
 import { CONFIG_KIND_TEXT, CONFIG_SCOPE_TEXT, EXPIRY_TAG, EXPIRY_TEXT } from '@/constants'
@@ -105,6 +105,10 @@ function metaValue(item: CertificateDetail, key: string): string {
   if (Array.isArray(value)) return value.join(', ') || '—'
   return value === undefined || value === null || value === '' ? '—' : String(value)
 }
+const expiryTag = (status: ExpiryStatus) => EXPIRY_TAG[status]
+const expiryText = (status: ExpiryStatus) => EXPIRY_TEXT[status]
+const scopeText = (scope: ConfigScope) => CONFIG_SCOPE_TEXT[scope]
+const kindText = (kind: ConfigKind) => CONFIG_KIND_TEXT[kind]
 function onRowClick(row: Certificate) {
   void openDetail(row.id)
 }
@@ -133,7 +137,7 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="到期" width="190">
           <template #default="{ row }">
-            <el-tag size="small" :type="EXPIRY_TAG[row.status]">{{ EXPIRY_TEXT[row.status] }}</el-tag>
+            <el-tag size="small" :type="expiryTag(row.status)">{{ expiryText(row.status) }}</el-tag>
             <div class="hint">{{ row.not_after ? fmtTime(row.not_after) : '—' }}</div>
           </template>
         </el-table-column>
@@ -204,9 +208,9 @@ onMounted(load)
 
         <h4>被这些配置引用（当前版本）</h4>
         <el-table :data="detail.item.usage" size="small" empty-text="没有配置引用该证书">
-          <el-table-column label="层级" width="90"><template #default="{ row }">{{ CONFIG_SCOPE_TEXT[row.scope_type] }}</template></el-table-column>
+          <el-table-column label="层级" width="90"><template #default="{ row }">{{ scopeText(row.scope_type) }}</template></el-table-column>
           <el-table-column label="配置" min-width="180"><template #default="{ row }"><span class="mono">{{ row.name }}</span></template></el-table-column>
-          <el-table-column label="类型" width="120"><template #default="{ row }">{{ CONFIG_KIND_TEXT[row.kind] }}</template></el-table-column>
+          <el-table-column label="类型" width="120"><template #default="{ row }">{{ kindText(row.kind) }}</template></el-table-column>
           <el-table-column label="条目" min-width="160"><template #default="{ row }"><span class="mono">{{ row.entry_key }}</span></template></el-table-column>
           <el-table-column label="引用版本" width="90"><template #default="{ row }">v{{ row.certificate_version }}</template></el-table-column>
         </el-table>
