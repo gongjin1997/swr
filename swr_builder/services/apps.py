@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from ..access import Principal
 from ..apps import AppValidationError, normalize_app
-from ..authz import has_project_permission
 from ..config import Settings
 from ..dockerfile import plan_files, render_dockerfile
 from ..errors import DomainError, Forbidden, NotFound, UpstreamError
@@ -103,10 +103,10 @@ def _normalize(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise DomainError(str(exc)) from None
 
 
-def create_app(store: Store, settings: Settings, user: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+def create_app(store: Store, settings: Settings, me: Principal, payload: Dict[str, Any]) -> Dict[str, Any]:
     default_project = "project_id" not in payload
     project_id = payload.get("project_id", store.default_project_id())
-    if type(project_id) is not int or not has_project_permission(store, user, project_id, "app.manage"):
+    if type(project_id) is not int or not me.can_project(project_id, "app.manage"):
         if default_project:
             raise Forbidden("没有应用管理权限")
         raise NotFound("项目不存在")

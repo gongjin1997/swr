@@ -1,96 +1,66 @@
-"""账号管理（平台管理员）。"""
+"""账号管理。规则见 services/accounts.py。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Request
 
-from ..auth import PERMISSION_LABELS, ROLES, USERNAME_RE, permissions_of, public_user
-from ..authz import has_global_permission
-from ..errors import Forbidden
-from ..security import hash_password
-from ..services.access import user_or_404
-from ..services.users import administrator_account, protect_user
-from ..validation import text_field
-from ..web.deps import Ctx, User, audit
+from ..access import BUILTIN_ROLES, PERMISSIONS
+from ..services import accounts
+from ..web.deps import Ctx, Me, audit, requires
 
 router = APIRouter()
 
 
 @router.get("/api/roles")
-async def roles():
-    return {"roles": [{"value": r, "label": label, "permissions": permissions_of(r)} for r, label in ROLES.items()],
-            "permissions": PERMISSION_LABELS}
+@requires("user.manage")
+async def legacy_roles():
+    """v1.3 的基础角色说明，仅为旧客户端保留；新页面使用 /api/role-definitions。"""
+    mapping = {"admin": "platform_admin", "developer": "developer", "viewer": "project_viewer"}
+    labels = {"admin": "管理员", "developer": "开发者", "viewer": "只读用户"}
+    return {"roles": [{"value": value, "label": labels[value],
+                       "permissions": sorted(BUILTIN_ROLES[role].effective)} for value, role in mapping.items()],
+            "permissions": {code: p.label for code, p in PERMISSIONS.items()}, "deprecated": True}
 
 
 @router.get("/api/users")
-async def list_users(ctx: Ctx):
-    return [public_user(u) for u in ctx.store.list_users()]
+@requires("user.manage")
+async def list_users(ctx: Ctx, me: Me):
+    return accounts.list_accounts(ctx.store, me)
+
+
+@router.get("/api/users/{id}")
+@requires("user.manage")
+async def get_user(id: int, ctx: Ctx, me: Me):
+    return accounts.account_detail(ctx.store, me, id)
 
 
 @router.post("/api/users", status_code=201)
-async def create_user(request: Request, ctx: Ctx, actor: User, data: dict = Body(...)):
-    name = text_field(data, "username", 32)
-    if not USERNAME_RE.fullmatch(name):
-        raise ValueError("用户名为 2–32 位字母、数字、_ . @ -，以字母或数字开头")
-    if ctx.store.get_user_by_name(name):
-        raise ValueError("用户名已存在")
-    role = data.get("role", "developer")
-    if not isinstance(role, str) or role not in ROLES:
-        raise ValueError("角色无效")
-    if role == "admin" and not has_global_permission(ctx.store, actor, "platform.admin"):
-        raise Forbidden("只有平台管理员可以创建管理员账号")
-    password = data.get("password", "")
-    if not isinstance(password, str):
-        raise ValueError("密码格式无效")
-    ctx.auth.validate_password(password)
-    created = ctx.store.create_user(username=name, display_name=text_field(data, "display_name") or name,
-                                    email=text_field(data, "email", 254), role=role,
-                                    password_hash=hash_password(password), enabled=1, must_change_password=1)
-    audit(request, "user.create", name)
-    return public_user(created)
+@requires("user.manage")
+async def create_user(request: Request, ctx: Ctx, me: Me, data: dict = Body(...)):
+    account = accounts.create_account(ctx.store, ctx.auth, me, data)
+    audit(request, "user.create", account["username"],
+          f"platform_admin={account['is_platform_admin']};grants={account['grant_count']}")
+    return account
 
 
 @router.put("/api/users/{id}")
-async def update_user(id: int, request: Request, ctx: Ctx, actor: User, data: dict = Body(...)):
-    target = user_or_404(ctx.store, id)
-    role, enabled = data.get("role", target["role"]), data.get("enabled", bool(target["enabled"]))
-    if not isinstance(role, str) or role not in ROLES or not isinstance(enabled, bool):
-        raise ValueError("角色或启用状态无效")
-    if (role == "admin" or administrator_account(ctx.store, target)) and not has_global_permission(ctx.store, actor, "platform.admin"):
-        raise Forbidden("只有平台管理员可以管理管理员账号")
-    protect_user(ctx.store, actor, target, role, enabled)
-    result = ctx.store.update_user(id, display_name=text_field(data, "display_name") or target["username"],
-                                   email=text_field(data, "email", 254), role=role, enabled=int(enabled))
-    if role != target["role"]:
-        ctx.store.reset_user_role_bindings(id, role, actor["id"])
-    if not enabled or role != target["role"]:
-        ctx.store.delete_user_sessions(id)
-        ctx.store.delete_user_api_tokens(id)
-    audit(request, "user.update", target["username"])
-    return public_user(result)
+@requires("user.manage")
+async def update_user(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(...)):
+    account, changes = accounts.update_account(ctx.store, me, id, data)
+    audit(request, "user.update", account["username"], ",".join(changes))
+    return account
 
 
 @router.delete("/api/users/{id}")
-async def delete_user(id: int, request: Request, ctx: Ctx, actor: User):
-    target = user_or_404(ctx.store, id)
-    if administrator_account(ctx.store, target) and not has_global_permission(ctx.store, actor, "platform.admin"):
-        raise Forbidden("只有平台管理员可以管理管理员账号")
-    protect_user(ctx.store, actor, target, target["role"], target["enabled"], True)
-    ctx.store.delete_user(id)
-    audit(request, "user.delete", target["username"])
+@requires("user.manage")
+async def delete_user(id: int, request: Request, ctx: Ctx, me: Me):
+    user = accounts.delete_account(ctx.store, me, id)
+    audit(request, "user.delete", user["username"])
     return {"ok": True}
 
 
 @router.post("/api/users/{id}/reset-password")
-async def reset_password(id: int, request: Request, ctx: Ctx, actor: User, data: dict = Body(default={})):
-    target = user_or_404(ctx.store, id)
-    if administrator_account(ctx.store, target) and not has_global_permission(ctx.store, actor, "platform.admin"):
-        raise Forbidden("只有平台管理员可以重置管理员密码")
-    if id == actor["id"]:
-        raise ValueError("请在“我的账号”修改自己的密码")
-    password = data.get("password")
-    if password is not None and not isinstance(password, str):
-        raise ValueError("密码格式无效")
-    result = ctx.auth.reset_password(id, password)
-    ctx.auth.unlock(target["username"])
-    audit(request, "user.reset_password", target["username"])
-    return {"password": result, "must_change_password": True}
+@requires("user.manage")
+async def reset_password(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(default={})):
+    user, password = accounts.reset_password(ctx.store, ctx.auth, me, id, data)
+    audit(request, "user.reset_password", user["username"])
+    return {"password": password, "must_change_password": True}

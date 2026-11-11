@@ -1,13 +1,13 @@
 """路由依赖与请求辅助函数。"""
 from __future__ import annotations
 
-from typing import Any, Dict
-
-from typing import Annotated
+from typing import Annotated, Any, Dict
 
 from fastapi import Depends, Request
 
+from ..access import Principal
 from ..context import AppContext
+from .guard import AUTHENTICATED_ROUTE, PUBLIC_ROUTE, authenticated, public, requires
 
 
 def get_ctx(request: Request) -> AppContext:
@@ -19,8 +19,14 @@ def get_user(request: Request) -> Dict[str, Any]:
     return request.state.user
 
 
+def get_principal(request: Request) -> Principal:
+    """当前登录用户的有效权限（由认证中间件写入 request.state.principal）。"""
+    return request.state.principal
+
+
 Ctx = Annotated[AppContext, Depends(get_ctx)]
 User = Annotated[Dict[str, Any], Depends(get_user)]
+Me = Annotated[Principal, Depends(get_principal)]
 
 
 def client_ip(request: Request) -> str:
@@ -42,3 +48,5 @@ def audit(request: Request, action: str, target: Any = "", detail: str = "") -> 
     request.state.audited = True
 
 
+__all__ = ["Ctx", "User", "Me", "get_ctx", "get_user", "get_principal", "client_ip", "display_name", "session_hash",
+           "audit", "requires", "public", "authenticated", "PUBLIC_ROUTE", "AUTHENTICATED_ROUTE"]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 from typing import Any, Dict, Optional, Tuple
 
 from ..deploy.k8s_client import KubeClient, build_ssl_context, validate_api_server

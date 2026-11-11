@@ -5,21 +5,23 @@ from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 
 from .. import __version__
-from ..auth import SESSION_COOKIE, AuthError, public_user
+from ..auth import SESSION_COOKIE, AuthError
 from ..errors import Forbidden, NotFound
-from ..services.users import session_profile
+from ..services import accounts
 from ..validation import text_field
-from ..web.deps import Ctx, User, audit, client_ip, session_hash
+from ..web.deps import Ctx, Me, User, audit, authenticated, client_ip, public, session_hash
 
 router = APIRouter()
 
 
 @router.get("/api/auth/config")
+@public
 async def auth_config(ctx: Ctx):
     return {"site_name": ctx.settings.general.site_name, "version": __version__}
 
 
 @router.post("/api/auth/login")
+@public
 async def login(request: Request, ctx: Ctx, data: dict = Body(...)):
     if request.headers.get("X-Requested-With") != "XMLHttpRequest":
         raise Forbidden("请从登录页面提交", code="CSRF_HEADER_REQUIRED")
@@ -35,7 +37,7 @@ async def login(request: Request, ctx: Ctx, data: dict = Body(...)):
         raise
     remember = data.get("remember", False) is True
     token, seconds = ctx.auth.create_session(user["id"], remember, ip, request.headers.get("user-agent", ""))
-    response = JSONResponse(public_user(user))
+    response = JSONResponse(accounts.view_of(ctx.store, user))
     response.set_cookie(SESSION_COOKIE, token, httponly=True, secure=ctx.settings.server.secure_cookie,
                         samesite="lax", max_age=seconds if remember else None, path="/")
     ctx.store.add_audit(user["username"], "auth.login", ip=ip)
@@ -43,11 +45,13 @@ async def login(request: Request, ctx: Ctx, data: dict = Body(...)):
 
 
 @router.get("/api/auth/me")
-async def auth_me(ctx: Ctx, user: User):
-    return session_profile(ctx.store, ctx.settings, user)
+@authenticated
+async def auth_me(ctx: Ctx, me: Me):
+    return accounts.session_profile(ctx.store, ctx.settings, me)
 
 
 @router.post("/api/auth/logout")
+@authenticated
 async def logout(request: Request, ctx: Ctx):
     ctx.auth.logout(session_hash(request))
     audit(request, "auth.logout")
@@ -58,14 +62,16 @@ async def logout(request: Request, ctx: Ctx):
 
 
 @router.put("/api/account/profile")
+@authenticated
 async def update_profile(request: Request, ctx: Ctx, user: User, data: dict = Body(...)):
     updated = ctx.store.update_user(user["id"], display_name=text_field(data, "display_name") or user["username"],
                                     email=text_field(data, "email", 254))
     audit(request, "account.profile")
-    return public_user(updated)
+    return accounts.view_of(ctx.store, updated)
 
 
 @router.put("/api/account/password")
+@authenticated
 async def change_password(request: Request, ctx: Ctx, user: User, data: dict = Body(...)):
     old, new = data.get("old_password", ""), data.get("new_password", "")
     if not isinstance(old, str) or not isinstance(new, str) or len(old) > 128 or len(new) > 128:
@@ -76,6 +82,7 @@ async def change_password(request: Request, ctx: Ctx, user: User, data: dict = B
 
 
 @router.get("/api/account/sessions")
+@authenticated
 async def list_sessions(request: Request, ctx: Ctx, user: User):
     current = session_hash(request)
     return [{"id": row["token_hash"], "ip": row["ip"], "user_agent": row["user_agent"],
@@ -85,6 +92,7 @@ async def list_sessions(request: Request, ctx: Ctx, user: User):
 
 
 @router.delete("/api/account/sessions/{id}")
+@authenticated
 async def revoke_session(id: str, request: Request, ctx: Ctx, user: User):
     row = ctx.store.get_session(id)
     if not row or row["user_id"] != user["id"]:
@@ -95,11 +103,13 @@ async def revoke_session(id: str, request: Request, ctx: Ctx, user: User):
 
 
 @router.get("/api/account/tokens")
+@authenticated
 async def list_tokens(ctx: Ctx, user: User):
     return ctx.store.list_api_tokens(user["id"])
 
 
 @router.post("/api/account/tokens", status_code=201)
+@authenticated
 async def create_token(request: Request, ctx: Ctx, user: User, data: dict = Body(...)):
     if not session_hash(request):
         raise Forbidden("请使用网页登录创建令牌")
@@ -110,11 +120,12 @@ async def create_token(request: Request, ctx: Ctx, user: User, data: dict = Body
     if type(days) is not int or not 1 <= days <= 365:
         raise ValueError("有效期为 1–365 天")
     token, token_id = ctx.auth.create_api_token(user["id"], name, days)
-    audit(request, "account.token_create", token_id)
+    audit(request, "account.token_create", token_id, f"name={name};days={days}")
     return {"id": token_id, "token": token}
 
 
 @router.delete("/api/account/tokens/{id}")
+@authenticated
 async def revoke_token(id: int, request: Request, ctx: Ctx, user: User):
     if not ctx.store.delete_api_token(id, user["id"]):
         raise NotFound("令牌不存在")

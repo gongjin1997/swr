@@ -1,45 +1,38 @@
-"""Role management, separate from account base roles."""
+"""角色定义：内置角色只读，自定义角色可新建、修改、启停与删除。"""
 from fastapi import APIRouter, Body, Request, Response
 
-from ..auth import PERMISSION_LABELS
-from ..errors import Conflict, NotFound
-from ..services.roles import role_catalog, normalize_role, SCOPE_PERMISSIONS
-from ..web.deps import Ctx, audit
+from ..services import roles as role_service
+from ..web.deps import Ctx, audit, authenticated, requires
 
 router = APIRouter()
 
 
 @router.get("/api/role-definitions")
+@authenticated
 async def list_roles(ctx: Ctx):
-    items = role_catalog(ctx.store)
-    return {"items": items, "permissions": PERMISSION_LABELS, "scope_permissions": SCOPE_PERMISSIONS}
+    return role_service.catalog_payload(ctx.store)
 
 
 @router.post("/api/role-definitions", status_code=201)
+@requires("role.manage")
 async def create_role(request: Request, ctx: Ctx, data: dict = Body(...)):
-    values = normalize_role(data)
-    if any(r["code"] == values[0] for r in role_catalog(ctx.store)):
-        raise Conflict("角色标识已存在")
-    ctx.store.save_custom_role(*values)
-    audit(request, "role.create", values[0])
-    return next(r for r in role_catalog(ctx.store) if r["code"] == values[0])
+    role = role_service.create_role(ctx.store, data)
+    audit(request, "role.create", role["code"], f"scope={role['scope_type']};permissions={','.join(role['permissions'])}")
+    return role
 
 
 @router.put("/api/role-definitions/{code}")
+@requires("role.manage")
 async def update_role(code: str, request: Request, ctx: Ctx, data: dict = Body(...)):
-    current = next((r for r in ctx.store.list_custom_roles() if r["code"] == code), None)
-    if not current:
-        raise NotFound("自定义角色不存在；内置角色不可修改")
-    ctx.store.save_custom_role(*normalize_role(data, current))
-    audit(request, "role.update", code)
-    return next(r for r in role_catalog(ctx.store) if r["code"] == code)
+    role = role_service.update_role(ctx.store, code, data)
+    audit(request, "role.update", code,
+          f"enabled={role['enabled']};permissions={','.join(role['permissions'])}")
+    return role
 
 
 @router.delete("/api/role-definitions/{code}", status_code=204)
+@requires("role.manage")
 async def delete_role(code: str, request: Request, ctx: Ctx):
-    if not any(r["code"] == code for r in ctx.store.list_custom_roles()):
-        raise NotFound("自定义角色不存在；内置角色不可删除")
-    if not ctx.store.delete_custom_role(code):
-        raise Conflict("角色仍有有效授权，请先撤销成员授权或停用角色")
+    role_service.delete_role(ctx.store, code)
     audit(request, "role.delete", code)
     return Response(status_code=204)

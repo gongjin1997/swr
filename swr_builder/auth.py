@@ -1,4 +1,7 @@
-"""账号、登录会话、API 令牌与角色权限。"""
+"""账号认证：首次管理员、登录与失败锁定、会话、API 令牌、密码维护。
+
+权限计算见 access/（权限目录与 Principal），账号管理规则见 services/accounts.py。
+"""
 from __future__ import annotations
 
 import logging
@@ -18,54 +21,11 @@ logger = logging.getLogger("swr_builder")
 
 SESSION_COOKIE = "swr_session"
 USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{1,31}$")
-
-ROLES: Dict[str, str] = {"admin": "管理员", "developer": "开发者", "viewer": "只读用户"}
-
-# 权限点：新增功能时在这里登记，再分配给角色
-PERMISSION_LABELS: Dict[str, str] = {
-    "platform.admin": "平台管理员确认",
-    "role.manage": "管理角色与权限定义",
-    "app.view": "查看应用和版本",
-    "app.manage": "新建/修改/删除应用",
-    "build.run": "上传文件并构建镜像",
-    "job.view": "查看构建记录和日志",
-    "job.cancel.own": "取消自己提交的构建",
-    "job.cancel": "取消任何人的构建",
-    "deploy.view": "查看发布记录",
-    "deploy.run": "执行部署",
-    "deploy.manage": "管理部署目标",
-    "settings.manage": "修改系统设置",
-    "user.manage": "管理账号",
-    "audit.view": "查看操作审计",
-    "project.view": "查看项目",
-    "project.manage": "管理项目",
-    "project.member.manage": "管理项目成员",
-    "cluster.manage": "管理集群",
-    "namespace.view": "查看命名空间",
-    "namespace.member.manage": "管理命名空间成员",
-    "service.config": "配置服务",
-    "service.deploy": "发布服务",
-    "service.operate": "运维服务",
-    "service.rollback": "回滚服务",
-    "service.delete": "删除服务",
-    "secret.manage": "管理服务密钥",
-    "deploy.approve": "审批发布",
-    "pod.log.view": "查看 Pod 日志",
-}
-ROLE_PERMISSIONS: Dict[str, set] = {
-    "admin": {"*"},
-    "developer": {"app.view", "build.run", "job.view", "job.cancel.own", "deploy.view", "deploy.run"},
-    "viewer": {"app.view", "job.view", "deploy.view"},
-}
-
-
-def has_perm(role: str, perm: str) -> bool:
-    perms = ROLE_PERMISSIONS.get(role, set())
-    return "*" in perms or perm in perms
-
-
-def permissions_of(role: str) -> List[str]:
-    return [p for p in PERMISSION_LABELS if has_perm(role, p)]
+SESSION_TOUCH_SECONDS = 300
+TOKEN_TOUCH_SECONDS = 60
+SESSION_PURGE_SECONDS = 600
+# 失败计数在进程内存中；记录数达到上限时先清理过期记录，再丢弃最早的失败记录，防止用随机用户名刷爆内存
+MAX_TRACKED_LOGIN_KEYS = 2000
 
 
 def _parse(ts: Optional[str]) -> Optional[datetime]:
@@ -82,17 +42,6 @@ def _later(**delta: float) -> str:
     return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat(timespec="seconds")
 
 
-def public_user(user: Dict[str, Any]) -> Dict[str, Any]:
-    """返回给前端的账号信息（不含密码哈希）。"""
-    return {
-        "id": user["id"], "username": user["username"], "display_name": user.get("display_name") or user["username"],
-        "email": user.get("email") or "", "role": user["role"], "role_label": ROLES.get(user["role"], user["role"]),
-        "enabled": bool(user["enabled"]), "must_change_password": bool(user["must_change_password"]),
-        "created_at": user.get("created_at"), "last_login_at": user.get("last_login_at"),
-        "password_changed_at": user.get("password_changed_at"),
-    }
-
-
 class AuthError(Exception):
     def __init__(self, message: str, status: int = 401):
         super().__init__(message)
@@ -105,6 +54,7 @@ class AuthService:
         self.store = store
         self._failures: Dict[str, List[float]] = {}
         self._locked_until: Dict[str, float] = {}
+        self._last_purge = 0.0
 
     @property
     def initial_password_file(self) -> Path:
@@ -141,7 +91,7 @@ class AuthService:
         logger.info("已创建管理员 admin（密码来自 server.admin_password / BUILDER_ADMIN_PASSWORD）")
         return None
 
-    # ------------------------------------------------------------------ 登录
+    # ------------------------------------------------------------------ 登录失败锁定
     def _lock_key(self, username: str, ip: str) -> str:
         return f"{username.strip().lower()}|{ip}"
 
@@ -151,12 +101,25 @@ class AuthService:
             minutes = max(1, int((until - time.time() + 59) // 60))
             raise AuthError(f"登录失败次数过多，请 {minutes} 分钟后再试", 429)
 
+    def _prune_failures(self, now: float, window: float) -> None:
+        """清理过期的锁定与失败记录；失败记录仍超过上限时丢弃最早的一半（已锁定的账号不受影响）。"""
+        for key in [k for k, until in self._locked_until.items() if until <= now]:
+            del self._locked_until[key]
+        for key in [k for k, attempts in self._failures.items() if not attempts or now - attempts[-1] >= window]:
+            del self._failures[key]
+        if len(self._failures) > MAX_TRACKED_LOGIN_KEYS:
+            oldest = sorted(self._failures, key=lambda k: self._failures[k][-1])
+            for key in oldest[:len(oldest) // 2]:
+                del self._failures[key]
+
     def _record_failure(self, key: str) -> None:
         sec = self.settings.security
         if sec.max_login_failures <= 0:
             return
         now = time.time()
         window = sec.lock_minutes * 60
+        if len(self._failures) >= MAX_TRACKED_LOGIN_KEYS or len(self._locked_until) >= MAX_TRACKED_LOGIN_KEYS:
+            self._prune_failures(now, window)
         attempts = [t for t in self._failures.get(key, []) if now - t < window] + [now]
         self._failures[key] = attempts
         if len(attempts) >= sec.max_login_failures:
@@ -180,19 +143,25 @@ class AuthService:
 
     def unlock(self, username: str) -> None:
         prefix = username.strip().lower() + "|"
-        for key in [k for k in self._locked_until if k.startswith(prefix)]:
-            self._locked_until.pop(key, None)
+        for table in (self._locked_until, self._failures):
+            for key in [k for k in table if k.startswith(prefix)]:
+                table.pop(key, None)
 
+    # ------------------------------------------------------------------ 会话与令牌
     def create_session(self, user_id: int, remember: bool, ip: str, user_agent: str) -> Tuple[str, int]:
         sec = self.settings.security
         seconds = sec.remember_days * 86400 if remember else sec.session_hours * 3600
         token = new_session_token()
         self.store.create_session(token_hash(token), user_id, _later(seconds=seconds), ip, user_agent)
-        if int(time.time()) % 20 == 0:
+        now = time.monotonic()
+        if now - self._last_purge >= SESSION_PURGE_SECONDS:
+            self._last_purge = now
             self.store.purge_expired_sessions()
         return token, seconds
 
     def resolve_session(self, token: str) -> Optional[Tuple[Dict[str, Any], str]]:
+        if not token:
+            return None
         hashed = token_hash(token)
         session = self.store.get_session(hashed)
         if not session:
@@ -205,7 +174,7 @@ class AuthService:
         if not user or not user["enabled"]:
             return None
         last = _parse(session.get("last_seen_at"))
-        if not last or (datetime.now(timezone.utc) - last).total_seconds() > 300:
+        if not last or (datetime.now(timezone.utc) - last).total_seconds() > SESSION_TOUCH_SECONDS:
             self.store.touch_session(hashed)
         return user, hashed
 
@@ -222,7 +191,7 @@ class AuthService:
         if not user or not user["enabled"]:
             return None
         last = _parse(record.get("last_used_at"))
-        if not last or (datetime.now(timezone.utc) - last).total_seconds() > 60:
+        if not last or (datetime.now(timezone.utc) - last).total_seconds() > TOKEN_TOUCH_SECONDS:
             self.store.touch_api_token(record["id"])
         return user
 
@@ -230,7 +199,7 @@ class AuthService:
         if session_hash:
             self.store.delete_session(session_hash)
 
-    # ------------------------------------------------------------------ 账号维护
+    # ------------------------------------------------------------------ 密码
     def validate_password(self, password: str) -> None:
         check_password_policy(password, self.settings.security.password_min_length)
 

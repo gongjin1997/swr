@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 
-from ..authz import has_namespace_permission
+from ..access import load_principal
 from ..builder import JobLog
 from ..policy import deployment_policy_block
 from ..registry import parse_image_ref
@@ -176,7 +176,7 @@ class ServiceDeploymentWorker:
         """发起人仍有权限、策略未阻止、审批人数满足、镜像组织在允许范围内。领取后与写入前各检查一次。"""
         actor = self.store.get_user(int(deployment["created_by"])) if deployment.get("created_by") else None
         if (not actor or not actor["enabled"] or actor["must_change_password"]
-                or not has_namespace_permission(self.store, actor, namespace["id"], "service.deploy")):
+                or not load_principal(self.store, actor).can_namespace(namespace["id"], "service.deploy")):
             raise ValueError("发布发起人已停用或不再拥有该命名空间的发布权限")
         policy = effective_policy(namespace["policy"])
         blocked = deployment_policy_block(policy)

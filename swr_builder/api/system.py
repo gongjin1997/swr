@@ -10,7 +10,7 @@ from fastapi.responses import Response
 from .. import __version__
 from ..cloud import HCSClient
 from ..registry import RegistryClient, RegistryError
-from ..web.deps import Ctx, User, audit, display_name
+from ..web.deps import Ctx, User, audit, authenticated, display_name, requires
 
 router = APIRouter()
 
@@ -36,6 +36,7 @@ async def favicon():
 
 
 @router.get("/api/info")
+@authenticated
 async def info(ctx: Ctx, user: User):
     settings = ctx.settings
     username, password = settings.registry.credentials()
@@ -50,6 +51,7 @@ async def info(ctx: Ctx, user: User):
 
 
 @router.post("/api/registry/test")
+@requires("settings.manage")
 async def registry_test_current(ctx: Ctx):
     """用当前生效的仓库配置测试连接。"""
     try:
@@ -60,11 +62,13 @@ async def registry_test_current(ctx: Ctx):
 
 
 @router.get("/api/settings")
+@requires("settings.manage")
 async def settings_view(ctx: Ctx):
     return ctx.sysconfig.view()
 
 
 @router.put("/api/settings")
+@requires("settings.manage")
 async def settings_update(request: Request, ctx: Ctx, user: User, data: dict = Body(...)):
     values, clear = data.get("values", {}), data.get("clear", [])
     if not isinstance(values, dict) or not isinstance(clear, list) or not all(isinstance(p, str) for p in clear):
@@ -78,6 +82,7 @@ async def settings_update(request: Request, ctx: Ctx, user: User, data: dict = B
 
 
 @router.post("/api/settings/registry/test")
+@requires("settings.manage")
 async def registry_test_candidate(ctx: Ctx, data: dict = Body(default={})):
     """用表单中尚未保存的仓库配置测试连接。"""
     cfg = ctx.sysconfig.candidate_registry(data.get("values", {}), data.get("clear", []))
@@ -92,12 +97,14 @@ async def registry_test_candidate(ctx: Ctx, data: dict = Body(default={})):
 
 
 @router.get("/api/audit")
+@requires("audit.view")
 async def audit_log(ctx: Ctx, limit: int = 50, offset: int = 0, username: str = "", action: str = ""):
     items, total = ctx.store.list_audit(min(max(limit, 1), 100), max(offset, 0), username, action)
     return {"items": items, "total": total}
 
 
 @router.get("/api/system")
+@requires("settings.manage")
 async def system(ctx: Ctx):
     data_path = ctx.settings.data_path
     disk = shutil.disk_usage(data_path)
@@ -108,6 +115,7 @@ async def system(ctx: Ctx):
 
 
 @router.post("/api/cloud/hcs/test")
+@requires("settings.manage")
 async def hcs_test(ctx: Ctx, data: dict = Body(default={})):
     cfg = ctx.sysconfig.candidate_hcs(data.get("values", {}), data.get("clear", []))
     client = HCSClient(cfg, transport=ctx.hcs_transport)
@@ -118,6 +126,7 @@ async def hcs_test(ctx: Ctx, data: dict = Body(default={})):
 
 
 @router.get("/api/cloud/hcs/capabilities")
+@requires("settings.manage")
 async def hcs_capabilities(ctx: Ctx):
     hcs = ctx.settings.hcs
     return {"platform": "Huawei Cloud Stack", "version": hcs.version, "enabled": hcs.enabled,

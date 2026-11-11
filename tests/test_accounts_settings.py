@@ -239,7 +239,7 @@ def test_v1_migration_preserves_apps_and_jobs(tmp_path):
     bindings=store.all_bindings()
     assert any(b['subject_id']==1 and b['role']=='platform_admin' and b['scope_type']=='global' for b in bindings)
     assert any(b['subject_id']==2 and b['role']=='developer' and b['scope_id']==default_project for b in bindings)
-    assert [r[0] for r in sqlite3.connect(path).execute('SELECT version FROM schema_migrations ORDER BY version')]==[1,2,3,4,5,6]
+    assert [r[0] for r in sqlite3.connect(path).execute('SELECT version FROM schema_migrations ORDER BY version')]==[1,2,3,4,5,6,7]
     Store(path)
     assert len(store.list_projects())==1
 
@@ -259,7 +259,7 @@ def test_cluster_namespace_foreign_keys_and_repeat_migrations(tmp_path):
             db.execute('DELETE FROM clusters WHERE id=?',(cluster_id,))
     with store._db() as db:
         assert db.execute('PRAGMA foreign_key_check').fetchall()==[]
-        assert db.execute('SELECT count(*) FROM schema_migrations').fetchone()[0]==6
+        assert db.execute('SELECT count(*) FROM schema_migrations').fetchone()[0]==7
 
 def test_session_ownership_and_own_cancel(setup):
     _,app,c=setup;login(c)

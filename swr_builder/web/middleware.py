@@ -1,9 +1,9 @@
 """认证、CSRF、权限、安全响应头与通用审计中间件。
 
-处理顺序与 v1.2 一致：
+处理顺序：
 1. authenticate        公开路径放行；解析 Bearer 令牌或会话 Cookie；未登录 API 返回 401，页面 303 到登录页
 2. check_request_guard  Cookie 会话的写请求必须带 X-Requested-With；待改密账号只能访问改密相关接口
-3. authorize           路由权限表 + 全局/作用域权限 + 部署模块开关
+3. authorize           载入请求主体（Principal），按路由声明的权限做粗检查，并检查部署模块开关
 4. finalize            安全响应头、缓存策略、通用审计
 """
 from __future__ import annotations
@@ -14,10 +14,10 @@ from urllib.parse import quote
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
-from ..auth import SESSION_COOKIE, has_perm
-from ..authz import has_global_permission, visible_namespace_ids, visible_project_ids
+from ..access import Principal, global_only, load_principal
+from ..auth import SESSION_COOKIE
 from ..context import AppContext
-from .permissions import AUTHENTICATED_ROUTE, PUBLIC_ROUTE, SCOPED_PERMISSIONS, route_permission
+from .permissions import AUTHENTICATED_ROUTE, PUBLIC_ROUTE, route_permission
 
 PUBLIC_PATHS = ("/login", "/healthz", "/favicon.ico", "/favicon.svg")
 PUBLIC_PREFIXES = ("/assets/",)
@@ -63,22 +63,17 @@ def check_request_guard(request: Request, user: Dict[str, Any]) -> Optional[Resp
     return None
 
 
-def authorize(ctx: AppContext, request: Request, user: Dict[str, Any], permission: Optional[str]) -> Optional[Response]:
+def authorize(ctx: AppContext, request: Request, principal: Principal, permission: Optional[str]) -> Optional[Response]:
     path = request.url.path
     if path.startswith("/api/"):
         if permission is None:
             return _deny("API 路由未配置权限，已拒绝访问", code="ROUTE_NOT_REGISTERED")
         if permission not in (PUBLIC_ROUTE, AUTHENTICATED_ROUTE):
-            store = ctx.store
-            global_scope = has_global_permission(store, user, permission)
-            if permission in SCOPED_PERMISSIONS:
-                if not global_scope:
-                    visible = (visible_namespace_ids(store, user, permission) if permission == "namespace.view"
-                               else visible_project_ids(store, user, permission))
-                    if not visible:
-                        return _deny("没有可访问的项目资源")
-            elif not has_perm(user["role"], permission) and not global_scope:
-                return _deny("没有操作权限")
+            if global_only(permission):
+                if not principal.can(permission):
+                    return _deny("没有操作权限")
+            elif not principal.can_anywhere(permission):
+                return _deny("没有可访问的项目或命名空间资源")
     if not ctx.settings.general.deploy_enabled and path.startswith(("/api/deploy/", "/api/deployments")):
         return _deny("部署模块已关闭", code="MODULE_DISABLED")
     return None
@@ -117,7 +112,10 @@ def install(app: FastAPI, ctx: AppContext) -> None:
             if isinstance(resolved, Response):
                 return finalize(ctx, request, resolved, None)
             user = request.state.user = resolved
-            denied = check_request_guard(request, user) or authorize(ctx, request, user, permission)
+            denied = check_request_guard(request, user)
+            if denied is None:
+                request.state.principal = load_principal(ctx.store, user)
+                denied = authorize(ctx, request, request.state.principal, permission)
             if denied:
                 return finalize(ctx, request, denied, None)
         response = await call_next(request)

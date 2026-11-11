@@ -16,6 +16,7 @@ class Database:
         self.path = Path(path)
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._local = threading.local()
         with self._db() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
@@ -28,7 +29,11 @@ class Database:
 
     @contextmanager
     def _db(self) -> Iterator[sqlite3.Connection]:
+        # 锁不可重入：同一线程嵌套调用会死锁，这里直接报错，便于发现问题
+        if getattr(self._local, "active", False):
+            raise RuntimeError("Store._db() 不能嵌套调用；请在同一个连接内完成查询")
         with self._lock:
+            self._local.active = True
             conn = sqlite3.connect(str(self.path), timeout=30)
             conn.row_factory = sqlite3.Row
             try:
@@ -40,6 +45,7 @@ class Database:
                 raise
             finally:
                 conn.close()
+                self._local.active = False
 
     def _insert(self, table: str, allowed: Tuple[str, ...], fields: Dict[str, Any]) -> int:
         unknown = set(fields) - set(allowed)

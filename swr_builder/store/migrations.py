@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from datetime import datetime, timezone
 from typing import Callable, List, Tuple
 
 from ..images import registry_path_parts
@@ -115,6 +116,34 @@ def _custom_roles(db: sqlite3.Connection) -> None:
                "enabled INTEGER NOT NULL DEFAULT 1,updated_at TEXT NOT NULL)")
 
 
+def _reconcile_legacy_admins(db: sqlite3.Connection) -> None:
+    """v1.3.0-dev.2 起权限只来自 role_bindings。此前 users.role = 'admin' 无论授权如何都是超级管理员，
+    这里为这些账号补齐（或恢复已过期/撤销的）平台管理员授权，保证升级前后的实际权限一致。"""
+    now = utcnow()
+    for user in db.execute("SELECT id FROM users WHERE role = 'admin'").fetchall():
+        row = db.execute("SELECT id FROM role_bindings WHERE subject_type = 'user' AND subject_id = ? "
+                         "AND role = 'platform_admin' AND scope_type = 'global' AND scope_id = 0",
+                         (user["id"],)).fetchone()
+        if row:
+            db.execute("UPDATE role_bindings SET revoked_at = NULL, expires_at = NULL WHERE id = ?", (row["id"],))
+        else:
+            db.execute("INSERT INTO role_bindings(subject_type, subject_id, role, scope_type, scope_id, created_at, note) "
+                       "VALUES ('user', ?, 'platform_admin', 'global', 0, ?, 'reconciled from legacy admin role')",
+                       (user["id"], now))
+    # 过期时间按字符串与 UTC 当前时间比较，统一换算成 UTC，避免 +08:00 等时区偏移导致授权晚于预期失效
+    for row in db.execute("SELECT id, expires_at FROM role_bindings WHERE expires_at IS NOT NULL").fetchall():
+        try:
+            parsed = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        normalized = parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
+        if normalized != row["expires_at"]:
+            db.execute("UPDATE role_bindings SET expires_at = ? WHERE id = ?", (normalized, row["id"]))
+    db.execute("CREATE INDEX IF NOT EXISTS idx_role_bindings_subject ON role_bindings(subject_type, subject_id)")
+
+
 MIGRATIONS: List[Migration] = [
     (1, "default-project-and-scoped-bindings-v1", _project_scopes),
     (2, "clusters-namespaces-project-allocation-v1", _cluster_namespaces),
@@ -122,6 +151,7 @@ MIGRATIONS: List[Migration] = [
     (4, "project-scope-integrity-guards-v1", _scope_guards),
     (5, "deployment-idempotency-payload-hash-v1", _idempotency_hash),
     (6, "custom-scoped-role-definitions-v1", _custom_roles),
+    (7, "bindings-only-authorization-legacy-admin-reconcile-v1", _reconcile_legacy_admins),
 ]
 
 
