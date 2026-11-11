@@ -20,6 +20,8 @@ from .catalog import Lookup, writable_service
 from .namespaces import effective_policy, required_approvals
 
 DEPLOYMENT_RESPONSE_FIELDS = ("id", "service_id", "job_id", "revision_id", "kind", "status", "digest", "created_at")
+# 发布记录中只供执行器使用的字段，不出现在接口响应中
+INTERNAL_FIELDS = ("idempotency_key", "request_hash", "policy_snapshot", "lease_owner", "lease_until", "fencing_token")
 IDEMPOTENCY_KEY_RE = re.compile(r"[A-Za-z0-9._:-]{8,128}")
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 FINAL_STATUSES = ("success", "failed", "cancelled", "rejected", "expired", "unknown")
@@ -217,7 +219,8 @@ def decide_request(store: Store, me: Principal, deployment_id: int, decision: st
     admin_required = decision == "approved" and requires_admin_approval(store, record)
     if not (me.is_platform_admin if admin_required else me.can_namespace(record["namespace_id"], "deploy.approve")):
         raise NotFound("发布任务不存在")
-    return decide(store, record, me, decision, text_field(data, "comment", 500))
+    result = decide(store, record, me, decision, text_field(data, "comment", 500))
+    return enrich(store, me, result, Lookup(store))
 
 
 # ------------------------------------------------------------------ 发布记录
@@ -231,6 +234,8 @@ def enrich(store: Store, me: Principal, record: Dict[str, Any], lookup: Lookup) 
                   can_approve=pending and can_decide(store, me, record, admin_required=admin_required),
                   can_reject=pending and can_decide(store, me, record, "rejected"),
                   require_admin_approval=admin_required)
+    for key in INTERNAL_FIELDS:
+        record.pop(key, None)
     return record
 
 

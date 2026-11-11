@@ -7,28 +7,36 @@ declare module 'vue-router' {
     title?: string
     /** 无需登录 */
     public?: boolean
-    /** 满足任一权限即可访问 */
+    /** 满足任一权限即可访问（在任一项目/命名空间拥有即可，具体资源由页面与后端再判断） */
     perms?: string[]
     /** 需要启用部署模块 */
     deploy?: boolean
-    /** 用于路由回退及侧栏入口 */
-    nav?: boolean
   }
 }
 
-const resourceChildren: RouteRecordRaw[] = [
-  { path: 'projects', name: 'projects', component: () => import('@/views/resources/ProjectsView.vue'),
-    meta: { title: '项目', perms: ['project.view'] } },
-  { path: 'clusters', name: 'clusters', component: () => import('@/views/resources/ClustersView.vue'),
-    meta: { title: '集群', perms: ['cluster.manage'] } },
-  { path: 'namespaces', name: 'namespaces', component: () => import('@/views/resources/NamespacesView.vue'),
-    meta: { title: '命名空间', perms: ['namespace.view'] } },
-  { path: 'services', name: 'services', component: () => import('@/views/resources/ServicesView.vue'),
-        meta: { title: '服务', perms: ['service.config', 'namespace.view', 'app.view'] } },
-  { path: 'services/:id(\\d+)', name: 'service-detail', component: () => import('@/views/resources/ServiceDetailView.vue'),
-    meta: { title: '服务详情', perms: ['service.config', 'namespace.view', 'app.view'] }, props: (r) => ({ id: Number(r.params.id) }) },
-  { path: 'bindings', name: 'bindings', component: () => import('@/views/resources/BindingsView.vue'),
-    meta: { title: '成员授权', perms: ['user.manage', 'project.member.manage', 'namespace.member.manage'] } },
+const accessChildren: RouteRecordRaw[] = [
+  { path: 'users', name: 'users', component: () => import('@/views/access/UsersView.vue'),
+    meta: { title: '账号', perms: ['user.manage'] } },
+  { path: 'roles', name: 'roles', component: () => import('@/views/access/RolesView.vue'),
+    meta: { title: '角色', perms: ['role.manage', 'user.manage'] } },
+  { path: 'bindings', name: 'bindings', component: () => import('@/views/access/BindingsView.vue'),
+    meta: { title: '授权', perms: ['user.manage', 'project.member.manage', 'namespace.member.manage'] } },
+]
+
+/** 旧地址（书签、文档中的链接）跳转到新位置。 */
+const legacyRedirects: RouteRecordRaw[] = [
+  { path: 'deploy', redirect: (to) => ({ name: 'releases', query: to.query }) },
+  { path: 'resources', redirect: { name: 'projects' } },
+  { path: 'resources/projects', redirect: (to) => ({ name: 'projects', query: to.query }) },
+  { path: 'resources/services', redirect: (to) => ({ name: 'services', query: to.query }) },
+  { path: 'resources/services/:id(\\d+)', redirect: (to) => ({ name: 'service-detail', params: { id: to.params.id } }) },
+  { path: 'resources/clusters', redirect: { name: 'kubernetes' } },
+  { path: 'resources/namespaces', redirect: { name: 'kubernetes', query: { tab: 'namespaces' } } },
+  { path: 'resources/bindings', redirect: { name: 'bindings' } },
+  { path: 'admin/users', redirect: { name: 'users' } },
+  { path: 'admin/roles', redirect: { name: 'roles' } },
+  { path: 'admin/audit', redirect: { name: 'audit' } },
+  { path: 'settings', redirect: (to) => ({ name: 'settings', query: to.query }) },
 ]
 
 export const routes: RouteRecordRaw[] = [
@@ -37,46 +45,53 @@ export const routes: RouteRecordRaw[] = [
     path: '/',
     component: () => import('@/components/AppLayout.vue'),
     children: [
-      // 首页按权限跳转（在全局守卫里处理，因为需要先加载用户权限）
-      { path: '', name: 'home', component: { render: () => null } },
+      { path: '', name: 'home', redirect: { name: 'dashboard' } },
       { path: 'dashboard', name: 'dashboard', component: () => import('@/views/dashboard/DashboardView.vue'),
-        meta: { title: '工作台概览', perms: ['job.view', 'app.view'], nav: true } },
+        meta: { title: '工作台' } },
+      // 交付
       { path: 'build', name: 'build', component: () => import('@/views/build/BuildView.vue'),
-        meta: { title: '构建镜像', perms: ['build.run'], nav: true } },
+        meta: { title: '构建镜像', perms: ['build.run'] } },
       { path: 'jobs', name: 'jobs', component: () => import('@/views/jobs/JobListView.vue'),
-        meta: { title: '构建记录', perms: ['job.view'], nav: true } },
+        meta: { title: '构建记录', perms: ['job.view'] } },
+      { path: 'releases', name: 'releases', component: () => import('@/views/releases/ReleasesView.vue'),
+        meta: { title: '发布中心', perms: ['deploy.view', 'namespace.view', 'app.view'], deploy: true } },
+      // 资源
+      { path: 'projects', name: 'projects', component: () => import('@/views/projects/ProjectsView.vue'),
+        meta: { title: '项目', perms: ['project.view'] } },
+      { path: 'projects/:id(\\d+)', name: 'project-detail', component: () => import('@/views/projects/ProjectDetailView.vue'),
+        meta: { title: '项目详情', perms: ['project.view'] }, props: (r) => ({ id: Number(r.params.id) }) },
       { path: 'apps', name: 'apps', component: () => import('@/views/apps/AppListView.vue'),
-        meta: { title: '应用管理', perms: ['app.view'], nav: true } },
-      { path: 'resources', name: 'resources', component: () => import('@/views/resources/ResourcesLayout.vue'),
-        meta: { title: '资源管理', perms: ['project.view', 'namespace.view'], nav: true }, children: resourceChildren },
-      { path: 'deploy', name: 'deploy', component: () => import('@/views/deploy/DeployCenterView.vue'),
-        meta: { title: '部署中心', perms: ['deploy.view', 'namespace.view', 'app.view'], deploy: true, nav: true } },
-      { path: 'admin/roles', name: 'roles', component: () => import('@/views/admin/RolesView.vue'),
-        meta: { title: '角色管理', perms: ['role.manage'], nav: true } },
-      { path: 'settings', name: 'settings', component: () => import('@/views/settings/SettingsView.vue'),
-        meta: { title: '系统设置', perms: ['settings.manage'], nav: true } },
-      { path: 'admin/users', name: 'users', component: () => import('@/views/admin/UsersView.vue'),
-        meta: { title: '账号管理', perms: ['user.manage'], nav: true } },
-      { path: 'admin/audit', name: 'audit', component: () => import('@/views/admin/AuditView.vue'),
-        meta: { title: '操作审计', perms: ['audit.view'], nav: true } },
+        meta: { title: '应用', perms: ['app.view'] } },
+      { path: 'services', name: 'services', component: () => import('@/views/services/ServicesView.vue'),
+        meta: { title: '服务', perms: ['namespace.view', 'app.view'] } },
+      { path: 'services/:id(\\d+)', name: 'service-detail', component: () => import('@/views/services/ServiceDetailView.vue'),
+        meta: { title: '服务详情', perms: ['namespace.view', 'app.view'] }, props: (r) => ({ id: Number(r.params.id) }) },
+      // 平台
+      { path: 'platform/kubernetes', name: 'kubernetes', component: () => import('@/views/platform/KubernetesView.vue'),
+        meta: { title: '集群与命名空间', perms: ['cluster.manage', 'namespace.member.manage'] } },
+      { path: 'platform/access', name: 'access', component: () => import('@/views/access/AccessLayout.vue'),
+        meta: { title: '访问控制', perms: ['user.manage', 'role.manage', 'project.member.manage', 'namespace.member.manage'] },
+        children: accessChildren },
+      { path: 'platform/audit', name: 'audit', component: () => import('@/views/platform/AuditView.vue'),
+        meta: { title: '操作审计', perms: ['audit.view'] } },
+      { path: 'platform/settings', name: 'settings', component: () => import('@/views/settings/SettingsView.vue'),
+        meta: { title: '系统设置', perms: ['settings.manage'] } },
+      // 个人
       { path: 'account', name: 'account', component: () => import('@/views/account/AccountView.vue'),
         meta: { title: '我的账号' } },
       { path: 'account/password', name: 'change-password', component: () => import('@/views/account/ChangePasswordView.vue'),
         meta: { title: '修改密码' } },
+      ...legacyRedirects,
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 
-export function allowed(route: { meta: RouteRecordRaw['meta'] }): boolean {
+export function allowed(route: { meta?: RouteRecordRaw['meta'] }): boolean {
   const session = useSession()
   const meta = route.meta ?? {}
   if (meta.deploy && !session.deployEnabled) return false
   return !meta.perms || session.canAny(...meta.perms)
-}
-
-function firstAllowed(records: RouteRecordRaw[]): string | undefined {
-  return records.find((r) => r.name && !String(r.path).includes(':') && allowed({ meta: r.meta }))?.name as string | undefined
 }
 
 /** 登录后跳回的地址只接受站内路径，防止开放重定向。 */
@@ -88,7 +103,7 @@ export function safeNext(value: unknown): string {
 const router = createRouter({
   history: createWebHistory(),
   routes,
-  scrollBehavior: () => ({ top: 0 }),
+  scrollBehavior: (to, from) => (to.path === from.path ? false : { top: 0 }),
 })
 
 router.beforeEach(async (to: RouteLocationNormalized) => {
@@ -105,13 +120,11 @@ router.beforeEach(async (to: RouteLocationNormalized) => {
     }
   }
   if (session.mustChangePassword && to.name !== 'change-password') return { name: 'change-password' }
-  if (to.name === 'home') return { name: session.canAny('job.view', 'app.view') ? 'dashboard' : 'account' }
-  if (to.name === 'resources') return { name: firstAllowed(resourceChildren) ?? 'account' }
-  const denied = to.matched.find((record) => !allowed(record))
-  if (denied) {
-    const fallback = router.getRoutes().find((r) => r.meta.nav && allowed(r))
-    return fallback && fallback.name !== to.name ? { name: fallback.name } : { name: 'account' }
+  if (to.name === 'access') {
+    const first = accessChildren.find((r) => allowed(r))
+    return first ? { name: first.name as string } : { name: 'dashboard' }
   }
+  if (to.matched.some((record) => !allowed(record))) return { name: 'dashboard' }
   return true
 })
 

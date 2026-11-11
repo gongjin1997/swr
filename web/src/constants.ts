@@ -1,3 +1,5 @@
+import type { ScopeType, TagType, Tier } from '@/api/types'
+
 export const MODE_TEXT: Record<string, string> = { incremental: '累加构建', full: '全量构建' }
 
 export const STATUS_TEXT: Record<string, string> = {
@@ -14,7 +16,6 @@ export const STATUS_TEXT: Record<string, string> = {
   cancelled: '已取消',
 }
 
-type TagType = 'success' | 'warning' | 'danger' | 'info' | 'primary'
 export const STATUS_TAG: Record<string, TagType> = {
   queued: 'info',
   running: 'primary',
@@ -29,7 +30,13 @@ export const STATUS_TAG: Record<string, TagType> = {
   cancelled: 'info',
 }
 
+export const JOB_STATUSES = ['running', 'queued', 'success', 'failed', 'cancelled'] as const
 export const JOB_FINAL = new Set(['success', 'failed', 'cancelled'])
+export const DEPLOYMENT_ACTIVE = new Set(['queued', 'applying', 'verifying'])
+export const DEPLOYMENT_STATUSES = ['pending_approval', 'queued', 'applying', 'verifying', 'success', 'failed',
+  'rejected', 'expired', 'cancelled', 'unknown'] as const
+
+export const DEPLOYMENT_KIND_TEXT: Record<string, string> = { deploy: '发布', rollback: '回滚', restart: '重新发布' }
 
 export const BUILD_STEPS: [string, string][] = [
   ['resolve', '解析版本'],
@@ -39,24 +46,19 @@ export const BUILD_STEPS: [string, string][] = [
   ['done', '完成'],
 ]
 
-export const TIERS: [string, string][] = [
+export const TIERS: [Tier, string][] = [
   ['dev', '开发'],
   ['test', '测试'],
   ['staging', 'UAT（预生产）'],
   ['prod', '生产'],
 ]
 export const TIER_TEXT: Record<string, string> = Object.fromEntries(TIERS)
+export const TIER_TAG: Record<string, TagType> = { dev: 'info', test: 'primary', staging: 'warning', prod: 'danger' }
+
+export const SCOPE_TEXT: Record<ScopeType, string> = { global: '全局', project: '项目', namespace: '命名空间' }
 
 export const WEEKDAYS: [number, string][] = [
   [1, '周一'], [2, '周二'], [3, '周三'], [4, '周四'], [5, '周五'], [6, '周六'], [7, '周日'],
 ]
-
-/** 授权范围 → 可授予的角色。与后端 services/bindings.ALLOWED_ROLES 一致。 */
-export const SCOPE_ROLES: Record<string, [string, string][]> = {
-  global: [['platform_admin', '平台管理员'], ['deployment_approver', '发布审批员'], ['auditor', '审计员']],
-  project: [['project_admin', '项目管理员'], ['developer', '开发者'], ['project_viewer', '项目只读']],
-  namespace: [['namespace_owner', '命名空间管理员'], ['namespace_approver', '环境审批员'], ['deployer', '部署员'], ['namespace_viewer', '命名空间只读']],
-}
-export const ROLE_TEXT: Record<string, string> = Object.fromEntries(Object.values(SCOPE_ROLES).flat())
 
 export const TAG_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/

@@ -57,6 +57,8 @@ def test_overview_counts_and_pending_approvals(linked):  # noqa: F811
     overview = c.get('/api/overview').json()
     assert overview['projects'] >= 2 and overview['services'] == 2 and overview['jobs']['success'] == 1
     assert [a['id'] for a in overview['approvals']] == [submitted.json()['id']]
+    record = c.get(f"/api/deployments/{submitted.json()['id']}").json()
+    assert record['can_approve'] and not {'idempotency_key', 'request_hash', 'fencing_token'} & set(record)
     actions = [e['action'] for e in store.list_audit(limit=50)[0]]
     assert actions.count('deploy.submit') == 1
     assert not any(a.startswith('POST /api/services') for a in actions)

@@ -1,22 +1,34 @@
-/** 后端接口的响应类型（字段与 swr_builder 的 API 保持一致）。 */
+/** 后端接口的响应类型（字段与 swr_builder 的 API 保持一致）。所有列表接口都返回 Page。 */
 
 export interface Page<T> {
   items: T[]
   total: number
 }
 
-export interface PublicUser {
+export type ScopeType = 'global' | 'project' | 'namespace'
+export type Tier = 'dev' | 'test' | 'staging' | 'prod'
+export type TagType = 'primary' | 'success' | 'warning' | 'danger' | 'info'
+
+// ------------------------------------------------------------------ 账号与权限
+export interface Account {
   id: number
   username: string
   display_name: string
   email: string
+  /** platform_admin、首个全局角色或 member */
   role: string
+  /** 简短身份说明，如"平台管理员""开发者、环境审批员" */
   role_label: string
+  is_platform_admin: boolean
+  global_roles: string[]
+  grant_count: number
   enabled: boolean
   must_change_password: boolean
   created_at: string | null
   last_login_at: string | null
   password_changed_at: string | null
+  /** 当前账号能否管理该账号（仅账号列表/详情返回） */
+  can_manage?: boolean
 }
 
 export interface Binding {
@@ -24,21 +36,145 @@ export interface Binding {
   subject_type: 'user'
   subject_id: number
   role: string
-  scope_type: 'global' | 'project' | 'namespace'
+  scope_type: ScopeType
   scope_id: number
   expires_at: string | null
   note: string
 }
 
-export interface SessionProfile extends PublicUser {
+export interface BindingRow extends Binding {
+  created_at: string
+  created_by: number | null
+  created_by_username: string | null
+  role_name: string
+  role_enabled: boolean
+  scope_label: string
+  status: 'active' | 'expired'
+  subject: { id: number; username: string; display_name: string; enabled: boolean }
+  can_revoke: boolean
+}
+
+export interface ScopedAccess {
+  id: number
+  name: string
+  perms: string[]
+  cluster?: string
+  tier?: string
+}
+
+export interface AccountDetail extends Account {
+  can_manage: boolean
+  bindings: BindingRow[]
+  access: { global: string[]; projects: ScopedAccess[]; namespaces: ScopedAccess[] }
+}
+
+export interface SessionProject {
+  id: number
+  name: string
+  slug: string
+  perms: string[]
+}
+
+export interface SessionNamespace {
+  id: number
+  name: string
+  cluster: string
+  tier: Tier
+  perms: string[]
+}
+
+export interface SessionProfile extends Account {
+  /** 在任一范围内拥有的权限（菜单与入口） */
   permissions: string[]
+  /** 全局拥有的权限 */
+  global_permissions: string[]
   site_name: string
   deploy_enabled: boolean
   bindings: Binding[]
-  projects: { id: number; name: string; perms: string[] }[]
-  namespaces: { id: number; name: string; cluster: string; tier: string; perms: string[] }[]
+  projects: SessionProject[]
+  namespaces: SessionNamespace[]
 }
 
+export interface PermissionMeta {
+  code: string
+  label: string
+  group: string
+  scopes: ScopeType[]
+  implies: string[]
+  grantable: boolean
+}
+
+export interface RoleDefinition {
+  code: string
+  name: string
+  scope_type: ScopeType
+  permissions: string[]
+  description: string
+  enabled: boolean
+  builtin: boolean
+  binding_count: number
+}
+
+export interface RoleCatalog {
+  items: RoleDefinition[]
+  permissions: Record<string, string>
+  scope_permissions: Record<ScopeType, string[]>
+  permission_catalog: PermissionMeta[]
+  groups: { code: string; label: string }[]
+  scopes: { code: ScopeType; label: string }[]
+}
+
+export interface GrantOptions {
+  global: { roles: string[] } | null
+  project: { id: number; name: string; slug: string; roles: string[] }[]
+  namespace: { id: number; name: string; cluster: string; tier: Tier; roles: string[] }[]
+}
+
+export interface GrantInput {
+  role: string
+  scope_type: ScopeType
+  scope_id: number
+  expires_at?: string | null
+  note?: string
+}
+
+export interface BindableUser {
+  id: number
+  username: string
+  display_name: string
+  enabled: boolean
+}
+
+export interface SessionRow {
+  id: string
+  ip: string
+  user_agent: string
+  created_at: string
+  last_seen_at: string
+  expires_at: string
+  current: boolean
+}
+
+export interface ApiToken {
+  id: number
+  name: string
+  prefix: string
+  created_at: string
+  expires_at: string | null
+  last_used_at: string | null
+}
+
+export interface AuditEntry {
+  id: number
+  created_at: string
+  username: string
+  action: string
+  target: string
+  detail: string
+  ip: string
+}
+
+// ------------------------------------------------------------------ 平台
 export interface PlatformInfo {
   version: string
   registry: { address: string; organization: string; username: string; configured: boolean }
@@ -47,6 +183,57 @@ export interface PlatformInfo {
   max_upload_mb: number
 }
 
+export interface PendingApproval {
+  id: number
+  service_id: number
+  target_name: string
+  project_name: string
+  namespace_name: string
+  cluster_name: string
+  environment: Tier
+  operator: string
+  created_at: string
+  require_admin_approval: boolean
+}
+
+export interface Overview {
+  projects: number
+  apps?: number
+  services?: number
+  jobs?: { total: number; active: number; success: number; failed: number; recent: Job[] }
+  approvals?: PendingApproval[]
+}
+
+export interface SettingField {
+  section: string
+  key: string
+  path: string
+  type: 'str' | 'secret' | 'bool' | 'int' | 'float' | 'list'
+  label: string
+  help: string
+  minimum: number
+  maximum: number
+  value: unknown
+  is_set: boolean
+  locked_by: string | null
+  source: 'env' | 'db' | 'file'
+}
+
+export interface SettingsView {
+  sections: { key: string; label: string; fields: SettingField[] }[]
+}
+
+export interface SystemInfo {
+  version: string
+  python: string
+  data_dir: string
+  disk: { total: number; free: number }
+  users: number
+  jobs: number
+  config_priority: string
+}
+
+// ------------------------------------------------------------------ 应用与构建
 export type BuildMode = 'incremental' | 'full'
 
 export interface AppFields {
@@ -155,6 +342,7 @@ export interface LogChunk {
   finished: boolean
 }
 
+// ------------------------------------------------------------------ 项目、集群、命名空间
 export interface RegistryOrg {
   namespace: string
   base_prefixes: string[]
@@ -166,6 +354,8 @@ export interface Project {
   name: string
   registry_orgs: RegistryOrg[]
   namespace_ids: number[]
+  created_at: string
+  updated_at: string
 }
 
 export interface Cluster {
@@ -177,23 +367,10 @@ export interface Cluster {
   credential_expires_at: string | null
   cert_duration_days: number
   status: string
+  created_at: string
+  updated_at: string
 }
 
-export interface RoleDefinition {
-  code: string
-  name: string
-  scope_type: 'global' | 'project' | 'namespace'
-  permissions: string[]
-  description: string
-  enabled: boolean
-  builtin: boolean
-  binding_count: number
-}
-export interface RoleCatalog {
-  items: RoleDefinition[]
-  permissions: Record<string, string>
-  scope_permissions: Record<string, string[]>
-}
 export interface ClusterDiscovery {
   cluster_id: number
   version: string
@@ -201,26 +378,6 @@ export interface ClusterDiscovery {
   nodes: { name: string; version: string; ready: boolean; architecture: string }[]
   warnings: string[]
   fetched_at: string
-}
-export interface KubeDeployment {
-  name: string
-  uid: string
-  replicas: number
-  ready_replicas: number
-  containers: { name: string; image: string }[]
-}
-export interface NamespaceResources {
-  namespace_id: number
-  namespace_name: string
-  cluster_name: string
-  deployments: KubeDeployment[]
-  services: { name: string; type: string; cluster_ip: string; ports: { port: number; targetPort: string | number }[] }[]
-  pods: { name: string; phase: string; ready: boolean; node: string }[]
-  ingresses: { name: string; hosts: string[] }[]
-  warnings: string[]
-  fetched_at: string
-  found?: boolean
-  container?: { name: string; image: string } | null
 }
 
 export interface DeployWindow {
@@ -242,8 +399,6 @@ export interface NamespacePolicy {
   [key: string]: unknown
 }
 
-export type Tier = 'dev' | 'test' | 'staging' | 'prod'
-
 export interface Namespace {
   id: number
   cluster_id: number
@@ -251,19 +406,44 @@ export interface Namespace {
   name: string
   tier: Tier
   policy: NamespacePolicy
+  project_ids: number[]
 }
 
+export interface RbacReview {
+  ok: boolean
+  checks: { group: string; resource: string; verb: string; allowed: boolean }[]
+  warnings: string[]
+}
+
+export interface KubeDeployment {
+  name: string
+  uid: string
+  replicas: number
+  ready_replicas: number
+  containers: { name: string; image: string }[]
+}
+
+export interface NamespaceResources {
+  namespace_id: number
+  namespace_name: string
+  cluster_name: string
+  deployments: KubeDeployment[]
+  services: { name: string; type: string; cluster_ip: string; ports: { port: number; targetPort: string | number }[] }[]
+  pods: { name: string; phase: string; ready: boolean; node: string }[]
+  ingresses: { name: string; hosts: string[] }[]
+  warnings: string[]
+  fetched_at: string
+  found?: boolean
+  container?: { name: string; image: string } | null
+}
+
+// ------------------------------------------------------------------ 服务与发布
 export interface ImageOnlySpec {
   mode: 'image_only'
   target: { kind: 'Deployment'; name: string; container: string }
 }
 
 export interface Service {
-  project_name: string
-  app_name: string
-  cluster_name: string
-  namespace_name: string
-  tier: Tier
   id: number
   name: string
   project_id: number
@@ -272,6 +452,13 @@ export interface Service {
   current_revision_id: number
   deployed_revision_id: number | null
   spec: ImageOnlySpec | Record<string, unknown>
+  project_name: string
+  app_name: string
+  cluster_name: string
+  namespace_name: string
+  tier: Tier
+  created_at: string
+  updated_at: string
 }
 
 export interface Revision {
@@ -293,27 +480,26 @@ export interface RevisionDiff {
 export interface Approval {
   id: number
   approver_id: number
+  approver_username: string | null
+  approver_display_name: string | null
   decision: 'approved' | 'rejected'
   comment: string
   created_at: string
 }
 
 export interface Deployment {
-  project_id: number
-  project_name: string
-  namespace_id: number | null
-  namespace_name: string
-  cluster_name: string
-  environment: string
-  can_approve: boolean
-  can_reject: boolean
-  require_admin_approval: boolean
   id: number
   service_id: number | null
   target_id: number | null
   target_name: string
   target_type: string
   kind: string
+  project_id: number
+  project_name: string
+  namespace_id: number | null
+  namespace_name: string
+  cluster_name: string
+  environment: string
   app_id: number
   app_name: string
   job_id: number
@@ -328,104 +514,11 @@ export interface Deployment {
   remark: string
   created_at: string
   finished_at: string | null
+  can_approve: boolean
+  can_reject: boolean
+  require_admin_approval: boolean
   approvals?: Approval[]
 }
 
-export interface BindableUser {
-  id: number
-  username: string
-  display_name: string
-  enabled: boolean
-}
-
-export interface SettingField {
-  section: string
-  key: string
-  path: string
-  type: 'str' | 'secret' | 'bool' | 'int' | 'float' | 'list'
-  label: string
-  help: string
-  minimum: number
-  maximum: number
-  value: unknown
-  is_set: boolean
-  locked_by: string | null
-  source: 'env' | 'db' | 'file'
-}
-
-export interface SettingsView {
-  sections: { key: string; label: string; fields: SettingField[] }[]
-}
-
-export interface SystemInfo {
-  version: string
-  python: string
-  data_dir: string
-  disk: { total: number; free: number }
-  users: number
-  jobs: number
-  config_priority: string
-}
-
-export interface AuditEntry {
-  id: number
-  created_at: string
-  username: string
-  action: string
-  target: string
-  detail: string
-  ip: string
-}
-
-export interface RolesInfo {
-  roles: { value: string; label: string; permissions: string[] }[]
-  permissions: Record<string, string>
-}
-
-export interface SessionRow {
-  id: string
-  ip: string
-  user_agent: string
-  created_at: string
-  last_seen_at: string
-  expires_at: string
-  current: boolean
-}
-
-export interface ApiToken {
-  id: number
-  name: string
-  prefix: string
-  created_at: string
-  expires_at: string | null
-  last_used_at: string | null
-}
-
-export interface ProviderField {
-  key: string
-  label: string
-  type: 'str' | 'secret' | 'bool' | 'int'
-  required: boolean
-  default: unknown
-  help?: string
-}
-
-export interface DeployProvider {
-  type: string
-  label: string
-  description: string
-  available: boolean
-  fields: ProviderField[]
-}
-
-export interface DeployTarget {
-  id: number
-  name: string
-  type: string
-  environment: string
-  enabled: boolean
-  auto_deploy: boolean
-  app_ids: number[]
-  config?: Record<string, unknown>
-  secrets_set?: Record<string, boolean>
-}
+/** 提交发布、回滚、重新发布的响应；完整记录用 deploymentApi.get 获取。 */
+export type DeploymentTicket = Pick<Deployment, 'id' | 'service_id' | 'job_id' | 'revision_id' | 'kind' | 'status' | 'digest' | 'created_at'>

@@ -43,7 +43,8 @@ const stepFailed = computed(() => job.value?.status === 'failed' || job.value?.s
 const canCancel = computed(() => {
   const j = job.value
   if (!j || JOB_FINAL.has(j.status)) return false
-  return session.can('job.cancel') || (session.can('job.cancel.own') && String(j.created_by) === String(session.profile?.id))
+  return session.canProject(j.project_id, 'job.cancel') ||
+    (session.canProject(j.project_id, 'job.cancel.own') && String(j.created_by) === String(session.userId))
 })
 
 async function cancel() {
@@ -80,7 +81,7 @@ async function copyImage() {
     <div v-if="job?.image" class="image">
       <code class="mono break-word">{{ job.image }}</code>
       <el-button size="small" @click="copyImage">复制</el-button>
-      <RouterLink v-if="job.status === 'success' && session.deployEnabled" :to="{ name: 'deploy', query: { app: job.app_id, job: job.id } }"><el-button type="primary" size="small">发布此构建</el-button></RouterLink>
+      <RouterLink v-if="job.status === 'success' && session.deployEnabled" :to="{ name: 'releases', query: { app: job.app_id, job: job.id } }"><el-button type="primary" size="small">发布此构建</el-button></RouterLink>
     </div>
     <ol class="build-progress" aria-label="构建执行进度">
       <li v-for="([key, title], index) in BUILD_STEPS" :key="key" :class="{ done: index < activeStep, current: index === activeStep, failed: index === activeStep && stepFailed }" :aria-current="index === activeStep ? 'step' : undefined">

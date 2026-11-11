@@ -35,3 +35,9 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run build
+      # 构建好的控制台（swr_builder/webui），便于评审时直接放进包里试用
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webui
+          path: swr_builder/webui
+          retention-days: 7

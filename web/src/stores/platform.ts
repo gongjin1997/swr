@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { appApi, platformApi } from '@/api'
 import type { App, AppFields, PlatformInfo } from '@/api/types'
 
-/** 平台信息（SWR / Docker 状态）与应用列表缓存：构建页、构建记录、服务表单共用。 */
+/** 平台信息（SWR / Docker 状态）与应用列表缓存：构建、构建记录、服务、发布页面共用。 */
 export const usePlatform = defineStore('platform', () => {
   const info = ref<PlatformInfo | null>(null)
   const apps = ref<App[]>([])

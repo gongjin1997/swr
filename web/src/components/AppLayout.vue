@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowDown, Box, Connection, Document, Expand, Files, Fold, Grid, Key, Menu, Monitor, Moon, Setting, Sunny, User, UserFilled } from '@element-plus/icons-vue'
+import {
+  ArrowDown, Box, Connection, Document, Expand, Files, Fold, Grid, Key, Lock, Menu, Monitor, Moon, Odometer, Promotion,
+  Setting, Share, Sunny, UserFilled,
+} from '@element-plus/icons-vue'
 import { allowed } from '@/router'
 import { useSession } from '@/stores/session'
 import { usePlatform } from '@/stores/platform'
@@ -15,46 +18,63 @@ const preferences = usePreferences()
 const router = useRouter()
 const route = useRoute()
 const mobileOpen = ref(false)
+
+/** 导航按"交付流程 → 资源 → 平台"组织；子页面（如服务详情）高亮所属的入口。 */
 const groups = [
-  { title: '工作空间', items: [
-    { name: 'dashboard', icon: Monitor }, { name: 'build', icon: Box },
-    { name: 'jobs', icon: Document }, { name: 'apps', icon: Grid },
-  ] },
-  { title: '资源与发布', items: [
-    { name: 'projects', icon: Files }, { name: 'services', icon: Box }, { name: 'deploy', icon: Connection },
-  ] },
-  { title: '平台管理', items: [
-    { name: 'roles', icon: Key }, { name: 'bindings', icon: Key }, { name: 'users', icon: User },
-    { name: 'audit', icon: Document }, { name: 'settings', icon: Setting },
+  { title: '概览', items: [{ name: 'dashboard', icon: Odometer }] },
+  { title: '交付', items: [{ name: 'build', icon: Box }, { name: 'jobs', icon: Document }, { name: 'releases', icon: Promotion }] },
+  { title: '资源', items: [{ name: 'projects', icon: Files }, { name: 'apps', icon: Grid }, { name: 'services', icon: Share }] },
+  { title: '平台', items: [
+    { name: 'kubernetes', icon: Connection }, { name: 'access', icon: Lock }, { name: 'audit', icon: Monitor },
+    { name: 'settings', icon: Setting },
   ] },
 ]
-const menu = computed(() => session.mustChangePassword ? [] : groups.map(group => ({
+const OWNER: Record<string, string> = {
+  'project-detail': 'projects', 'service-detail': 'services', users: 'access', roles: 'access', bindings: 'access',
+}
+
+const menu = computed(() => session.mustChangePassword ? [] : groups.map((group) => ({
   title: group.title,
-  items: group.items.flatMap(item => {
-    const record = router.getRoutes().find(r => r.name === item.name)
+  items: group.items.flatMap((item) => {
+    const record = router.getRoutes().find((r) => r.name === item.name)
     if (!record || !allowed(record)) return []
-    const resolved = router.resolve({ name: item.name })
-    if (!resolved.matched.every(allowed)) return []
-    return [{ ...item, title: record.meta.title, path: record.path }]
+    return [{ ...item, title: record.meta.title ?? '', path: router.resolve({ name: item.name }).fullPath }]
   }),
-})).filter(group => group.items.length))
-const activeName = computed(() => route.name === 'service-detail' ? 'services' : route.name)
-const activeGroup = computed(() => menu.value.find(g => g.items.some(i => i.name === activeName.value))?.title ?? '个人中心')
+})).filter((group) => group.items.length))
+
+const activeName = computed(() => {
+  const name = String(route.name ?? '')
+  return OWNER[name] ?? name
+})
+const activeGroup = computed(() => menu.value.find((g) => g.items.some((i) => i.name === activeName.value))?.title ?? '个人中心')
+const crumbs = computed(() => route.matched.slice(1).map((r) => r.meta.title).filter((t): t is string => !!t))
 const displayName = computed(() => session.profile?.display_name || session.profile?.username || '用户')
 const avatar = computed(() => displayName.value.slice(0, 1).toUpperCase())
 const themes: { value: Theme; label: string; icon: typeof Sunny }[] = [
-  { value: 'light', label: '浅色外观', icon: Sunny }, { value: 'dark', label: '深色外观', icon: Moon }, { value: 'system', label: '跟随系统', icon: Monitor },
+  { value: 'light', label: '浅色外观', icon: Sunny }, { value: 'dark', label: '深色外观', icon: Moon },
+  { value: 'system', label: '跟随系统', icon: Monitor },
 ]
+
 watch(() => route.fullPath, () => { mobileOpen.value = false })
-async function command(value: string) {
+
+function setTheme(value: string | number | object) {
+  preferences.theme = value as Theme
+}
+
+async function command(value: string | number | object) {
   try {
     if (value === 'logout') {
       await session.logout()
       platform.reset()
       await router.replace({ name: 'login' })
-    } else await router.push({ name: value })
-  } catch (error) { notifyError(error) }
+    } else {
+      await router.push({ name: String(value) })
+    }
+  } catch (error) {
+    notifyError(error)
+  }
 }
+
 onMounted(() => {
   if (!session.mustChangePassword) platform.loadInfo().catch(notifyError)
 })
@@ -72,14 +92,16 @@ onMounted(() => {
         <section v-for="group in menu" :key="group.title" class="menu-group">
           <div v-if="!preferences.collapsed" class="group-title">{{ group.title }}</div>
           <el-tooltip v-for="item in group.items" :key="item.name" :content="item.title" placement="right" :disabled="!preferences.collapsed">
-            <RouterLink :to="item.path" class="menu-item" :class="{ active: activeName === item.name }" :aria-current="activeName === item.name ? 'page' : undefined" :aria-label="item.title">
+            <RouterLink :to="item.path" class="menu-item" :class="{ active: activeName === item.name }"
+              :aria-current="activeName === item.name ? 'page' : undefined" :aria-label="item.title">
               <el-icon :size="18"><component :is="item.icon" /></el-icon><span v-show="!preferences.collapsed">{{ item.title }}</span>
             </RouterLink>
           </el-tooltip>
         </section>
       </nav>
       <div class="sider-bottom">
-        <el-button text :icon="preferences.collapsed ? Expand : Fold" :aria-label="preferences.collapsed ? '展开侧栏' : '收起侧栏'" @click="preferences.collapsed = !preferences.collapsed"><span v-if="!preferences.collapsed">收起导航</span></el-button>
+        <el-button text :icon="preferences.collapsed ? Expand : Fold" :aria-label="preferences.collapsed ? '展开侧栏' : '收起侧栏'"
+          @click="preferences.collapsed = !preferences.collapsed"><span v-if="!preferences.collapsed">收起导航</span></el-button>
       </div>
     </aside>
 
@@ -87,27 +109,53 @@ onMounted(() => {
       <header class="global-header">
         <div class="header-left">
           <el-button class="mobile-trigger" text circle :icon="Menu" aria-label="打开导航菜单" @click="mobileOpen = true" />
-          <el-breadcrumb separator="/"><el-breadcrumb-item>{{ activeGroup }}</el-breadcrumb-item><el-breadcrumb-item>{{ route.meta.title }}</el-breadcrumb-item></el-breadcrumb>
+          <el-breadcrumb separator="/">
+            <el-breadcrumb-item>{{ activeGroup }}</el-breadcrumb-item>
+            <el-breadcrumb-item v-for="title in crumbs" :key="title">{{ title }}</el-breadcrumb-item>
+          </el-breadcrumb>
         </div>
         <div class="header-right">
           <el-tooltip v-if="platform.info" :content="platform.info.docker.error || `Docker ${platform.info.docker.version} · ${platform.info.docker.arch}`">
             <span class="engine-state" :class="{ ready: platform.info.docker.available }"><i />{{ platform.info.docker.available ? '构建引擎就绪' : '构建引擎不可用' }}</span>
           </el-tooltip>
-          <el-dropdown trigger="click" @command="(value: Theme) => preferences.theme = value">
+          <el-dropdown trigger="click" @command="setTheme">
             <el-button text circle :icon="preferences.theme === 'dark' ? Moon : Sunny" aria-label="切换外观" />
-            <template #dropdown><el-dropdown-menu><el-dropdown-item v-for="theme in themes" :key="theme.value" :command="theme.value" :icon="theme.icon" :disabled="preferences.theme === theme.value">{{ theme.label }}</el-dropdown-item></el-dropdown-menu></template>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item v-for="theme in themes" :key="theme.value" :command="theme.value" :icon="theme.icon"
+                  :disabled="preferences.theme === theme.value">{{ theme.label }}</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
           </el-dropdown>
           <span class="header-divider" />
           <el-dropdown trigger="click" @command="command">
-            <button class="user-menu" type="button" aria-label="账号菜单"><span class="avatar">{{ avatar }}</span><span class="user-info"><b>{{ displayName }}</b><small>{{ session.profile?.role_label }}</small></span><el-icon><ArrowDown /></el-icon></button>
-            <template #dropdown><el-dropdown-menu><el-dropdown-item command="account" :icon="UserFilled">我的账号</el-dropdown-item><el-dropdown-item command="change-password" :icon="Key">修改密码</el-dropdown-item><el-dropdown-item command="logout" divided>退出登录</el-dropdown-item></el-dropdown-menu></template>
+            <button class="user-menu" type="button" aria-label="账号菜单">
+              <span class="avatar">{{ avatar }}</span>
+              <span class="user-info"><b>{{ displayName }}</b><small>{{ session.profile?.role_label }}</small></span>
+              <el-icon><ArrowDown /></el-icon>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="account" :icon="UserFilled">我的账号</el-dropdown-item>
+                <el-dropdown-item command="change-password" :icon="Key">修改密码</el-dropdown-item>
+                <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
           </el-dropdown>
         </div>
       </header>
       <main id="main-content" tabindex="-1"><RouterView /></main>
     </div>
-    <el-drawer v-model="mobileOpen" title="工作空间导航" direction="ltr" size="280px" class="mobile-menu">
-      <nav aria-label="移动端导航"><section v-for="group in menu" :key="group.title" class="menu-group"><div class="group-title">{{ group.title }}</div><RouterLink v-for="item in group.items" :key="item.name" :to="item.path" class="menu-item" :class="{ active: activeName === item.name }" :aria-current="activeName === item.name ? 'page' : undefined"><el-icon :size="18"><component :is="item.icon" /></el-icon>{{ item.title }}</RouterLink></section></nav>
+    <el-drawer v-model="mobileOpen" title="导航" direction="ltr" size="280px" class="mobile-menu">
+      <nav aria-label="移动端导航">
+        <section v-for="group in menu" :key="group.title" class="menu-group">
+          <div class="group-title">{{ group.title }}</div>
+          <RouterLink v-for="item in group.items" :key="item.name" :to="item.path" class="menu-item"
+            :class="{ active: activeName === item.name }" :aria-current="activeName === item.name ? 'page' : undefined">
+            <el-icon :size="18"><component :is="item.icon" /></el-icon>{{ item.title }}
+          </RouterLink>
+        </section>
+      </nav>
     </el-drawer>
   </div>
 </template>
@@ -120,15 +168,13 @@ onMounted(() => {
 .brand svg { width: 30px; height: 30px; flex: none; }
 .site-name { font-size: 14px; font-weight: 600; color: var(--hi-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-menu { padding: 6px 10px 12px; overflow-y: auto; flex: 1; }
-.menu-group { margin: 0 0 8px; }
-.group-title { padding: 14px 10px 6px; font-size: 12px; color: var(--hi-text-3); }
-.menu-item { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px; margin: 2px 0; color: var(--hi-sider-text); border-radius: 8px; white-space: nowrap; font-size: 14px; }
+.menu-group { margin: 0 0 6px; }
+.group-title { padding: 12px 10px 6px; font-size: 12px; color: var(--hi-text-3); }
+.menu-item { display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 12px; margin: 2px 0; color: var(--hi-sider-text); border-radius: 8px; white-space: nowrap; font-size: 14px; }
 .menu-item:hover { background: var(--hi-bg-soft); }
 .menu-item.active { color: var(--el-color-primary); background: var(--hi-sider-active-bg); font-weight: 600; }
-.collapsed .brand { padding: 0 17px; }
-.collapsed .side-menu { padding: 6px 10px 12px; }
 .collapsed .menu-item { padding: 0; justify-content: center; }
-.collapsed .menu-group + .menu-group { border-top: 1px solid var(--hi-border-light); padding-top: 12px; }
+.collapsed .menu-group + .menu-group { border-top: 1px solid var(--hi-border-light); padding-top: 10px; }
 .sider-bottom { border-top: 1px solid var(--hi-border-light); padding: 12px; }
 .sider-bottom .el-button { color: var(--hi-text-2); font-size: 12px; }
 .main-wrap { margin-left: var(--sidebar-width); min-height: 100vh; display: flex; flex-direction: column; transition: margin-left .2s; }
@@ -142,9 +188,10 @@ onMounted(() => {
 .engine-state.ready { color: var(--el-color-success); }
 .user-menu { display: flex; align-items: center; gap: 9px; cursor: pointer; background: none; border: 0; padding: 4px; color: var(--hi-text-2); font: inherit; }
 .avatar { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-weight: 600; }
-.user-info { display: grid; gap: 3px; text-align: left; max-width: 130px; }
-.user-info b { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.user-info small { color: var(--hi-text-3); font-size: 10px; }
+.user-info { display: grid; gap: 3px; text-align: left; max-width: 160px; }
+.user-info b, .user-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-info b { font-size: 12px; }
+.user-info small { color: var(--hi-text-3); font-size: 11px; }
 main { flex: 1; min-width: 0; outline: none; }
 .mobile-trigger { display: none; }
 .skip-link { position: fixed; left: 240px; top: -60px; padding: 10px; background: var(--hi-bg-card); z-index: 100; }

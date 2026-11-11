@@ -13,7 +13,7 @@ const emit = defineEmits<{ saved: [app: App] }>()
 const platform = usePlatform()
 const session = useSession()
 const projectId = ref<number | null>(null)
-const writableProjects = computed(() => (session.profile?.projects ?? []).filter(p => p.perms.includes('app.manage')))
+const writableProjects = computed(() => session.projectsWith('app.manage'))
 
 const FIELD_KEYS: (keyof AppFields)[] = [
   'name', 'repository', 'organization', 'description', 'base_image', 'default_mode', 'max_layers', 'target_dir',
@@ -95,12 +95,13 @@ async function runImport() {
 }
 
 async function save() {
-  if (!projectId.value) return notifyError(new Error('请选择有应用管理权限的项目'))
+  const target = projectId.value
+  if (!target) return notifyError(new Error('请选择有应用管理权限的项目'))
   if (!(await formRef.value?.validate().catch(() => false))) return
   saving.value = true
   try {
     const data = { ...form, max_layers: Number(form.max_layers || 0) }
-    const saved = props.app ? await appApi.update(props.app.id, data) : await appApi.create({ ...data, project_id: projectId.value })
+    const saved = props.app ? await appApi.update(props.app.id, data) : await appApi.create({ ...data, project_id: target })
     notifySuccess('应用已保存')
     visible.value = false
     emit('saved', saved)

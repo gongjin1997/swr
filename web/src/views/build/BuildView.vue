@@ -9,11 +9,13 @@ import JobDetail from '@/components/JobDetail.vue'
 import { errorText, notifyError, notifySuccess } from '@/composables/useAction'
 import { JOB_FINAL, MODE_TEXT, TAG_RE } from '@/constants'
 import { usePlatform } from '@/stores/platform'
+import { useSession } from '@/stores/session'
 import { fmtSize, fmtTime, shortImage } from '@/utils/format'
 import { ElMessage } from 'element-plus'
 
 const LAST_APP_KEY = 'swr-builder.app'
 const platform = usePlatform()
+const session = useSession()
 const route = useRoute()
 const router = useRouter()
 
@@ -31,7 +33,17 @@ const progress = ref(0)
 const preview = reactive<{ visible: boolean; data: Preview | null }>({ visible: false, data: null })
 const previewing = ref(false)
 
-const app = computed<App | null>(() => platform.apps.find((a) => a.id === appId.value) ?? null)
+/** 只列出有构建权限的应用，按项目分组。 */
+const buildableApps = computed(() => platform.apps.filter((a) => session.canProject(a.project_id, 'build.run')))
+const appGroups = computed(() => {
+  const groups = new Map<number, { label: string; apps: App[] }>()
+  for (const a of buildableApps.value) {
+    if (!groups.has(a.project_id)) groups.set(a.project_id, { label: session.projectName(a.project_id), apps: [] })
+    groups.get(a.project_id)?.apps.push(a)
+  }
+  return [...groups.values()]
+})
+const app = computed<App | null>(() => buildableApps.value.find((a) => a.id === appId.value) ?? null)
 const jobId = computed<number | null>(() => (route.query.job ? Number(route.query.job) : null))
 
 const fullDisabled = computed(() => !!app.value && !app.value.base_image && (app.value.full_template || '').includes('{{BASE_IMAGE}}'))
@@ -186,7 +198,7 @@ onMounted(async () => {
     notifyError(e)
   }
   const wanted = Number(route.query.app) || Number(localStorage.getItem(LAST_APP_KEY))
-  const initial = platform.apps.find((a) => a.id === wanted) ?? platform.apps[0]
+  const initial = buildableApps.value.find((a) => a.id === wanted) ?? buildableApps.value[0]
   if (initial) appId.value = initial.id
   if (!jobId.value) {
     try {
@@ -215,8 +227,10 @@ function updateViewportWidth() {
           <div class="form-section-title"><span>1</span> 选择应用</div>
           <el-form-item label="应用">
             <div class="row">
-              <el-select v-model="appId" filterable placeholder="请先在“应用管理”中新建应用" class="grow">
-                <el-option v-for="a in platform.apps" :key="a.id" :label="a.name" :value="a.id" />
+              <el-select v-model="appId" filterable placeholder="请先在项目中新建应用" class="grow">
+                <el-option-group v-for="group in appGroups" :key="group.label" :label="group.label">
+                  <el-option v-for="a in group.apps" :key="a.id" :label="a.name" :value="a.id" />
+                </el-option-group>
               </el-select>
               <el-button :icon="Refresh" :loading="versionsLoading" :disabled="!app" aria-label="刷新版本" @click="loadVersions" />
             </div>

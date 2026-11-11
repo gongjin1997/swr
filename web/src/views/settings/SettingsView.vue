@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
-import { Box, Connection, Lock, Monitor, Refresh, Setting } from '@element-plus/icons-vue'
+import { Box, Lock, Monitor, Refresh, Setting } from '@element-plus/icons-vue'
 import SettingInput from './SettingInput.vue'
-import KubernetesSettings from './KubernetesSettings.vue'
-import AdapterSettings from './AdapterSettings.vue'
 import { ElMessage } from 'element-plus'
 import { settingsApi, type SettingsChange } from '@/api'
 import type { SettingField, SettingsView, SystemInfo } from '@/api/types'
@@ -32,8 +30,6 @@ const sections = [
   { key: 'registry', title: '镜像仓库', description: '管理 SWR 仓库地址、登录凭证与连接参数。', icon: Box },
   { key: 'build', title: '构建参数', description: '配置构建引擎、并发任务与制品上传限制。', icon: Monitor },
   { key: 'security', title: '安全设置', description: '管理登录会话、密码要求与登录保护。', icon: Lock },
-  { key: 'kubernetes', title: 'Kubernetes', description: '管理全局 kubeconfig、集群连接、命名空间与发布审批。', icon: Connection },
-  { key: 'adapters', title: '适配器', description: '查看发布适配器及关联集群配置。', icon: Connection },
 ]
 const active = computed(() => sections.some(s => s.key === route.query.section) ? String(route.query.section) : 'general')
 const selected = computed(() => sections.find(s => s.key === active.value)!)
@@ -165,7 +161,7 @@ onMounted(load)
       <button v-for="section in sections" :key="section.key" type="button" :aria-label="section.title" :class="{ active: active === section.key }" :aria-current="active === section.key ? 'page' : undefined" @click="router.replace({ query: { ...route.query, section: section.key } })"><el-icon :size="18"><component :is="section.icon" /></el-icon>{{ section.title }}<i v-if="changedIn(section.key)" aria-label="有未保存修改" /></button>
       <div v-if="system" class="system-info"><b>平台信息</b><span>可用磁盘 <em>{{ fmtSize(system.disk.free) }}</em></span><span>构建记录 <em>{{ system.jobs }}</em></span></div>
     </aside>
-    <el-card v-if="!['kubernetes', 'adapters'].includes(active)" class="settings-panel">
+    <el-card class="settings-panel">
         <template #header>
             <div class="page-card-header">
               <div class="page-card-header-content"><div class="settings-heading"><div><h2>{{ selected.title }}</h2><p>{{ selected.description }}</p></div><el-button v-if="active === 'registry'" :icon="Box" :loading="testing.busy.value" :disabled="loading || !view" @click="testRegistry">测试仓库连接</el-button></div></div>
@@ -182,9 +178,8 @@ onMounted(load)
           <div class="settings-save"><span :class="{ changed: dirty }">{{ !view ? '尚未加载设置' : dirty ? `有 ${dirtyPaths.length} 项未保存修改` : '所有修改已保存' }}</span><div class="toolbar"><el-button :disabled="!dirty || saving.busy.value" @click="discard">放弃修改</el-button><el-button type="primary" native-type="submit" :loading="saving.busy.value" :disabled="!view || !dirty">保存修改</el-button></div></div>
         </el-form>
     </el-card>
-    <KubernetesSettings v-else-if="active === 'kubernetes'" />
-    <AdapterSettings v-else />
-    <p class="settings-footnote">设置优先级：环境变量 &gt; 页面设置 &gt; 配置文件。敏感值不会回显，留空保留原值。</p>
+    <p class="settings-footnote">设置优先级：环境变量 &gt; 页面设置 &gt; 配置文件。敏感值不会回显，留空保留原值。
+      Kubernetes 集群与命名空间在 <RouterLink :to="{ name: 'kubernetes' }">平台 › 集群与命名空间</RouterLink> 中管理。</p>
   </section>
 </template>
 
