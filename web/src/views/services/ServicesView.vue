@@ -184,7 +184,8 @@ onMounted(async () => {
               <el-tooltip :content="rowStatus(row)?.message" placement="top">
                 <el-tag size="small" :type="RUNTIME_STATE_TAG[rowStatus(row)?.state ?? 'unknown']">{{ RUNTIME_STATE_TEXT[rowStatus(row)?.state ?? 'unknown'] }}</el-tag>
               </el-tooltip>
-              <span v-if="rowStatus(row)?.desired !== undefined" class="num gap">{{ rowStatus(row)?.ready }}/{{ rowStatus(row)?.desired }}</span>
+              <span v-if="rowStatus(row)?.desired !== undefined && !['missing', 'unknown'].includes(rowStatus(row)?.state ?? '')"
+                class="num gap">{{ rowStatus(row)?.ready }}/{{ rowStatus(row)?.desired }}</span>
               <div v-if="rowStatus(row)?.image" class="hint mono break-word">{{ shortImage(rowStatus(row)?.image?.split('@')[0]) }}</div>
             </template>
             <span v-else class="hint">{{ statusLoading ? '读取中…' : '未读取' }}</span>

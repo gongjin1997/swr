@@ -196,6 +196,20 @@ def test_render_produces_template_shaped_objects_in_apply_order():
     assert objects[8]["spec"]["minReplicas"] == 2 and objects[8]["spec"]["scaleTargetRef"]["name"] == "order-api-app"
 
 
+def test_field_diff_pairs_list_items_by_a_unique_key():
+    from swr_builder.delivery.apply import field_diff
+
+    mounts = [{"name": "shared", "mountPath": "/app/a.properties", "subPath": "a.properties"},
+              {"name": "shared", "mountPath": "/app/b.properties", "subPath": "b.properties"}]
+    live = {"spec": {"volumeMounts": list(reversed(mounts)) + [{"name": "other", "mountPath": "/x"}],
+                     "resources": {"limits": {"cpu": "1000m", "memory": "1Gi"}}, "port": 8080}}
+    desired = {"spec": {"volumeMounts": mounts, "resources": {"limits": {"cpu": "1", "memory": "1Gi"}}, "port": "8080"}}
+    assert field_diff(desired, live) == []
+    changed = field_diff({"data": {"k": "bmV3"}}, {"data": {"k": "b2xk"}}, secret="values")
+    assert changed == [{"path": "data.k", "live": "（已隐藏）", "desired": "（已隐藏）"}]
+    assert field_diff({"data": {"k": "KioqKg=="}}, {"data": {"k": "b2xk"}}, secret="keys") == []
+
+
 def test_spec_validation_against_namespace_policy():
     strict = {"name": "x", "policy": {"service_types": ["ClusterIP"], "hpa_enabled": False, "max_replicas": 3}}
     with pytest.raises(ValueError, match="NodePort"):

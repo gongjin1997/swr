@@ -74,6 +74,15 @@ const neverDeployed = computed(() => !service.value?.deployed_revision_id)
 const canAdopt = computed(() => managed.value && neverDeployed.value && !!runtime.value?.found && can('service.deploy'))
 const restartsTone = computed(() => ((summary.value?.restarts ?? 0) > 0 ? 'warning' : ''))
 const changeText = (change: string) => CONFIG_CHANGE_TEXT[change] ?? change
+/** 镜像名（组织/仓库:标签），按 digest 固定的镜像不显示 digest。 */
+const imageName = (image?: string) => (image ? shortImage(image.split('@')[0]) : '-')
+/** 正在运行的 digest：多个 Pod 运行着不同版本时都列出（滚动中）。 */
+function imageDigest(value?: { image: string; running_images: string[] }): string {
+  if (!value) return ''
+  const digests = value.running_images.map((i) => shortDigest(i)).filter((d) => d.startsWith('sha256:'))
+  if (digests.length) return [...new Set(digests)].join('、')
+  return value.image.includes('@') ? shortDigest(value.image) : ''
+}
 const scopeText = (scope?: string) => (scope ? CONFIG_SCOPE_TEXT[scope as keyof typeof CONFIG_SCOPE_TEXT] ?? scope : '')
 const kindText = (kind: string) => CONFIG_KIND_TEXT[kind as keyof typeof CONFIG_KIND_TEXT] ?? kind
 
@@ -278,10 +287,10 @@ onMounted(load)
           <b class="num" :class="restartsTone && 'tone-warning'">{{ summary?.restarts ?? '-' }}</b>
           <span class="hint">{{ summary ? `${summary.pods} 个 Pod · ${summary.warning_events} 条警告事件` : '' }}</span>
         </div>
-        <div class="card wide">
+        <div class="card">
           <span class="label">当前镜像</span>
-          <b class="mono break-word">{{ shortImage(summary?.image) || '-' }}</b>
-          <span class="hint mono">{{ summary?.running_images.length ? summary.running_images.map((i) => shortDigest(i)).join('、') : '' }}</span>
+          <b class="mono ellipsis" :title="summary?.image">{{ imageName(summary?.image) }}</b>
+          <span class="hint mono ellipsis" :title="summary?.running_images.join('\n')">{{ imageDigest(summary) }}</span>
         </div>
         <div class="card">
           <span class="label">最近一次成功发布</span>
@@ -453,9 +462,11 @@ onMounted(load)
 
 <style scoped>
 .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1280px) { .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 767px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; background: var(--hi-bg-card); border: 1px solid var(--hi-border); border-radius: 10px; min-width: 0; }
-.card.wide { grid-column: span 2; }
 .card .label { font-size: 12px; color: var(--hi-text-3); }
 .card b { font-size: 18px; font-weight: 650; }
 .card b.mono { font-size: 14px; }
@@ -467,5 +478,4 @@ onMounted(load)
 .tab-title + .hint { margin-top: -4px; }
 .secret { margin-right: 8px; }
 .editor-mode { margin-bottom: 14px; }
-@media (max-width: 767px) { .card.wide { grid-column: auto; } }
 </style>

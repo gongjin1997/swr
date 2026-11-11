@@ -275,3 +275,41 @@ def test_import_apply_then_adopt_takes_over_live_objects(imported):
                         json={"source": "yaml", "yaml": document, "project_id": project["id"]}).json()
     assert {s["deployment"]: s["action"] for s in again["services"]} == {
         "billing-api-app": "skip", "order-api-app": "skip", "stock-api-app": "create", "report-api-app": "unsupported"}
+
+
+def test_import_without_ingress_permission_keeps_live_ingress_unmanaged(imported):
+    from swr_builder.security import hash_password
+
+    client, kube, namespace, project = imported["client"], imported["kube"], imported["namespace"], imported["project"]
+    client.put(f"/api/namespaces/{namespace['id']}", json={"tier": "test", "policy": OPEN_POLICY})
+    store = imported["app"].state.store
+    owner = store.create_user(username="importer", password_hash=hash_password("UserPass123"), role="member", enabled=1,
+                              must_change_password=0)
+    store.create_binding("user", owner["id"], "namespace_owner", "namespace", namespace["id"], None)
+    store.create_binding("user", owner["id"], "project_admin", "project", project["id"], None)
+    importer = TestClient(imported["app"], headers=HEAD)
+    assert login(importer, "importer", "UserPass123").status_code == 200
+    document = to_yaml(export())
+    report = importer.post(f"/api/environments/{namespace['id']}/import/analyze",
+                           json={"source": "yaml", "yaml": document, "project_id": project["id"]}).json()
+    assert not report["permissions"]["certificate_manage"] and "Ingress 暂不由平台托管" in report["warnings"][0]
+    result = importer.post(f"/api/environments/{namespace['id']}/import/apply", json={
+        "source": "yaml", "yaml": document, "project_id": project["id"], "save_profile": True, "ingress": "create",
+        "save_config": True, "use_certificates": True, "services": [{"deployment": "order-api-app", "create_app": True}]}).json()
+    assert result["ingress_profile"] is None and any("certificate.manage" in e for e in result["errors"])
+    assert any("暂不托管 Ingress" in n for n in result["notes"])
+    service_id = result["services"][0]["service_id"]
+    assert client.get(f"/api/services/{service_id}").json()["spec"]["ingress"]["enabled"] is False
+    for obj in export():
+        if obj["kind"] not in ("ReplicaSet", "ServiceAccount", "Pod"):
+            kube.put(copy.deepcopy(obj))
+    response = importer.post(f"/api/services/{service_id}/adopt", json={}, headers={"Idempotency-Key": "adopt-without-ingress"})
+    assert response.status_code == 202, response.text
+    for _ in range(300):
+        record = client.get(f"/api/deployments/{response.json()['id']}").json()
+        if record["status"] in ("success", "failed", "unknown"):
+            break
+        time.sleep(0.03)
+    assert record["status"] == "success", record
+    live = kube.get("ingresses", "order-api-ingress", NS)
+    assert live and live["metadata"]["annotations"]["kubernetes.io/elb.tls-certificate-ids"] == "cert-a"

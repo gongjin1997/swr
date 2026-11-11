@@ -137,12 +137,12 @@ const ingressPortOptions = computed(() => spec.value.service.ports.map((p) => p.
       <h4>健康检查 <span class="hint">启动 6 秒 × 30 次、就绪每 15 秒、存活每 30 秒，超时 5 秒</span></h4>
       <div class="form-grid">
         <el-form-item label="方式">
-          <el-radio-group v-model="spec.probe.type">
+          <el-radio-group v-model="spec.probe.type" size="small">
             <el-radio-button v-for="[value, label] in PROBE_TYPES" :key="value" :value="value">{{ label }}</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="spec.probe.type === 'http'" label="协议">
-          <el-radio-group v-model="spec.probe.scheme"><el-radio-button value="HTTP">HTTP</el-radio-button><el-radio-button value="HTTPS">HTTPS</el-radio-button></el-radio-group>
+          <el-radio-group v-model="spec.probe.scheme" size="small"><el-radio-button value="HTTP">HTTP</el-radio-button><el-radio-button value="HTTPS">HTTPS</el-radio-button></el-radio-group>
         </el-form-item>
         <el-form-item v-if="spec.probe.type === 'http'" label="路径"><el-input v-model="spec.probe.path" /></el-form-item>
         <el-form-item v-if="spec.probe.type !== 'none'" label="端口">
@@ -200,7 +200,7 @@ const ingressPortOptions = computed(() => spec.value.service.ports.map((p) => p.
           </el-select>
         </el-form-item>
         <el-form-item label="路径匹配方式（CCE）">
-          <el-select v-model="spec.ingress.url_match_mode">
+          <el-select v-model="spec.ingress.url_match_mode" placeholder="使用入口默认值">
             <el-option v-for="[value, label] in URL_MODES" :key="value" :label="label" :value="value" />
           </el-select>
         </el-form-item>

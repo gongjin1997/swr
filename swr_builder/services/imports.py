@@ -244,6 +244,11 @@ def _report(context: _Context, analysis: Dict[str, Any], load_warnings: List[str
         current = _plain_entries(store, context.ctx.box, existing["entries"], kind == "secret_env") if existing else {}
         env_conflicts[kind] = sorted(k for k, v in analysis[kind].items() if k in current and current[k] != v)
     supported = [r for r in analysis["services"] if r["supported"]]
+    warnings = load_warnings + analysis["warnings"]
+    if ingress and not reuse and not (context.profile_row or {}).get("ingress_profile_id") \
+            and not context.me.can("certificate.manage"):
+        warnings.insert(0, "导入的服务使用了 Ingress，但环境没有负载均衡入口，当前账号也不能新建；"
+                           "导入后 Ingress 暂不由平台托管（集群中的 Ingress 保持不变），可以请证书管理员创建入口后再启用")
     return {
         "namespace_id": namespace["id"], "namespace_name": namespace["name"], "project_id": context.project_id,
         "source_namespace": analysis["source_namespace"], "counts": analysis["counts"], "ignored": analysis["ignored"],
@@ -257,7 +262,7 @@ def _report(context: _Context, analysis: Dict[str, Any], load_warnings: List[str
         "secret_env": {"keys": sorted(analysis["secret_env"]), "additions": sorted(env_additions["secret_env"]),
                        "conflicts": env_conflicts["secret_env"], "existing": bool(context.env_set("secret_env"))},
         "files": files, "services": services, "unused": analysis["unused"],
-        "warnings": load_warnings + analysis["warnings"], "blockers": _policy_problems(context, supported),
+        "warnings": warnings, "blockers": _policy_problems(context, supported),
         "permissions": {"environment_config": context.me.can_namespace(namespace["id"], "environment.config"),
                         "service_create": context.me.can_namespace(namespace["id"], "service.create"),
                         "certificate_manage": context.me.can("certificate.manage"),
@@ -449,6 +454,12 @@ async def apply(ctx, me: Principal, namespace_id: int, data: Any) -> Dict[str, A
                     result["errors"].append(f"保存配置 {entry['name']} 失败：{exc}")
             context = _Context(ctx, me, namespace, project_id)
 
+    # 环境最终有没有负载均衡入口：没有时 Ingress 暂不由平台托管（线上的 Ingress 保持不变），否则服务无法下发
+    ingress_ready = bool(ingress_id) if result["profile"] else bool(report["ingress"]["current_id"])
+    if not ingress_ready and any(r["spec"]["ingress"]["enabled"] for r in rows.values()):
+        result["notes"].append("环境没有负载均衡入口，导入的服务暂不托管 Ingress（集群中的 Ingress 保持不变）；"
+                               "设置负载均衡入口后，在服务配置中启用 Ingress 并发布即可由平台接管")
+
     # 应用与服务
     env_layers = {kind: _env_plan(context, kind, {})[0] for kind in ("env", "secret_env")}
     for selection in selections:
@@ -464,6 +475,8 @@ async def apply(ctx, me: Principal, namespace_id: int, data: Any) -> Dict[str, A
             if existing and catalog.mode_of(existing) == "managed":
                 outcome.update(status="skipped", message="已是托管服务", service_id=existing["id"])
                 continue
+            if not ingress_ready and row["spec"]["ingress"]["enabled"]:
+                row = dict(row, spec=dict(row["spec"], ingress=dict(row["spec"]["ingress"], enabled=False)))
             plan = _service_plan(context, row, env_layers)
             config = {"env": _entries(plan["config"]["env"], secret=False),
                       "secret_env": _entries(plan["config"]["secret_env"], secret=True),

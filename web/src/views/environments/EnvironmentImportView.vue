@@ -66,7 +66,8 @@ const scopeText = (scope: string) => CONFIG_SCOPE_TEXT[scope as keyof typeof CON
 
 async function load() {
   try {
-    const [detail, list] = await Promise.all([environmentApi.get(props.id), projectApi.list(), platform.loadApps()])
+    const [detail, list] = await Promise.all([environmentApi.get(props.id),
+      projectApi.list().catch(() => ({ items: [] as Project[], total: 0 })), platform.loadApps().catch(() => [])])
     env.value = detail
     projects.value = list.items
     if (!source.projectId || !projectOptions.value.some((p) => p.id === source.projectId)) source.projectId = projectOptions.value[0]?.id ?? null
@@ -174,7 +175,9 @@ onMounted(load)
               <el-select v-model="source.projectId" placeholder="已分配该环境的项目">
                 <el-option v-for="p in projectOptions" :key="p.id" :label="p.name" :value="p.id" />
               </el-select>
-              <div v-if="!projectOptions.length" class="hint">该环境还没有分配给任何项目，请先在项目中分配环境。</div>
+              <div v-if="!projectOptions.length" class="hint">
+                {{ env?.project_ids.length ? '你没有该环境所属项目的查看权限；导入需要选择服务所属的项目（以及项目的应用权限）。'
+                  : '该环境还没有分配给任何项目，请先在项目中分配环境。' }}</div>
             </el-form-item>
             <el-form-item label="来源">
               <el-radio-group v-model="source.kind">
@@ -305,7 +308,9 @@ onMounted(load)
                 <el-radio value="create" :disabled="!report.permissions.certificate_manage">新建负载均衡入口</el-radio>
                 <el-radio value="none">不设置</el-radio>
               </el-radio-group>
-              <div v-if="!report.permissions.certificate_manage" class="hint">新建负载均衡入口需要证书管理权限。</div>
+              <el-alert v-if="!report.permissions.certificate_manage && !report.ingress.reuse && !report.ingress.current_id"
+                type="warning" :closable="false" show-icon class="section-gap"
+                title="新建负载均衡入口需要证书管理权限。不设置入口时，导入的服务暂不托管 Ingress，集群中的 Ingress 保持不变。" />
             </template>
             <p v-else class="hint">没有 Ingress。</p>
           </el-card>

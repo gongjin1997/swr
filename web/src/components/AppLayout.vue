@@ -33,8 +33,8 @@ const groups = [
   ] },
 ]
 const OWNER: Record<string, string> = {
-  'project-detail': 'projects', 'service-detail': 'services', 'environment-detail': 'environments', users: 'access',
-  roles: 'access', bindings: 'access',
+  'project-detail': 'projects', 'service-detail': 'services', 'service-create': 'services', 'environment-detail': 'environments',
+  'environment-import': 'environments', users: 'access', roles: 'access', bindings: 'access',
 }
 
 const menu = computed(() => session.mustChangePassword ? [] : groups.map((group) => ({

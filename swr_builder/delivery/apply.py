@@ -74,7 +74,9 @@ def field_diff(desired: Any, live: Any, path: str = "", secret: str = "") -> Lis
     if isinstance(desired, list):
         if not isinstance(live, list):
             return [{"path": path, "live": _short(live), "desired": _short(desired)}]
-        key = next((k for k in LIST_KEYS if desired and all(isinstance(i, dict) and k in i for i in desired)), None)
+        # 按能唯一区分各项的字段配对（同一个卷以 subPath 挂载多次时 name 重复，要用 mountPath）
+        key = next((k for k in LIST_KEYS if desired and all(isinstance(i, dict) and k in i for i in desired)
+                    and len({json.dumps(i[k], sort_keys=True) for i in desired}) == len(desired)), None)
         if key is None:
             return [] if desired == live else [{"path": path, "live": _short(live), "desired": _short(desired)}]
         index = {item.get(key): item for item in live if isinstance(item, dict)}
