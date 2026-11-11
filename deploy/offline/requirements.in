@@ -1,0 +1,29 @@
+# ARM64 离线运行依赖；只在联网构建机解析，交付物使用带 SHA256 的 requirements.lock。
+-r ../../requirements.txt
+# YAML / JSON / 模板 / 配置：预装后续资源清单与配置功能常用库。
+ruamel.yaml
+jsonschema
+Jinja2
+python-dotenv
+pydantic-settings
+tomli
+tomli-w
+orjson
+# HTTP、认证、重试、SSH、Kubernetes 与 HCS 服务 SDK。
+PyJWT[crypto]
+tenacity
+paramiko
+kubernetes
+huaweicloudsdkiam==3.1.219
+huaweicloudsdkswr==3.1.219
+huaweicloudsdkcce==3.1.219
+huaweicloudsdkecs==3.1.219
+# 时区、计划任务、校验及后续数据库迁移。
+tzdata
+python-dateutil
+croniter
+email-validator
+SQLAlchemy
+alembic
+websockets
+rich

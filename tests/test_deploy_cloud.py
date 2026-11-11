@@ -174,23 +174,58 @@ def test_cluster_namespace_adoption_review_and_scoped_visibility(tmp_path):
         assert c.get('/api/clusters').status_code==403
 
 
-def test_service_revisions_secrets_idempotent_deployment_and_approval(tmp_path):
+@pytest.mark.parametrize('kube_auth', ['sa_token', 'client_cert'])
+@pytest.mark.parametrize('tier', ['prod', 'dev'])
+def test_service_revisions_secrets_idempotent_deployment_and_approval(tmp_path,kube_auth,tier):
+    deployment_state={'image':'old','generation':1,'annotations':{},'uid':'payments-uid'}
+    seen_auth=[]
     def handler(request):
         if request.url.path.endswith('/version'):
             return httpx.Response(200,json={'gitVersion':'v1.29.1'})
-        if request.url.path=='/api/v1/namespaces/prod':
+        if request.url.path in ('/api/v1/namespaces/prod','/api/v1/namespaces/dev'):
             return httpx.Response(200,json={'metadata':{'name':'prod'}})
         if request.url.path.endswith('/selfsubjectaccessreviews'):
             return httpx.Response(201,json={'status':{'allowed':True}})
+        if request.url.path.endswith('/deployments/payments'):
+            seen_auth.append(request.headers.get('authorization'))
+            if kube_auth=='sa_token':
+                assert request.headers.get('authorization')=='Bearer cluster-token'
+            else:
+                assert 'authorization' not in request.headers
+            if request.method=='PATCH':
+                body=json.loads(request.content)
+                deployment_state['image']=body['spec']['template']['spec']['containers'][0]['image']
+                deployment_state['annotations']=body['spec']['template']['metadata']['annotations']
+                deployment_state['generation']=2
+            replicas=1
+            return httpx.Response(200,json={'metadata':{'uid':deployment_state['uid'],
+                'generation':deployment_state['generation']},'spec':{'replicas':replicas,
+                'template':{'metadata':{'annotations':deployment_state['annotations']},
+                    'spec':{'containers':[{'name':'api','image':deployment_state['image']}]}}},
+                'status':{'observedGeneration':deployment_state['generation'],'updatedReplicas':replicas,
+                    'availableReplicas':replicas,'replicas':replicas}})
         return httpx.Response(404)
     s,app=setup_app(tmp_path,handler)
     with TestClient(app,headers=HEAD) as c:
         login(c)
         project=c.post('/api/projects',json={'slug':'payments','name':'Payments','registry_orgs':[{'namespace':'team','base_prefixes':['api']}]}).json()
         app_row=app.state.store.create_app({'name':'payments-api','organization':'team','repository':'api/payments'},project['id'])
-        cluster=c.post('/api/clusters',json={'name':'prod-cluster','server':'https://kube.example',
-            'auth_type':'sa_token','credential':{'token':'cluster-token'}}).json()
-        namespace=c.post('/api/namespaces',json={'name':'prod','cluster_id':cluster['id'],'tier':'prod','policy':{
+        if kube_auth=='sa_token':
+            cluster_data={'name':'prod-cluster','server':'https://kube.example',
+                'auth_type':'sa_token','credential':{'token':'cluster-token'}}
+        else:
+            import base64,yaml
+            from tests.test_kubeconfig import _client_certificate_data
+            cert,key=_client_certificate_data()
+            cluster_data={'name':'prod-cluster','config':yaml.safe_dump({
+                'apiVersion':'v1','kind':'Config','current-context':'prod',
+                'clusters':[{'name':'cluster','cluster':{'server':'https://kube.example'}}],
+                'users':[{'name':'deployer','user':{'client-certificate-data':cert,'client-key-data':key}}],
+                'contexts':[{'name':'prod','context':{'cluster':'cluster','user':'deployer'}}]})}
+        cluster=c.post('/api/clusters',json=cluster_data)
+        assert cluster.status_code==201,cluster.text
+        cluster=cluster.json()
+        namespace=c.post('/api/namespaces',json={'name':'prod','cluster_id':cluster['id'],'tier':tier,'policy':{
             'require_approval':True,'min_approvals':1,'allowed_registry_orgs':['team']}}).json()
         c.put(f"/api/projects/{project['id']}/namespaces/{namespace['id']}",json={})
         service=c.post('/api/services',json={'name':'payments','project_id':project['id'],'namespace_id':namespace['id'],
@@ -217,12 +252,12 @@ def test_service_revisions_secrets_idempotent_deployment_and_approval(tmp_path):
         headers={'Idempotency-Key':'payments-deploy-0001'}
         policy=app.state.store.get_namespace(namespace['id'])['policy']
         policy['freeze']={'enabled':True,'until':'2099-01-01T00:00:00Z','reason':'maintenance'}
-        app.state.store.update_namespace(namespace['id'],'prod',policy)
+        app.state.store.update_namespace(namespace['id'],tier,policy)
         blocked=c.post(f"/api/services/{service['id']}/deployments",
             headers={'Idempotency-Key':'payments-deploy-frozen'},json={'job_id':job,'revision_id':next_revision})
         assert blocked.status_code==403 and 'freeze' in blocked.json()['detail']
         policy['freeze']={'enabled':False,'until':None,'reason':''}
-        app.state.store.update_namespace(namespace['id'],'prod',policy)
+        app.state.store.update_namespace(namespace['id'],tier,policy)
         response=c.post(f"/api/services/{service['id']}/deployments",headers=headers,json={'job_id':job,'revision_id':next_revision})
         assert response.status_code==202,response.text
         deployment=response.json()
@@ -237,12 +272,27 @@ def test_service_revisions_secrets_idempotent_deployment_and_approval(tmp_path):
         assert mismatch_remark.status_code==409
         assert c.get('/api/auth/me').json()['username']=='deployer1'
         assert str(app.state.store.get_deployment(deployment['id'])['created_by'])==str(submitter['id'])
-        assert c.post(f"/api/deployments/{deployment['id']}/approve",json={'comment':'self'}).status_code==403
+        assert c.post(f"/api/deployments/{deployment['id']}/approve",json={'comment':'self'}).status_code==404
+        approver=app.state.store.create_user(username='approver1',role='viewer',enabled=1,must_change_password=0,
+            password_hash=hash_password('Approver123'))
         c.cookies.clear();login(c)
+        grant=c.post('/api/bindings',json={'subject_type':'user','subject_id':approver['id'],
+            'role':'deployment_approver','scope_type':'global','scope_id':0})
+        assert grant.status_code==201,grant.text
+        c.cookies.clear();login(c,'approver1','Approver123')
         approved=c.post(f"/api/deployments/{deployment['id']}/approve",json={'comment':'reviewed'})
+        if tier=='prod':
+            assert approved.status_code==404
+            c.cookies.clear();login(c)
+            approved=c.post(f"/api/deployments/{deployment['id']}/approve",json={'comment':'platform administrator reviewed'})
         assert approved.status_code==200,approved.text
         assert approved.json()['status']=='queued'
         assert len(approved.json()['approvals'])==1
+        c.cookies.clear();login(c)
+        completed=wait_deploy(c,deployment['id'])
+        assert completed['status']=='success',completed
+        assert deployment_state['image']=='registry.example/team/api/payments@sha256:'+'cd'*32
+        assert len(seen_auth)>=2
 
 
 @pytest.mark.parametrize('freeze_during_read',[False,True])

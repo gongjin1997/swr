@@ -7,7 +7,7 @@ import logging
 import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 from .cloud.hcs import HCSProfile
@@ -25,6 +25,8 @@ class ServerConfig:
     secure_cookie: bool = False
     # 兼容 1.0 的配置：{用户名: 密码}，首次启动时导入为管理员账号
     users: Dict[str, str] = field(default_factory=dict)
+    # 是否开放 /docs、/redoc、/openapi.json（需登录）；默认关闭
+    api_docs: bool = False
 
 
 @dataclass
@@ -36,8 +38,8 @@ class RegistryConfig:
     ak: str = ""               # 可选：只有 AK/SK 时，平台按 SWR 规则自动计算登录密钥
     sk: str = ""
     project: str = ""          # 可选：AK/SK 模式下的区域项目名，如 ndc302-region-1_his_beta
-    insecure: bool = False     # 平台调用仓库 API 时跳过 TLS 证书校验
-    ca_file: str = ""          # 自签名证书的 CA 文件路径
+    insecure: bool = False     # 仅平台 Registry API；Docker daemon TLS 另行配置
+    ca_file: str = ""          # Registry HTTP API 的 CA；Docker daemon 单独配置
     timeout: float = 30.0
 
     @property
@@ -91,7 +93,7 @@ class SecurityConfig:
 @dataclass
 class GeneralConfig:
     site_name: str = "SWR 镜像构建平台"
-    deploy_enabled: bool = True        # 部署模块（预览）
+    deploy_enabled: bool = True
 
 
 @dataclass

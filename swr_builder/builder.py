@@ -85,7 +85,8 @@ class BuildManager:
         self.jobs_dir = self.data_dir / "jobs"
         self.docker_config = self.data_dir / "docker-config"
         self._sem: Optional[asyncio.Semaphore] = None
-        self._repo_locks: Dict[str, asyncio.Lock] = {}
+        # 仓库路径 → (锁, 使用该锁的任务数)；计数归零时删除，避免字典无限增长
+        self._repo_locks: Dict[str, Tuple[asyncio.Lock, int]] = {}
         self._procs: Dict[int, Any] = {}
         self._tasks: Dict[int, Any] = {}
         self._cancelled: Set[int] = set()
@@ -100,7 +101,7 @@ class BuildManager:
             logger.warning("有 %s 个未完成的任务因平台重启被标记为失败", count)
 
     def resize(self, n: int) -> None:
-        if self._tasks:
+        if self.has_running_jobs():
             raise ValueError("有构建任务时不能调整并发数")
         self._sem = asyncio.Semaphore(max(1, n))
 
@@ -128,6 +129,11 @@ class BuildManager:
         if user and password:
             # 平台使用独立的 docker 配置目录，不影响构建机上其他用户的登录状态
             env["DOCKER_CONFIG"] = str(self.docker_config)
+        if self.settings.registry.insecure or self.settings.registry.ca_file:
+            # BuildKit normally obtains OAuth tokens in the client process, which
+            # does not inherit daemon registry TLS settings. Delegate token auth
+            # to the configured builder so its registry trust policy also applies.
+            env["BUILDKIT_NO_CLIENT_TOKEN"] = "1"
         return env
 
     def _secrets(self) -> List[str]:
@@ -159,6 +165,24 @@ class BuildManager:
             task.cancel()
         return True
 
+    def has_running_jobs(self) -> bool:
+        """是否有已提交但未结束的构建任务（排队中或构建中）。"""
+        return bool(self._tasks)
+
+    def _acquire_repo_lock(self, key: str) -> asyncio.Lock:
+        lock, users = self._repo_locks.get(key, (None, 0))
+        if lock is None:
+            lock = asyncio.Lock()
+        self._repo_locks[key] = (lock, users + 1)
+        return lock
+
+    def _release_repo_lock(self, key: str) -> None:
+        lock, users = self._repo_locks[key]
+        if users <= 1:
+            del self._repo_locks[key]
+        else:
+            self._repo_locks[key] = (lock, users - 1)
+
     def _check_cancel(self, job_id: int) -> None:
         if job_id in self._cancelled:
             raise JobCancelled()
@@ -171,17 +195,21 @@ class BuildManager:
         try:
             assert self._sem is not None, "BuildManager.start() 未调用"
             log.info(f"任务 #{job_id} 已提交，操作人：{job.get('operator') or '-'}")
-            if self._sem.locked():
-                log.info("构建资源已满，排队等待…")
-            async with self._sem:
-                app = job["app_snapshot"]
-                repo_key = repo_path_of(self.settings, app)
-                lock = self._repo_locks.setdefault(repo_key, asyncio.Lock())
+            app = job["app_snapshot"]
+            repo_key = repo_path_of(self.settings, app)
+            # 先排同仓库的队，再占全局并发名额：同一仓库排队的任务不会占着名额阻塞其他仓库
+            lock = self._acquire_repo_lock(repo_key)
+            try:
                 if lock.locked():
                     log.info(f"{repo_key} 有其他构建正在进行，等待其完成后再计算版本…")
                 async with lock:
-                    self._check_cancel(job_id)
-                    await self._execute(job_id, job, app, log)
+                    if self._sem.locked():
+                        log.info("构建资源已满，排队等待…")
+                    async with self._sem:
+                        self._check_cancel(job_id)
+                        await self._execute(job_id, job, app, log)
+            finally:
+                self._release_repo_lock(repo_key)
         except (JobCancelled, asyncio.CancelledError):
             log.warn("任务已取消")
             self.store.update_job(job_id, status="cancelled", finished_at=utcnow())
@@ -242,6 +270,8 @@ class BuildManager:
 
         self.store.update_job(job_id, step="build")
         log.step(3, total, "构建镜像")
+        if self.settings.registry.insecure or self.settings.registry.ca_file:
+            log.info("仓库认证令牌由构建引擎申请，沿用构建引擎的仓库证书配置")
         args = [docker, "build", "-f", str(context / "Dockerfile"), "-t", plan.image]
         if app.get("platform"):
             args += ["--platform", app["platform"]]
@@ -257,8 +287,13 @@ class BuildManager:
             args += ["--label", f"{key}={value}"]
         args += list(self.settings.build.extra_build_args)
         args.append(str(context))
-        code, _ = await self._run_cmd(job_id, args, log, self.settings.build.build_timeout)
+        code, output = await self._run_cmd(job_id, args, log, self.settings.build.build_timeout)
         if code != 0:
+            if "x509:" in output.lower() or "tls: failed to verify certificate" in output.lower():
+                raise BuildError("基础镜像仓库或认证服务的 TLS 证书校验失败。已将令牌请求交由构建引擎；"
+                                 "请检查当前 builder 的仓库配置：Docker driver 使用 daemon.json 的 insecure-registries/CA，"
+                                 "独立 BuildKit 使用 buildkitd.toml 的 registry insecure/ca。"
+                                 "证书缺少匹配域名的 SAN 时，仅上传 CA 不能修复域名校验。")
             raise BuildError(f"docker build 失败（退出码 {code}），请查看日志")
         await self._verify_arch(job_id, plan, log)
 
@@ -292,8 +327,17 @@ class BuildManager:
             log.warn("没有配置 SWR 用户名/密钥，跳过 docker login（使用构建机上已有的登录状态）")
             return
         args = [self.settings.build.docker_bin, "login", self.settings.registry.host, "-u", user, "--password-stdin"]
-        code, _ = await self._run_cmd(job_id, args, log, self.settings.build.login_timeout, stdin=password + "\n")
+        code, output = await self._run_cmd(job_id, args, log, self.settings.build.login_timeout, stdin=password + "\n")
         if code != 0:
+            if "x509:" in output.lower() or "certificate is not valid for any names" in output.lower():
+                if self.settings.registry.insecure:
+                    raise BuildError(
+                        f"宿主机 Docker daemon 不信任仓库 {self.settings.registry.host} 的证书。"
+                        "系统设置的跳过 TLS 仅作用于平台 Registry API；请在 Docker daemon 的 daemon.json "
+                        "将该仓库加入 insecure-registries 并重启 Docker，或修复仓库证书 SAN/信任链。")
+                raise BuildError(
+                    f"宿主机 Docker daemon 无法验证仓库 {self.settings.registry.host} 的 TLS 证书；"
+                    "请修复证书 SAN/信任链，或在仅限测试环境时配置 daemon insecure-registries。")
             raise BuildError("docker login 失败：请检查 SWR 用户名和密钥（需要长期有效登录密钥），"
                              "以及构建机能否访问仓库地址")
 

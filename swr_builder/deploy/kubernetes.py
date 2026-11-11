@@ -14,7 +14,7 @@ _DNS1123_SUBDOMAIN_RE = re.compile(
 
 
 class KubernetesDeployer(Deployer):
-    type, label = 'kubernetes', 'CCE / Kubernetes'
+    type, label = 'kubernetes', 'Kubernetes'
     description = '更新已存在的 Deployment 指定容器镜像，可等待滚动发布完成。不创建集群或资源；镜像拉取凭证需预先配置。'
     fields = [FieldSpec('api_server','API Server',required=True),FieldSpec('token','ServiceAccount Token','secret',True),
         FieldSpec('ca_cert','CA 证书 PEM','secret'),FieldSpec('insecure','跳过 TLS 校验','bool',False,False),

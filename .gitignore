@@ -4,3 +4,9 @@ __pycache__/
 config.yaml
 *.env
 .pytest_cache/
+web/node_modules/
+web/dist/
+swr_builder/webui/
+artifacts/
+.playwright-cli/
+output/

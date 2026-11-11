@@ -1,8 +1,10 @@
 import json
+import re
 from pathlib import Path
 import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from swr_builder.api import ROUTERS
 from swr_builder.main import AUTHENTICATED_ROUTE, PUBLIC_ROUTE, ROUTE_PERMISSIONS, create_app, route_permission
 from swr_builder.config import Settings
 from swr_builder.security import hash_password, verify_password, SecretBox
@@ -29,16 +31,25 @@ def add_user(c,name,role='viewer'):
 
 def test_api_routes_are_explicit_and_unknown_routes_fail_closed(setup):
     _,app,c=setup;login(c)
-    for route in app.routes:
-        if isinstance(route,APIRoute) and route.path.startswith('/api/'):
-            for method in route.methods:
-                assert (method,route.path) in ROUTE_PERMISSIONS
-                assert route_permission(app,route.path.replace('{id}','1').replace('{app_id}','1').replace('{job_id}','1'),method) is not None
+    for router in ROUTERS:
+        for route in router.routes:
+            if isinstance(route,APIRoute) and route.path.startswith('/api/'):
+                for method in route.methods:
+                    assert (method,route.path) in ROUTE_PERMISSIONS
+                    sample_path=re.sub(r'\{[^}]+\}','1',route.path)
+                    assert route_permission(app,sample_path,method)==ROUTE_PERMISSIONS[(method,route.path)]
     assert ROUTE_PERMISSIONS[('GET','/api/auth/me')]==AUTHENTICATED_ROUTE
     assert ROUTE_PERMISSIONS[('POST','/api/auth/login')]==PUBLIC_ROUTE
     assert route_permission(app,'/api/new-feature','GET') is None
     response=c.get('/api/new-feature')
     assert response.status_code==403 and '未配置权限' in response.json()['detail']
+
+
+def test_auth_config_is_public_without_a_session(setup):
+    _,_,c=setup
+    response=c.get('/api/auth/config')
+    assert response.status_code==200
+    assert response.json()['site_name']=='SWR 镜像构建平台'
 
 
 def test_project_membership_scopes_apps_jobs_and_registry_policy(setup):
@@ -53,7 +64,7 @@ def test_project_membership_scopes_apps_jobs_and_registry_policy(setup):
     assert c.delete('/api/projects/'+str(app.state.store.default_project_id())).status_code==409
     created=c.post('/api/apps',json={**payload,'project_id':project['id']})
     assert created.status_code==201,created.text
-    assert [row['id'] for row in c.get('/api/apps').json()]==[created.json()['id']]
+    assert [row['id'] for row in c.get('/api/apps').json()['items']]==[created.json()['id']]
     second=c.post('/api/projects',json={'slug':'team-blue','name':'Team Blue','registry_orgs':[
         {'namespace':'blue','base_prefixes':['worker']}]}).json()
     denied=c.post('/api/apps',json={'name':'blue-worker','organization':'blue','repository':'worker/api',
@@ -69,7 +80,7 @@ def test_project_membership_scopes_apps_jobs_and_registry_policy(setup):
     assert binding.status_code==201,binding.text
     login(c,'reddev','UserPass123')
     assert c.put('/api/account/password',json={'old_password':'UserPass123','new_password':'RedDev123'}).status_code==200
-    apps=c.get('/api/apps').json()
+    apps=c.get('/api/apps').json()['items']
     assert [row['id'] for row in apps]==[created.json()['id']]
     jobs=app.state.store
     red_job=jobs.create_job(app_id=created.json()['id'],app_name='red-api',project_id=project['id'],
@@ -228,7 +239,7 @@ def test_v1_migration_preserves_apps_and_jobs(tmp_path):
     bindings=store.all_bindings()
     assert any(b['subject_id']==1 and b['role']=='platform_admin' and b['scope_type']=='global' for b in bindings)
     assert any(b['subject_id']==2 and b['role']=='developer' and b['scope_id']==default_project for b in bindings)
-    assert [r[0] for r in sqlite3.connect(path).execute('SELECT version FROM schema_migrations ORDER BY version')]==[1,2,3,4,5]
+    assert [r[0] for r in sqlite3.connect(path).execute('SELECT version FROM schema_migrations ORDER BY version')]==[1,2,3,4,5,6,7]
     Store(path)
     assert len(store.list_projects())==1
 
@@ -248,12 +259,12 @@ def test_cluster_namespace_foreign_keys_and_repeat_migrations(tmp_path):
             db.execute('DELETE FROM clusters WHERE id=?',(cluster_id,))
     with store._db() as db:
         assert db.execute('PRAGMA foreign_key_check').fetchall()==[]
-        assert db.execute('SELECT count(*) FROM schema_migrations').fetchone()[0]==5
+        assert db.execute('SELECT count(*) FROM schema_migrations').fetchone()[0]==7
 
 def test_session_ownership_and_own_cancel(setup):
     _,app,c=setup;login(c)
     admin=app.state.store.get_user_by_name('admin')
-    admin_session=c.get('/api/account/sessions').json()[0]['id']
+    admin_session=c.get('/api/account/sessions').json()['items'][0]['id']
     u=app.state.store.create_user(username='devtest',role='developer',enabled=1,must_change_password=0,password_hash=hash_password('Developer123'))
     login(c,'devtest','Developer123')
     assert c.delete('/api/account/sessions/'+admin_session).status_code==404

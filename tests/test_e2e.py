@@ -92,6 +92,10 @@ def build(client, app_id, name="cnnc-coding-fin-1.0.0-SNAPSHOT.jar", content=b"j
 
 def test_info_and_registry(env):
     client = env["client"]
+    icon = client.get("/favicon.svg")
+    assert icon.status_code in (200, 204)
+    if icon.status_code == 200:
+        assert icon.headers["content-type"].startswith("image/svg+xml")
     info = client.get("/api/info").json()
     assert info["registry"]["configured"] is True
     assert client.post("/api/registry/test").json()["ok"] is True

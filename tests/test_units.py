@@ -1,9 +1,13 @@
+import asyncio
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from swr_builder.config import RegistryConfig  # noqa: E402
+from swr_builder.config import RegistryConfig, Settings  # noqa: E402
+from swr_builder.builder import BuildError, BuildManager  # noqa: E402
 from swr_builder.dockerfile import import_dockerfile  # noqa: E402
 from swr_builder.versioning import increment_tag, latest_by_version, next_tag  # noqa: E402
 
@@ -26,6 +30,28 @@ def test_aksk_login_key():
     user, key = cfg.credentials()
     assert user == "cn-north-4@AK123"
     assert len(key) == 64
+
+
+def test_docker_login_tls_failure_explains_daemon_setting():
+    settings = Settings()
+    settings.registry.address = "swr.example.com"
+    settings.registry.username = "registry-user"
+    settings.registry.password = "registry-password"
+    settings.registry.insecure = True
+    manager = object.__new__(BuildManager)
+    manager.settings = settings
+
+    async def fail_login(*_args, **_kwargs):
+        return 1, "tls: failed to verify certificate: x509: certificate is not valid for any names"
+
+    manager._run_cmd = fail_login
+
+    class Log:
+        def warn(self, _message):
+            raise AssertionError("configured credentials must invoke docker login")
+
+    with pytest.raises(BuildError, match="Docker daemon.*insecure-registries"):
+        asyncio.run(manager._docker_login(1, Log()))
 
 
 def test_import_dockerfile_crlf():

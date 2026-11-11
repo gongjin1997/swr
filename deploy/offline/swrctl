@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+IMAGE=$(cat "$ROOT/runtime-image")
+case "$IMAGE" in sha256:*) ;; *) echo 'runtime-image 格式错误' >&2; exit 1;; esac
+# 挂载路径与宿主机一致，控制器向宿主机 Docker 传入的路径才不会偏移。
+exec docker run --rm -i --platform linux/arm64 --network none \
+  --mount "type=bind,src=$ROOT,dst=$ROOT" \
+  --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
+  --entrypoint python "$IMAGE" "$ROOT/ops/manage.py" --root "$ROOT" "$@"
