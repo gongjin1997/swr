@@ -19,7 +19,7 @@ const creator = reactive({ visible: false, kind: 'files' as ConfigKind, name: ''
 const KINDS: ConfigKind[] = ['env', 'secret_env', 'files', 'secret_files']
 const SINGLETON: ConfigKind[] = ['env', 'secret_env']
 const DEFAULT_NAMES: Partial<Record<ConfigKind, string>> = {
-  files: 'production-deploy-config', secret_files: 'certificate-secret',
+  files: 'shared-config', secret_files: 'trust-store',
 }
 
 const canEdit = computed(() => {
@@ -95,7 +95,7 @@ defineExpose({ reload: load })
   <el-dialog v-model="creator.visible" :title="`新建${CONFIG_KIND_TEXT[creator.kind]}`" width="540px" :close-on-click-modal="false">
     <el-form label-position="top">
       <el-form-item label="名称（会作为 ConfigMap / Secret 的名称）">
-        <el-input v-model="creator.name" placeholder="小写字母、数字、-、.，例如 production-deploy-config" />
+        <el-input v-model="creator.name" placeholder="小写字母、数字、-、.，例如 shared-config" />
       </el-form-item>
       <el-form-item label="说明"><el-input v-model="creator.description" maxlength="300" /></el-form-item>
     </el-form>

@@ -74,8 +74,8 @@ const selectedIngress = computed(() => props.ingressProfiles.find((p) => p.id ==
         <el-switch v-model="profile.log.enabled" />
       </el-form-item>
       <template v-if="profile.log.enabled">
-        <el-form-item label="节点目录（hostPath）"><el-input v-model="profile.log.host_path" placeholder="/data01/log" /></el-form-item>
-        <el-form-item label="容器内路径"><el-input v-model="profile.log.mount_path" placeholder="/applog" /></el-form-item>
+        <el-form-item label="节点目录（hostPath）"><el-input v-model="profile.log.host_path" placeholder="/var/log/apps" /></el-form-item>
+        <el-form-item label="容器内路径"><el-input v-model="profile.log.mount_path" placeholder="/var/log/app" /></el-form-item>
         <el-form-item label="子目录表达式（subPathExpr）" class="wide">
           <el-input v-model="profile.log.sub_path_expr" placeholder="$(POD_NAMESPACE)/$(POD_NAME)" />
         </el-form-item>

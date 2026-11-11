@@ -56,17 +56,17 @@ def test_environment_profile_defaults_validation_and_edit_conflicts(env):
     assert detail["profile"]["naming"]["deployment"] == "{base}-app" and detail["profile"]["host"] == "{base}-app.{namespace}"
 
     elb = c.post("/api/ingress-profiles", json={"name": "SIT 共享 ELB", "spec": {
-        "elb_id": "3a57f337-0000-0000-0000-000000000000", "port": 443, "certificate_ids": ["4d60e90005a0475e899f19db620ffda9"]}})
+        "elb_id": "00000000-0000-4000-8000-0000000000e1", "port": 443, "certificate_ids": ["0000000000000000000000000000ce01"]}})
     assert elb.status_code == 201, elb.text
     elb = elb.json()
     saved = c.put(f"/api/environments/{sit}/profile", json={
         "base_version": 0, "ingress_profile_id": elb["id"],
-        "profile": {"scheduling": {"node_pool": "common-nodepool"}, "log": {"enabled": True, "host_path": "/data01/log",
-                                                                           "mount_path": "/applog"}}})
+        "profile": {"scheduling": {"node_pool": "pool-a"}, "log": {"enabled": True, "host_path": "/var/log/apps",
+                                                                           "mount_path": "/var/log/app"}}})
     assert saved.status_code == 200, saved.text
     saved = saved.json()
     assert saved["profile_version"] == 1 and saved["ingress_profile"]["name"] == "SIT 共享 ELB"
-    assert saved["profile"]["scheduling"] == {"node_pool_label": "cce.cloud.com/cce-nodepool", "node_pool": "common-nodepool",
+    assert saved["profile"]["scheduling"] == {"node_pool_label": "cce.cloud.com/cce-nodepool", "node_pool": "pool-a",
                                               "anti_affinity": True, "zone_spread": True}
     stale = c.put(f"/api/environments/{sit}/profile", json={"base_version": 0, "profile": {}})
     assert stale.status_code == 409 and stale.json()["code"] == "REVISION_CONFLICT"
@@ -131,23 +131,23 @@ def test_layered_env_config_merge_locks_secrets_and_permissions(env):
 
 def test_environment_compare_and_properties_files(env):
     c, project, sit, uat = env["client"], env["project"], env["sit"], env["uat"]
-    common = "# 公共配置\nIAM_ENDPOINT=https://iam.example\nGATEWAY = https://gw.sit.example\nTIMEOUT: 30\n"
+    common = "# 公共配置\nAUTH_ENDPOINT=https://iam.example\nGATEWAY = https://gw.sit.example\nTIMEOUT: 30\n"
     create_set(c, "environment", sit, "env", [{"key": "JAVA_OPTS", "value": "-Xmx2g"}, {"key": "ENV", "value": "sit"}])
     create_set(c, "environment", uat, "env", [{"key": "JAVA_OPTS", "value": "-Xmx2g"}, {"key": "ENV", "value": "uat"},
                                               {"key": "EXTRA", "value": "1"}])
     for namespace, gateway in ((sit, "https://gw.sit.example"), (uat, "https://gw.uat.example")):
         files = create_set(c, "environment", namespace, "files", [
             {"key": "application.properties", "value": "spring.profiles.include=iac,global\n"},
-            {"key": "application-global.properties", "value": common.replace("https://gw.sit.example", gateway)}],
-            name="production-deploy-config")
+            {"key": "shared.properties", "value": common.replace("https://gw.sit.example", gateway)}],
+            name="shared-config")
         assert files.status_code == 201, files.text
         assert files.json()["entries"][1]["format"] == "properties"
     result = c.get("/api/environments/compare", params={"left": sit, "right": uat, "project_id": project}).json()
     env_rows = {r["key"]: r["status"] for r in result["env"]}
     assert env_rows == {"JAVA_OPTS": "same", "ENV": "different", "EXTRA": "right_only"}
     files = result["files"][0]
-    assert files["name"] == "production-deploy-config" and files["status"] == "different"
-    global_file = next(f for f in files["files"] if f["key"] == "application-global.properties")
+    assert files["name"] == "shared-config" and files["status"] == "different"
+    global_file = next(f for f in files["files"] if f["key"] == "shared.properties")
     assert global_file["properties"] == [{"key": "GATEWAY", "left": "https://gw.sit.example",
                                           "right": "https://gw.uat.example", "status": "different"}]
 
@@ -175,7 +175,7 @@ def test_key_files_jks_and_references_from_secret_files(env):
 
     bundle = create_set(c, "environment", sit, "secret_files", [
         {"key": "kafka.client.truststore.jks", "certificate_id": jks["id"]},
-        {"key": "1.key", "certificate_id": root_key["id"]}], name="certificate-secret")
+        {"key": "1.key", "certificate_id": root_key["id"]}], name="trust-store")
     assert bundle.status_code == 201, bundle.text
     bundle = bundle.json()
     assert bundle["entries"][0]["certificate_name"] == "Kafka 信任库" and bundle["entries"][0]["certificate_version"] == 1
@@ -183,7 +183,7 @@ def test_key_files_jks_and_references_from_secret_files(env):
     assert env_ref.status_code == 400  # 二进制文件不能作为环境变量
 
     detail = c.get(f"/api/certificates/{jks['id']}").json()
-    assert detail["used_by"] == 1 and detail["usage"][0]["name"] == "certificate-secret"
+    assert detail["used_by"] == 1 and detail["usage"][0]["name"] == "trust-store"
     assert c.delete(f"/api/certificates/{jks['id']}").status_code == 409
 
     rotated = c.post(f"/api/certificates/{jks['id']}/versions", json={
