@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import re
 import threading
 import time
 import weakref
@@ -45,8 +46,17 @@ def sqlstate(exc: BaseException) -> str:
     return getattr(exc, "sqlstate", None) or ""
 
 
+_CONSTRAINT_IN_MESSAGE = re.compile(r'constraint "([^"]+)"')
+
+
 def constraint_name(exc: BaseException) -> str:
-    return getattr(getattr(exc, "diag", None), "constraint_name", None) or ""
+    """违反的约束名。openGauss / GaussDB 的错误响应不带约束名字段，从错误消息中取。"""
+    diag = getattr(exc, "diag", None)
+    name = getattr(diag, "constraint_name", None)
+    if name:
+        return name
+    match = _CONSTRAINT_IN_MESSAGE.search(getattr(diag, "message_primary", None) or str(exc))
+    return match.group(1) if match else ""
 
 
 def is_unique_violation(exc: BaseException, constraint: Optional[str] = None) -> bool:

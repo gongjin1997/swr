@@ -4,7 +4,7 @@ import threading
 import pytest
 
 from swr_builder.store import IntegrityViolation, redact_url
-from swr_builder.store.db import Database, normalize_url
+from swr_builder.store.db import Database, constraint_name, is_unique_violation, normalize_url
 from swr_builder.store.migrations import apply_migrations
 from tests.dbutil import new_store
 
@@ -114,6 +114,21 @@ def test_url_handling_hides_passwords_and_accepts_gaussdb_scheme():
     assert normalize_url("gaussdb://u@h:8000/swr") == "postgresql://u@h:8000/swr"
     with pytest.raises(ValueError):
         normalize_url("sqlite:///data/builder.db")
+
+
+def test_constraint_name_falls_back_to_error_message():
+    """openGauss 的错误响应没有约束名字段，只能从消息中取。"""
+    class Diag:
+        constraint_name = None
+        message_primary = 'duplicate key value violates unique constraint "uq_role_bindings_grant"'
+
+    class UniqueError(Exception):
+        sqlstate = "23505"
+        diag = Diag()
+
+    error = UniqueError("duplicate key")
+    assert constraint_name(error) == "uq_role_bindings_grant"
+    assert is_unique_violation(error, "uq_role_bindings_grant") and not is_unique_violation(error, "other")
 
 
 class _FakeCursor:
