@@ -76,8 +76,11 @@ class DeploymentsMixin:
         fields.setdefault("project_id", self.default_project_id())
         return self._insert("deployments", DEPLOYMENT_FIELDS, fields)
 
-    def create_idempotent_service_deployment(self, **fields: Any) -> Dict[str, Any]:
-        """同一发起人、服务与幂等键只创建一次；已存在（包括并发请求先写入）时返回已有记录。"""
+    def create_idempotent_service_deployment(self, manifest: Optional[Dict[str, Any]] = None,
+                                             **fields: Any) -> Dict[str, Any]:
+        """同一发起人、服务与幂等键只创建一次；已存在（包括并发请求先写入）时返回已有记录。
+
+        manifest（托管服务的渲染快照 {inputs, objects, checksum}）与发布单在同一事务中写入。"""
         fields.setdefault("created_at", utcnow())
         unknown = set(fields) - set(DEPLOYMENT_FIELDS)
         if unknown:
@@ -90,10 +93,45 @@ class DeploymentsMixin:
                 return dict(existing)
             cursor = self.attempt(db, f"INSERT INTO deployments({', '.join(fields)}) VALUES ({self.marks(fields)}) "
                                       "RETURNING *", tuple(fields.values()))
-            row = cursor.fetchone() if cursor is not None else db.execute(lookup, key).fetchone()
+            created = cursor.fetchone() if cursor is not None else None
+            row = created if created is not None else db.execute(lookup, key).fetchone()
             if row is None:
                 raise Conflict("部署请求冲突，请使用新的幂等键")
+            if created is not None and manifest is not None:
+                db.execute("INSERT INTO deployment_manifests(deployment_id, service_id, inputs, objects, checksum, "
+                           "created_at) VALUES (%s, %s, %s, %s, %s, %s)",
+                           (created["id"], fields["service_id"], json.dumps(manifest["inputs"], ensure_ascii=False),
+                            json.dumps(manifest["objects"], ensure_ascii=False), manifest["checksum"], fields["created_at"]))
         return dict(row)
+
+    @staticmethod
+    def _manifest(row: Dict[str, Any]) -> Dict[str, Any]:
+        item = dict(row)
+        item["inputs"] = json.loads(item["inputs"])
+        item["objects"] = json.loads(item["objects"])
+        return item
+
+    def get_deployment_manifest(self, deployment_id: int) -> Optional[Dict[str, Any]]:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM deployment_manifests WHERE deployment_id = %s", (deployment_id,)).fetchone()
+        return self._manifest(row) if row else None
+
+    def last_success_manifests(self, service_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """每个服务最近一次成功发布的渲染快照。"""
+        if not service_ids:
+            return {}
+        with self._db() as db:
+            rows = db.execute("SELECT m.*, d.job_id, d.image, d.finished_at FROM deployment_manifests m "
+                              "JOIN deployments d ON d.id = m.deployment_id WHERE d.status = 'success' "
+                              f"AND m.service_id IN ({self.marks(service_ids)}) ORDER BY m.service_id, m.deployment_id DESC",
+                              list(service_ids)).fetchall()
+        result: Dict[int, Dict[str, Any]] = {}
+        for row in rows:
+            result.setdefault(row["service_id"], self._manifest(row))
+        return result
+
+    def last_success_manifest(self, service_id: int) -> Optional[Dict[str, Any]]:
+        return self.last_success_manifests([service_id]).get(service_id)
 
     def update_deployment(self, deployment_id: int, **fields: Any) -> None:
         self._update("deployments", DEPLOYMENT_FIELDS, deployment_id, fields)

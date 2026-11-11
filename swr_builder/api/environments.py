@@ -9,6 +9,7 @@ from ..errors import Forbidden
 from ..services import certificates as certificate_service
 from ..services import configsets as config_service
 from ..services import environments as environment_service
+from ..services import imports as import_service
 from ..services.access import namespace_or_404, project_or_404
 from ..web.deps import Ctx, Me, audit, authenticated, requires
 
@@ -54,6 +55,25 @@ async def effective_config(id: int, ctx: Ctx, me: Me, project_id: Optional[int] 
     if project_id is not None:
         project_or_404(ctx.store, me, project_id)
     return config_service.effective_config(ctx.store, me, id, project_id)
+
+
+# ------------------------------------------------------------------ 导入已有服务
+@router.post("/api/environments/{id}/import/analyze")
+@requires("service.create")
+async def analyze_import(id: int, ctx: Ctx, me: Me, data: dict = Body(...)):
+    """分析上传的 kubectl 导出（source=yaml）或集群中的对象（source=cluster），给出托管方案。不写入任何数据。"""
+    return await import_service.analyze(ctx, me, id, data)
+
+
+@router.post("/api/environments/{id}/import/apply")
+@requires("service.create")
+async def apply_import(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(...)):
+    """按确认的方案写入环境档案、负载均衡入口、环境层配置、应用与托管服务。不修改集群。"""
+    result = await import_service.apply(ctx, me, id, data)
+    created = [s for s in result["services"] if s["status"] in ("created", "converted")]
+    audit(request, "environment.import", id, f"services={len(created)};config_sets={len(result['config_sets'])};"
+          f"profile={bool(result['profile'])};errors={len(result['errors']) + sum(1 for s in result['services'] if s['status'] == 'error')}")
+    return result
 
 
 # ------------------------------------------------------------------ 负载均衡入口

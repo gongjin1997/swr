@@ -159,17 +159,26 @@ def _check_windows(windows: Any) -> None:
 _CRUD = ("get", "list", "watch", "create", "patch", "update", "delete")
 
 
-def rbac_checks(policy: Dict[str, Any]) -> List[Tuple[str, str, str]]:
-    """平台在命名空间内需要的 (API group, resource, verb) 列表。"""
-    checks = [("apps", "deployments", verb) for verb in _CRUD]
-    checks += [("", resource, verb) for resource in ("services", "configmaps") for verb in _CRUD]
-    checks += [("", resource, verb) for resource in ("pods", "events") for verb in ("get", "list", "watch")]
-    checks += [("", "pods/log", "get"), ("", "secrets", "create"), ("", "secrets", "patch"), ("", "secrets", "update")]
-    if policy.get("hpa_enabled"):
-        checks += [("autoscaling", "horizontalpodautoscalers", verb) for verb in _CRUD]
+_READ = ("get", "list", "watch")
+
+
+def rbac_rules(policy: Dict[str, Any]) -> List[Tuple[str, Tuple[str, ...], Tuple[str, ...]]]:
+    """平台在命名空间内需要的权限：(API group, resources, verbs)。托管服务需要读写配置、密钥、Service，
+    策略启用时还需要 Ingress 与 HPA；查看运行状态需要读取 Pod、ReplicaSet 与事件。"""
+    rules = [("apps", ("deployments",), _CRUD), ("apps", ("replicasets",), _READ),
+             ("", ("services", "configmaps", "secrets"), _CRUD),
+             ("", ("pods", "events"), _READ), ("", ("pods/log",), ("get",))]
     if policy.get("ingress", {}).get("enabled"):
-        checks += [("networking.k8s.io", "ingresses", verb) for verb in _CRUD]
-    return checks
+        rules.append(("networking.k8s.io", ("ingresses",), _CRUD))
+    if policy.get("hpa_enabled"):
+        rules.append(("autoscaling", ("horizontalpodautoscalers",), _CRUD))
+    return rules
+
+
+def rbac_checks(policy: Dict[str, Any]) -> List[Tuple[str, str, str]]:
+    """平台在命名空间内需要的 (API group, resource, verb) 列表，与 rbac_yaml 生成的 Role 一致。"""
+    return [(group, resource, verb) for group, resources, verbs in rbac_rules(policy)
+            for resource in resources for verb in verbs]
 
 
 async def adopt_namespace(store: Store, box: SecretBox, me: Principal, data: Any, transport: Any = None
@@ -238,18 +247,17 @@ def rbac_template(store: Store, namespace_id: int) -> Dict[str, str]:
     namespace = store.get_namespace(namespace_id)
     if not namespace:
         raise NotFound("命名空间不存在")
-    return {"yaml": rbac_yaml(namespace["name"]), "warning": RBAC_WARNING}
+    return {"yaml": rbac_yaml(namespace["name"], effective_policy(namespace["policy"])), "warning": RBAC_WARNING}
 
 
 def namespace_label(namespace: Optional[Dict[str, Any]]) -> str:
     return f"{namespace['cluster_name']} / {namespace['name']}" if namespace else ""
 
 
-def rbac_yaml(namespace: str) -> str:
-    return ("apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: swr-builder-deployer\n"
-            f"  namespace: {namespace}\nrules:\n  - apiGroups: [\"apps\"]\n    resources: [\"deployments\"]\n"
-            "    verbs: [\"get\", \"list\", \"watch\", \"create\", \"patch\", \"update\", \"delete\"]\n"
-            "  - apiGroups: [\"\"]\n    resources: [\"services\", \"configmaps\"]\n"
-            "    verbs: [\"get\", \"list\", \"watch\", \"create\", \"patch\", \"update\", \"delete\"]\n"
-            "  - apiGroups: [\"\"]\n    resources: [\"pods\", \"events\"]\n    verbs: [\"get\", \"list\", \"watch\"]\n"
-            "  - apiGroups: [\"\"]\n    resources: [\"pods/log\"]\n    verbs: [\"get\"]\n")
+def rbac_yaml(namespace: str, policy: Optional[Dict[str, Any]] = None) -> str:
+    lines = ["apiVersion: rbac.authorization.k8s.io/v1", "kind: Role", "metadata:", "  name: swr-builder-deployer",
+             f"  namespace: {namespace}", "rules:"]
+    for group, resources, verbs in rbac_rules(policy or DEFAULT_POLICY):
+        lines += [f"  - apiGroups: [\"{group}\"]", "    resources: [" + ", ".join(f'"{r}"' for r in resources) + "]",
+                  "    verbs: [" + ", ".join(f'"{v}"' for v in verbs) + "]"]
+    return "\n".join(lines) + "\n"

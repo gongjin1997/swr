@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -20,6 +21,7 @@ from ..store import Store
 from ..validation import CONFIG_KEY_RE, DNS_SUBDOMAIN_RE, reject_unknown, text_field
 
 SCOPES = ("platform", "project", "environment", "service")
+SERVICE_FILES = "properties"
 SCOPE_LABELS = {"platform": "平台", "project": "项目", "environment": "环境", "service": "服务"}
 KINDS = ("env", "secret_env", "files", "secret_files")
 KIND_LABELS = {"env": "环境变量", "secret_env": "敏感环境变量", "files": "配置文件", "secret_files": "敏感文件"}
@@ -43,7 +45,12 @@ def _scope_key(scope_type: str, scope_id: int) -> Tuple[str, int]:
     return scope_type, scope_id
 
 
-def can_view(me: Principal, scope_type: str, scope_id: int) -> bool:
+def _service(store: Optional[Store], scope_id: int) -> Dict[str, Any]:
+    service = store.get_service(scope_id) if store is not None else None
+    return service or {}
+
+
+def can_view(me: Principal, scope_type: str, scope_id: int, store: Optional[Store] = None) -> bool:
     if scope_type == "platform":
         return (me.can_anywhere("config.manage") or me.can_anywhere("environment.config")
                 or me.can_anywhere("namespace.view") or me.can_anywhere("project.view"))
@@ -51,45 +58,57 @@ def can_view(me: Principal, scope_type: str, scope_id: int) -> bool:
         return me.can_project(scope_id, "project.view")
     if scope_type == "environment":
         return me.can_namespace(scope_id, "namespace.view")
-    return False
+    service = _service(store, scope_id)
+    return bool(service) and (me.can_namespace(service["namespace_id"], "namespace.view")
+                              or me.can_project(service["project_id"], "app.view"))
 
 
-def can_edit(me: Principal, scope_type: str, scope_id: int) -> bool:
+def can_edit(me: Principal, scope_type: str, scope_id: int, store: Optional[Store] = None) -> bool:
     if scope_type == "platform":
         return me.can("config.manage")
     if scope_type == "project":
         return me.can_project(scope_id, "config.manage")
     if scope_type == "environment":
         return me.can_namespace(scope_id, "environment.config")
-    return False
+    service = _service(store, scope_id)
+    return bool(service) and me.can_namespace(service["namespace_id"], "service.config")
 
 
-def can_reveal(me: Principal, scope_type: str, scope_id: int) -> bool:
+def can_reveal(me: Principal, scope_type: str, scope_id: int, store: Optional[Store] = None) -> bool:
     if scope_type == "platform":
         return me.can("secret.view")
     if scope_type == "project":
         return me.can_project(scope_id, "secret.view")
     if scope_type == "environment":
         return me.can_namespace(scope_id, "secret.view")
-    return False
+    service = _service(store, scope_id)
+    return bool(service) and me.can_namespace(service["namespace_id"], "secret.view")
 
 
-def _check_scope_exists(store: Store, scope_type: str, scope_id: int) -> None:
+def _check_scope_exists(store: Store, scope_type: str, scope_id: int, kind: str = "", name: str = "") -> None:
     if scope_type == "project" and not store.get_project(scope_id):
         raise NotFound("项目不存在")
     if scope_type == "environment" and not store.get_namespace(scope_id):
         raise NotFound("环境不存在")
     if scope_type == "service":
-        raise ValueError("服务层配置随服务一起维护（阶段 3），暂不能单独创建")
+        service = store.get_service(scope_id)
+        if not service:
+            raise NotFound("服务不存在")
+        if (service.get("spec") or {}).get("mode") != "managed":
+            raise ValueError("纳管服务只更新镜像，不使用分层配置；转为托管服务后才能维护服务层配置")
+        if kind == "secret_files":
+            raise ValueError("服务层不支持敏感文件；证书目录请维护在环境层或平台层")
+        if kind == "files" and name != SERVICE_FILES:
+            raise ValueError(f"服务层的配置文件集名称固定为 {SERVICE_FILES}（渲染为 <服务>-properties）")
 
 
 def config_set_or_404(store: Store, me: Principal, set_id: int, action: str = "view") -> Dict[str, Any]:
     item = store.get_config_set(set_id)
-    if not item or not can_view(me, item["scope_type"], item["scope_id"]):
+    if not item or not can_view(me, item["scope_type"], item["scope_id"], store):
         raise NotFound("配置不存在")
-    if action == "edit" and not can_edit(me, item["scope_type"], item["scope_id"]):
+    if action == "edit" and not can_edit(me, item["scope_type"], item["scope_id"], store):
         raise Forbidden("没有修改该层配置的权限")
-    if action == "reveal" and not can_reveal(me, item["scope_type"], item["scope_id"]):
+    if action == "reveal" and not can_reveal(me, item["scope_type"], item["scope_id"], store):
         raise Forbidden("没有查看敏感配置的权限")
     return item
 
@@ -118,7 +137,7 @@ def normalize_entries(store: Store, box: SecretBox, kind: str, raw: Any, scope_t
         if not isinstance(item, dict):
             raise ValueError("每个条目必须是对象")
         reject_unknown(item, ("key", "value", "description", "locked", "format", "keep", "certificate_id",
-                              "certificate_version"), "条目包含不支持的字段")
+                              "certificate_version", "encoding"), "条目包含不支持的字段")
         key = item.get("key")
         if not isinstance(key, str) or not CONFIG_KEY_RE.fullmatch(key):
             raise ValueError(f"键 {key!r} 无效：只能包含字母、数字、-、_、.，最长 253 字符")
@@ -146,16 +165,25 @@ def normalize_entries(store: Store, box: SecretBox, kind: str, raw: Any, scope_t
                 raise ValueError(f"{key} 需要且只能提供 value、keep 或 certificate_id 之一")
             if "value" in sources:
                 value = item["value"]
-                if not isinstance(value, str) or not value:
-                    raise ValueError(f"{key} 的 value 必须是非空字符串")
+                encoding = item.get("encoding") or "text"
+                if not isinstance(value, str) or encoding not in ("text", "base64"):
+                    raise ValueError(f"{key} 的 value 必须是字符串，encoding 只能是 text 或 base64")
+                if encoding == "base64":
+                    try:
+                        entry["size"] = len(base64.b64decode(value, validate=True))
+                    except (ValueError, binascii.Error):
+                        raise ValueError(f"{key} 的 value 不是有效的 Base64") from None
+                    entry["encoding"] = "base64"
+                else:
+                    entry["size"] = len(value.encode("utf-8"))
                 entry["ciphertext"] = box.encrypt(value)
-                entry["size"] = len(value.encode("utf-8"))
                 total += len(key) + entry["size"]
             elif "keep" in sources:
                 previous_entry = old.get(key)
                 if item["keep"] is not True or not previous_entry:
                     raise ValueError(f"{key} 在上一版本中不存在，不能沿用旧值")
-                for name in ("ciphertext", "certificate_id", "certificate_version_id", "certificate_version", "size"):
+                for name in ("ciphertext", "certificate_id", "certificate_version_id", "certificate_version", "size",
+                             "encoding"):
                     if name in previous_entry:
                         entry[name] = previous_entry[name]
                 if previous_entry.get("certificate_id"):
@@ -216,15 +244,15 @@ def public_config_set(store: Store, me: Principal, item: Dict[str, Any]) -> Dict
         "kind": item["kind"], "description": item["description"], "version": item.get("version") or 0,
         "updated_at": item.get("version_created_at") or item["updated_at"], "created_at": item["created_at"],
         "entries": public_entries(store, item["kind"], item.get("entries") or []),
-        "can_edit": can_edit(me, item["scope_type"], item["scope_id"]),
-        "can_reveal": item["kind"] in SECRET_KINDS and can_reveal(me, item["scope_type"], item["scope_id"]),
+        "can_edit": can_edit(me, item["scope_type"], item["scope_id"], store),
+        "can_reveal": item["kind"] in SECRET_KINDS and can_reveal(me, item["scope_type"], item["scope_id"], store),
     }
 
 
 def _plain(store: Store, box: SecretBox, entry: Dict[str, Any]) -> Dict[str, Any]:
     """敏感条目的明文。证书文件是文本时直接返回，二进制文件返回 base64。"""
     if "ciphertext" in entry:
-        return {"value": box.decrypt(entry["ciphertext"]), "encoding": "text"}
+        return {"value": box.decrypt(entry["ciphertext"]), "encoding": entry.get("encoding") or "text"}
     version = store.get_certificate_version(entry["certificate_id"], version_id=entry["certificate_version_id"])
     data = base64.b64decode(box.decrypt(version["ciphertext"])) if version else b""
     try:
@@ -236,7 +264,7 @@ def _plain(store: Store, box: SecretBox, entry: Dict[str, Any]) -> Dict[str, Any
 # ------------------------------------------------------------------ 读写
 def list_config_sets(store: Store, me: Principal, scope_type: str, scope_id: int) -> List[Dict[str, Any]]:
     scope_type, scope_id = _scope_key(scope_type, scope_id)
-    if not can_view(me, scope_type, scope_id):
+    if not can_view(me, scope_type, scope_id, store):
         raise NotFound("没有可见的配置")
     return [public_config_set(store, me, item) for item in store.list_config_sets([(scope_type, scope_id)])]
 
@@ -250,12 +278,12 @@ def create_config_set(store: Store, box: SecretBox, me: Principal, data: Any) ->
     kind = data.get("kind")
     if kind not in KINDS:
         raise ValueError(f"kind 必须是 {', '.join(KINDS)} 之一")
-    if not can_view(me, scope_type, scope_id):
+    if not can_view(me, scope_type, scope_id, store):
         raise NotFound("没有可见的配置")
-    if not can_edit(me, scope_type, scope_id):
+    if not can_edit(me, scope_type, scope_id, store):
         raise Forbidden("没有修改该层配置的权限")
-    _check_scope_exists(store, scope_type, scope_id)
-    name = SINGLETON_NAMES.get(kind) or data.get("name")
+    name = SINGLETON_NAMES.get(kind) or data.get("name") or (SERVICE_FILES if scope_type == "service" else "")
+    _check_scope_exists(store, scope_type, scope_id, kind, name)
     if not isinstance(name, str) or len(name) > 253 or not DNS_SUBDOMAIN_RE.fullmatch(name):
         raise ValueError("配置名称会作为 ConfigMap / Secret 名称，必须是小写字母、数字、-、. 组成的 DNS 名称")
     if kind not in SINGLETON_NAMES and name in SINGLETON_NAMES.values():
@@ -347,23 +375,30 @@ def reveal(store: Store, box: SecretBox, me: Principal, set_id: int, keys: Optio
 
 
 # ------------------------------------------------------------------ 分层合并
-def _layers(project_id: Optional[int], namespace_id: Optional[int]) -> List[Tuple[str, int]]:
+def _layers(project_id: Optional[int], namespace_id: Optional[int],
+            service_id: Optional[int] = None) -> List[Tuple[str, int]]:
     layers = [("platform", 0)]
     if project_id:
         layers.append(("project", project_id))
     if namespace_id:
         layers.append(("environment", namespace_id))
+    if service_id:
+        layers.append(("service", service_id))
     return layers
 
 
 def _check_locked(store: Store, scope_type: str, scope_id: int, kind: str, entries: List[Dict[str, Any]]) -> None:
-    """下层不能覆盖上层锁定的键。项目层与环境层的上层分别是平台层、平台层加该环境所属的项目层。"""
+    """下层不能覆盖上层锁定的键。项目层的上层是平台层；环境层的上层是平台层加该环境所属的项目层；
+    服务层的上层是平台层、服务所属项目层和所在环境层。"""
     if kind not in SINGLETON_NAMES or scope_type == "platform":
         return
     uppers: List[Tuple[str, int]] = [("platform", 0)]
     if scope_type == "environment":
         namespace = store.get_namespace(scope_id) or {}
         uppers += [("project", pid) for pid in namespace.get("project_ids", [])]
+    if scope_type == "service":
+        service = store.get_service(scope_id) or {}
+        uppers += [("project", service.get("project_id", 0)), ("environment", service.get("namespace_id", 0))]
     locked = {}
     for upper in store.list_config_sets(uppers, kind=kind):
         for entry in upper["entries"]:
@@ -374,9 +409,10 @@ def _check_locked(store: Store, scope_type: str, scope_id: int, kind: str, entri
         raise ValueError("以下键已被上层锁定，不能覆盖：" + "、".join(f"{k}（{locked[k]}）" for k in clashes))
 
 
-def effective_config(store: Store, me: Principal, namespace_id: int, project_id: Optional[int] = None) -> Dict[str, Any]:
-    """环境（可选再叠加一个项目）生效的配置：每个键的 origin 注明来自哪一层，overrides 是被它覆盖的上层。"""
-    sets = store.list_config_sets(_layers(project_id, namespace_id))
+def effective_config(store: Store, me: Principal, namespace_id: int, project_id: Optional[int] = None,
+                     service_id: Optional[int] = None) -> Dict[str, Any]:
+    """环境（可选再叠加项目与服务）生效的配置：每个键的 origin 注明来自哪一层，overrides 是被它覆盖的上层。"""
+    sets = store.list_config_sets(_layers(project_id, namespace_id, service_id))
     order = {scope: index for index, scope in enumerate(SCOPES)}
     sets.sort(key=lambda s: order[s["scope_type"]])
     merged: Dict[str, Dict[str, Dict[str, Any]]] = {"env": {}, "secret_env": {}}

@@ -103,12 +103,16 @@ class KubeClient:
             raise Unavailable("读取目标 namespace 失败，请检查集群连接") from None
         return response.status_code
 
-    async def list_resources(self, path: str):
-        """Read paginated Kubernetes lists without returning a silently truncated list."""
+    async def list_resources(self, path: str, params: Optional[Dict[str, str]] = None, max_items: Optional[int] = None):
+        """分页读取完整列表。params 可带 labelSelector / fieldSelector。
+
+        不指定 max_items 时列表必须完整读出（超过 100 页报错，不返回被截断的结果）；
+        指定时最多返回 max_items 项（用于事件这类只看最近记录的列表）。"""
         items, continuation = [], ""
         for _ in range(100):
+            query = {**(params or {}), "limit": min(500, max_items or 500), "continue": continuation}
             try:
-                response = await self.request("GET", path, params={"limit": 500, "continue": continuation})
+                response = await self.request("GET", path, params=query)
             except httpx.HTTPError:
                 raise Unavailable("读取集群资源失败，请检查网络、TLS 与凭据") from None
             if response.status_code == 403:
@@ -120,15 +124,53 @@ class KubeClient:
                 batch = payload["items"]
                 if not isinstance(batch, list) or any(not isinstance(x, dict) for x in batch):
                     raise ValueError()
-                continuation = payload.get("metadata", {}).get("continue", "")
+                continuation = (payload.get("metadata") or {}).get("continue", "") or ""
                 if not isinstance(continuation, str):
                     raise ValueError()
             except (ValueError, KeyError, TypeError, AttributeError):
                 raise Unavailable("集群资源列表响应格式无效") from None
             items.extend(batch)
+            if max_items is not None and len(items) >= max_items:
+                return items[:max_items]
             if not continuation:
                 return items
         raise Unavailable("集群资源过多，未能完整读取，请缩小查询范围")
+
+    async def get_json(self, path: str) -> Optional[Dict[str, Any]]:
+        """GET 单个对象；不存在返回 None。"""
+        try:
+            response = await self.request("GET", path)
+        except httpx.HTTPError:
+            raise Unavailable("读取集群资源失败，请检查网络、TLS 与凭据") from None
+        if response.status_code == 404:
+            return None
+        if response.status_code == 403:
+            raise Forbidden("集群凭据缺少 get 权限：" + path)
+        if response.status_code != 200:
+            raise Unavailable(f"读取集群资源失败，HTTP {response.status_code}：{path}")
+        try:
+            payload = response.json()
+        except ValueError:
+            raise Unavailable("集群资源响应格式无效") from None
+        if not isinstance(payload, dict):
+            raise Unavailable("集群资源响应格式无效")
+        return payload
+
+    async def apply(self, path: str, body: Dict[str, Any], *, field_manager: str, force: bool = True,
+                    dry_run: bool = False) -> httpx.Response:
+        """Server-Side Apply（PATCH application/apply-patch+yaml；JSON 是合法的 YAML）。返回原始响应，由调用方解释状态码。"""
+        params = {"fieldManager": field_manager, "fieldValidation": "Strict"}
+        if force:
+            params["force"] = "true"
+        if dry_run:
+            params["dryRun"] = "All"
+        return await self.request("PATCH", path, params=params, json=body,
+                                  headers={"Content-Type": "application/apply-patch+yaml"})
+
+    async def delete(self, path: str, dry_run: bool = False) -> httpx.Response:
+        params = {"dryRun": "All"} if dry_run else {}
+        return await self.request("DELETE", path, params=params,
+                                  json={"kind": "DeleteOptions", "apiVersion": "v1", "propagationPolicy": "Background"})
 
     async def access_review(self, namespace: str, group: str, resource: str, verb: str) -> Dict[str, Any]:
         """SelfSubjectAccessReview：当前凭据能否在 namespace 中对 resource 执行 verb。返回 status 对象。"""

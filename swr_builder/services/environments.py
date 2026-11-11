@@ -27,7 +27,7 @@ DEFAULT_PROFILE: Dict[str, Any] = {
     "scheduling": {"node_pool_label": "cce.cloud.com/cce-nodepool", "node_pool": "", "anti_affinity": True,
                    "zone_spread": True},
     "image_pull_secret": "default-secret",
-    "log": {"enabled": False, "host_path": "", "mount_path": "/applog", "sub_path_expr": ""},
+    "log": {"enabled": False, "host_path": "", "mount_path": "/var/log/app", "sub_path_expr": ""},
     "defaults": {"replicas": 1, "cpu_request": "500m", "memory_request": "4Gi", "cpu_limit": "2", "memory_limit": "4Gi"},
 }
 _PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
@@ -123,8 +123,11 @@ def normalize_profile(data: Any) -> Dict[str, Any]:
 def normalize_ingress_spec(data: Any) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("spec 必须是对象")
-    reject_unknown(data, ("ingress_class", "elb_class", "elb_id", "port", "certificate_ids", "annotations"),
-                   "spec 包含不支持的字段")
+    reject_unknown(data, ("ingress_class", "elb_class", "elb_id", "port", "certificate_ids", "annotations",
+                          "url_match_mode"), "spec 包含不支持的字段")
+    url_match_mode = data.get("url_match_mode", "")
+    if url_match_mode not in ("", "STARTS_WITH", "EQUAL_TO", "REGEX"):
+        raise ValueError("url_match_mode 必须为空或 STARTS_WITH、EQUAL_TO、REGEX（CCE 的路径匹配方式）")
     ingress_class = data.get("ingress_class", "cce")
     if not isinstance(ingress_class, str) or not DNS_LABEL_RE.fullmatch(ingress_class):
         raise ValueError("ingress_class 必须是 IngressClass 名称，例如 cce")
@@ -150,7 +153,7 @@ def normalize_ingress_spec(data: Any) -> Dict[str, Any]:
         if key in RESERVED_INGRESS_ANNOTATIONS:
             raise ValueError(f"注解 {key} 由平台或 CCE 维护，不能手工设置")
     return {"ingress_class": ingress_class, "elb_class": elb_class, "elb_id": elb_id, "port": port,
-            "certificate_ids": certificate_ids, "annotations": dict(annotations)}
+            "certificate_ids": certificate_ids, "annotations": dict(annotations), "url_match_mode": url_match_mode}
 
 
 # ------------------------------------------------------------------ 负载均衡入口

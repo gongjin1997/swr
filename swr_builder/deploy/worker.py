@@ -1,4 +1,8 @@
-"""服务发布 worker：从 SQLite 队列领取发布任务，更新 Kubernetes Deployment 镜像并等待滚动发布完成。
+"""服务发布 worker：从数据库队列领取发布任务，写入 Kubernetes 并等待滚动发布完成。
+
+- 纳管服务（image_only）：只更新目标容器的镜像与两个 Pod 模板注解（strategic merge patch）；
+- 托管服务（managed）：按发布快照重新渲染对象清单（此时才解密敏感值），先对全部对象做服务端 dry-run，
+  全部通过后用 Server-Side Apply 逐个下发（见 swr_builder/delivery/apply.py）。
 
 并发与故障处理：
 - 领取任务时获得租约（lease_owner + lease_until + fencing_token），运行期间每 LEASE_RENEW_SECONDS 续租一次
@@ -21,6 +25,9 @@ import httpx
 
 from ..access import load_principal
 from ..builder import JobLog
+from ..delivery.apply import apply_objects, failures
+from ..delivery.render import render
+from ..delivery.resolve import resolve
 from ..policy import deployment_policy_block
 from ..registry import parse_image_ref
 from ..services.namespaces import effective_policy, required_approvals
@@ -95,7 +102,7 @@ class ServiceDeploymentWorker:
     async def run(self, deployment: Dict[str, Any]) -> None:
         deployment_id, token = deployment["id"], deployment["fencing_token"]
         service = self.store.get_service(deployment["service_id"])
-        job = self.store.get_job(deployment["job_id"])
+        job = self.store.get_job(deployment["job_id"]) if deployment.get("job_id") else None
         revision = self.store.get_revision(deployment["service_id"], deployment["revision_id"])
         namespace = self.store.get_namespace(deployment["namespace_id"])
         cluster = self.store.get_cluster_record(namespace["cluster_id"]) if namespace else None
@@ -109,17 +116,21 @@ class ServiceDeploymentWorker:
         heartbeat = asyncio.create_task(self._renew_lease(deployment_id, token))
         progress = {"write_started": False}
         try:
-            if not service or not job or not revision or not namespace or not cluster:
+            if not service or (deployment.get("job_id") and not job) or not revision or not namespace or not cluster:
                 raise ValueError("部署快照引用的服务、构建、修订、命名空间或集群已不存在")
-            if revision["spec"].get("mode") != "image_only":
-                raise ValueError("managed 清单渲染与 Server-Side Apply 尚未在此 worker 阶段启用")
+            mode = revision["spec"].get("mode")
+            if mode not in ("image_only", "managed"):
+                raise ValueError("服务修订的模式无效")
             if (cluster["auth_type"] == "sa_token" and not credential.get("token")) or \
                     cluster["auth_type"] not in ("sa_token", "client_cert"):
                 raise ValueError("集群凭据类型不受当前 worker 支持")
             if cluster["auth_type"] == "client_cert" and not (credential.get("client_cert_pem") and credential.get("client_key_pem")):
                 raise ValueError("集群客户端证书凭据不完整")
             self._precheck(deployment, namespace)
-            await self._apply(deployment, revision, namespace, cluster, credential, log, progress)
+            if mode == "managed":
+                await self._apply_managed(deployment, service, revision, namespace, cluster, credential, log, progress)
+            else:
+                await self._apply(deployment, revision, namespace, cluster, credential, log, progress)
             if self.store.complete_service_deployment(deployment_id, self.worker_id, token, service["id"],
                                                       revision["id"], "Deployment rollout completed"):
                 log.info("Deployment 已达到期望镜像和可用副本数")
@@ -228,6 +239,50 @@ class ServiceDeploymentWorker:
                     progress["write_started"] = False
                 raise ValueError(f"更新 Deployment 失败，Kubernetes API HTTP {response.status_code}")
             uid = response.json().get("metadata", {}).get("uid") or current.get("metadata", {}).get("uid")
+            if not self.store.update_service_deployment(deployment_id, self.worker_id, token, status="verifying"):
+                raise RuntimeError("deployment lease lost after Kubernetes write")
+            timeout = min(int(effective_policy(latest["policy"])["rollout_timeout"]), MAX_ROLLOUT_SECONDS)
+            await self._wait_rollout(kube, path, deployment, target, uid, timeout)
+
+    async def _apply_managed(self, deployment, service, revision, namespace, cluster, credential, log: JobLog,
+                             progress: Dict[str, bool]) -> None:
+        """托管服务：按快照渲染 → 全部对象 dry-run → 复核权限与策略 → Server-Side Apply → 等待滚动完成。"""
+        deployment_id, token = deployment["id"], deployment["fencing_token"]
+        manifest = self.store.get_deployment_manifest(deployment_id)
+        if not manifest:
+            raise ValueError("发布单缺少渲染快照，请重新提交发布")
+        inputs, _ = resolve(self.store, self.box, service, revision["spec"], deployment["image"],
+                            pinned=manifest["inputs"], reveal=True, revision_id=revision["id"],
+                            deployment_id=deployment_id)
+        objects = render(inputs)
+        for warning in inputs.warnings:
+            log.info("配置提示：" + warning)
+        previous = self.store.last_success_manifest(service["id"])
+        previous_keys = [(o["kind"], o["metadata"]["name"]) for o in (previous or {}).get("objects", [])]
+        workload = next(o for o in objects if o["kind"] == "Deployment")
+        target = {"name": workload["metadata"]["name"],
+                  "container": workload["spec"]["template"]["spec"]["containers"][0]["name"]}
+        path = deployment_path(namespace["name"], target["name"])
+        async with KubeClient(cluster["server"], credential, self.transport, timeout=30) as kube:
+            self._check_lease(deployment_id, token, "before Kubernetes access")
+            log.info(f"服务端校验 {len(objects)} 个对象（dryRun=All）")
+            checks = await apply_objects(kube, namespace["name"], objects, dry_run=True, previous=previous_keys,
+                                         service_id=service["id"], log=log)
+            problems = failures(checks)
+            if problems:
+                raise ValueError("服务端校验未通过，未写入集群：" + "；".join(problems)[:900])
+            latest = self.store.get_namespace(namespace["id"])
+            if not latest:
+                raise ValueError("目标命名空间已不存在")
+            self._precheck(deployment, latest)
+            self._check_lease(deployment_id, token, "before Kubernetes write")
+            progress["write_started"] = True
+            results = await apply_objects(kube, namespace["name"], objects, dry_run=False, previous=previous_keys,
+                                          service_id=service["id"], log=log)
+            problems = failures(results)
+            if problems:
+                raise ValueError("部分对象下发失败，请核对集群：" + "；".join(problems)[:900])
+            uid = next((r.get("uid") for r in results if r["kind"] == "Deployment"), "")
             if not self.store.update_service_deployment(deployment_id, self.worker_id, token, status="verifying"):
                 raise RuntimeError("deployment lease lost after Kubernetes write")
             timeout = min(int(effective_policy(latest["policy"])["rollout_timeout"]), MAX_ROLLOUT_SECONDS)

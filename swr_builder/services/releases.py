@@ -11,12 +11,14 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..access import Principal, load_principal, role_index, same_user
-from ..errors import Conflict, Forbidden, NotFound, NotImplementedYet, Unprocessable
+from ..delivery.render import checksum, mask, render
+from ..delivery.resolve import check_render, resolve
+from ..errors import Conflict, Forbidden, NotFound, Unprocessable
 from ..policy import deployment_policy_block
 from ..registry import parse_image_ref
 from ..store import Store
 from ..validation import reject_unknown, text_field
-from .catalog import Lookup, writable_service
+from .catalog import Lookup, mode_of, writable_service
 from .namespaces import effective_policy, required_approvals
 
 DEPLOYMENT_RESPONSE_FIELDS = ("id", "service_id", "job_id", "revision_id", "kind", "status", "digest", "created_at")
@@ -27,7 +29,8 @@ DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 FINAL_STATUSES = ("success", "failed", "cancelled", "rejected", "expired", "unknown")
 KIND_PERMISSIONS = {"deploy": ("service.deploy", "没有服务发布权限"),
                     "rollback": ("service.rollback", "没有服务回滚权限"),
-                    "restart": ("service.operate", "没有服务运维权限")}
+                    "restart": ("service.operate", "没有服务运维权限"),
+                    "adopt": ("service.deploy", "没有服务发布权限")}
 
 
 def deployment_response(deployment: Dict[str, Any]) -> Dict[str, Any]:
@@ -97,17 +100,48 @@ def resolve_revision(store: Store, service: Dict[str, Any], revision_id: Optiona
     return revision
 
 
-def queue_deployment(store: Store, service: Dict[str, Any], job: Dict[str, Any], revision: Dict[str, Any],
-                     actor: Dict[str, Any], kind: str, idempotency_key: str, remark: str = "") -> Dict[str, Any]:
-    """创建发布任务。相同幂等键 + 相同请求返回已有任务；需要审批时状态为 pending_approval。"""
-    if revision["spec"].get("mode") != "image_only":
-        raise NotImplementedYet("managed 服务的清单渲染与 SSA 尚未开放")
+def artifact_from_job(job: Dict[str, Any]) -> Dict[str, Any]:
+    """成功构建 → 按 digest 固定的镜像。"""
     digest = job.get("digest")
     if not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest):
         raise Unprocessable("成功构建记录缺少有效的 SHA-256 摘要")
     image_ref = parse_image_ref(job.get("image") or "")
     if not image_ref:
         raise Unprocessable("成功构建记录的镜像引用无效")
+    return {"job_id": job["id"], "image": image_ref.host + "/" + image_ref.repo + "@" + digest, "digest": digest,
+            "app_name": job.get("app_name") or ""}
+
+
+def artifact_from_deployment(previous: Dict[str, Any]) -> Dict[str, Any]:
+    """回滚、重新发布沿用历史发布的镜像（发布记录里已按 digest 固定）。"""
+    if not DIGEST_RE.fullmatch(previous.get("digest") or "") or not parse_image_ref(previous.get("image") or ""):
+        raise Conflict("历史发布的镜像记录无效")
+    return {"job_id": previous.get("job_id"), "image": previous["image"], "digest": previous["digest"],
+            "app_name": previous.get("app_name") or ""}
+
+
+def managed_manifest(store: Store, service: Dict[str, Any], revision: Dict[str, Any], image: str,
+                     pinned: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """提交时渲染一次：确认可以下发，并把用到的配置版本记录为快照（审批人看到的就是将要下发的内容）。"""
+    try:
+        inputs, snapshot = resolve(store, None, service, revision["spec"], image, pinned=pinned,
+                                   revision_id=revision["id"])
+        objects = render(inputs)
+    except ValueError as exc:
+        raise Unprocessable(str(exc)) from None
+    errors = check_render(inputs, store.get_namespace(service["namespace_id"]))
+    if errors:
+        raise Unprocessable("；".join(errors))
+    masked = mask(objects)
+    return {"inputs": snapshot, "objects": masked, "checksum": checksum(masked)}
+
+
+def queue_deployment(store: Store, service: Dict[str, Any], artifact: Dict[str, Any], revision: Dict[str, Any],
+                     actor: Dict[str, Any], kind: str, idempotency_key: str, remark: str = "",
+                     pinned: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """创建发布任务。相同幂等键 + 相同请求返回已有任务；需要审批时状态为 pending_approval。
+
+    托管服务同时保存渲染快照（pinned 不为空时按指定快照渲染，用于回滚、重新发布与只更新镜像）。"""
     namespace = store.get_namespace(service["namespace_id"])
     if not namespace:
         raise NotFound("服务所在的命名空间不存在")
@@ -116,7 +150,10 @@ def queue_deployment(store: Store, service: Dict[str, Any], job: Dict[str, Any],
     approval_policy = dict(namespace["policy"])
     approval_policy["require_admin_approval"] = (
         bool(approval_policy.get("require_admin_approval")) or namespace["tier"] == "prod")
-    payload_hash = request_hash(kind, {"job_id": job["id"], "revision_id": revision["id"], "remark": remark})
+    payload: Dict[str, Any] = {"job_id": artifact["job_id"], "revision_id": revision["id"], "remark": remark}
+    if artifact["job_id"] is None:
+        payload["image"] = artifact["image"]
+    payload_hash = request_hash(kind, payload)
     existing = store.find_deployment_idempotency(actor["id"], service["id"], idempotency_key)
     if existing:
         if existing["request_hash"] != payload_hash:
@@ -125,12 +162,14 @@ def queue_deployment(store: Store, service: Dict[str, Any], job: Dict[str, Any],
     blocked = deployment_policy_block(policy)
     if blocked:
         raise Forbidden(blocked, code="POLICY_BLOCKED")
+    manifest = (managed_manifest(store, service, revision, artifact["image"], pinned)
+                if revision["spec"].get("mode") == "managed" else None)
     created = store.create_idempotent_service_deployment(
+        manifest=manifest,
         target_id=None, target_name=service["name"], target_type="kubernetes", environment=namespace["tier"],
-        app_id=service["app_id"], app_name=job["app_name"], job_id=job["id"],
-        image=image_ref.host + "/" + image_ref.repo + "@" + digest,
+        app_id=service["app_id"], app_name=artifact["app_name"], job_id=artifact["job_id"], image=artifact["image"],
         project_id=service["project_id"], service_id=service["id"], namespace_id=service["namespace_id"],
-        revision_id=revision["id"], kind=kind, digest=digest, idempotency_key=idempotency_key,
+        revision_id=revision["id"], kind=kind, digest=artifact["digest"], idempotency_key=idempotency_key,
         request_hash=payload_hash, policy_snapshot=json.dumps(approval_policy, ensure_ascii=False),
         status=status, trigger="manual", operator=actor.get("display_name") or actor["username"],
         created_by=actor["id"], remark=remark[:200])
@@ -147,19 +186,26 @@ def _bool(data: Dict[str, Any], key: str) -> bool:
     return value
 
 
-def submit(store: Store, me: Principal, service_id: int, kind: str, data: Any, idempotency_key: str
-           ) -> Dict[str, Any]:
-    """发布（deploy）、回滚（rollback）或以最近一次成功发布重新发布（restart）。"""
+def submit(store: Store, me: Principal, service_id: int, kind: str, data: Any, idempotency_key: str,
+           live_image: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """发布（deploy）、回滚（rollback）、以最近一次成功发布重新发布（restart），
+    或接管发布（adopt：导入的托管服务第一次下发，镜像沿用集群中正在运行的 digest）。
+
+    托管服务的配置版本：
+    - deploy 勾选 use_latest_config：当前修订 + 各层配置的最新版本；不勾选：沿用上次成功发布的修订与配置快照，只换镜像；
+    - rollback / restart：目标发布的修订与配置快照，原样重新下发；
+    - adopt：当前修订 + 各层配置的最新版本。"""
     if kind not in KIND_PERMISSIONS:
         raise ValueError("发布类型无效")
     if not isinstance(data, dict):
         raise ValueError("发布请求格式错误")
     check_idempotency_key(idempotency_key)
     allowed = {"deploy": {"job_id", "revision_id", "use_latest_config", "remark"},
-               "rollback": {"target_deployment_id", "remark"}, "restart": {"remark"}}[kind]
+               "rollback": {"target_deployment_id", "remark"}, "restart": {"remark"}, "adopt": {"remark"}}[kind]
     reject_unknown(data, allowed, "发布请求包含未知字段")
     service = writable_service(store, me, service_id, *KIND_PERMISSIONS[kind])
     remark = text_field(data, "remark", 200)
+    pinned: Optional[Dict[str, Any]] = None
     if kind == "deploy":
         job_id = data.get("job_id")
         if type(job_id) is not int:
@@ -168,7 +214,28 @@ def submit(store: Store, me: Principal, service_id: int, kind: str, data: Any, i
         if (not job or job["status"] != "success" or job["app_id"] != service["app_id"]
                 or job["project_id"] != service["project_id"]):
             raise Unprocessable("构建必须成功且属于服务对应的应用和项目")
-        revision = resolve_revision(store, service, data.get("revision_id"), _bool(data, "use_latest_config"))
+        artifact = artifact_from_job(job)
+        use_latest = _bool(data, "use_latest_config")
+        if mode_of(service) == "managed" and service["deployed_revision_id"] and not use_latest:
+            deployed = store.get_revision(service_id, service["deployed_revision_id"])
+            manifest = store.last_success_manifest(service_id)
+            # 由纳管转为托管后的第一次发布没有可沿用的托管快照，使用最新配置
+            if deployed and deployed["spec"].get("mode") == "managed" and manifest:
+                pinned = manifest["inputs"]
+            else:
+                use_latest = True
+        revision = resolve_revision(store, service, data.get("revision_id"), use_latest)
+    elif kind == "adopt":
+        if mode_of(service) != "managed":
+            raise ValueError("只有托管服务需要接管发布")
+        if not live_image:
+            raise Unprocessable("无法确定集群中正在运行的镜像")
+        app = store.get_app(service["app_id"])
+        artifact = {"job_id": None, "image": live_image["image"], "digest": live_image["digest"],
+                    "app_name": app["name"] if app else ""}
+        if not DIGEST_RE.fullmatch(artifact["digest"]):
+            raise Unprocessable("线上镜像摘要无效")
+        revision = resolve_revision(store, service, service["current_revision_id"])
     else:
         if kind == "rollback":
             target_id = data.get("target_deployment_id")
@@ -182,11 +249,16 @@ def submit(store: Store, me: Principal, service_id: int, kind: str, data: Any, i
             previous = rows[0] if rows else None
             if not previous:
                 raise Conflict("服务还没有成功的发布记录")
-        job = store.get_job(previous["job_id"])
+        artifact = artifact_from_deployment(previous)
         revision = store.get_revision(service_id, previous["revision_id"])
-        if not job or not revision:
-            raise Conflict("历史发布引用的构建或配置修订已不可用")
-    return queue_deployment(store, service, job, revision, me.user, kind, idempotency_key, remark)
+        if not revision:
+            raise Conflict("历史发布引用的配置修订已不可用")
+        if revision["spec"].get("mode") == "managed":
+            manifest = store.get_deployment_manifest(previous["id"])
+            if not manifest:
+                raise Conflict("历史发布没有渲染快照，不能按原样重新下发")
+            pinned = manifest["inputs"]
+    return queue_deployment(store, service, artifact, revision, me.user, kind, idempotency_key, remark, pinned)
 
 
 # ------------------------------------------------------------------ 审批

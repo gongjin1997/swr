@@ -353,6 +353,19 @@ ENVIRONMENT_CONFIG = [
     "CREATE INDEX idx_config_certificate_refs_certificate ON config_certificate_refs (certificate_id)",
 ]
 
+# 迁移 3：托管服务发布的渲染快照。与发布单在同一个事务中写入，worker 领取任务时快照一定存在
+MANAGED_DELIVERY = [
+    """CREATE TABLE deployment_manifests (
+        deployment_id BIGINT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,
+        service_id BIGINT NOT NULL,
+        inputs TEXT NOT NULL,
+        objects TEXT NOT NULL,
+        checksum TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL
+    )""",
+    "CREATE INDEX idx_deployment_manifests_service ON deployment_manifests (service_id, deployment_id)",
+]
+
 # 有自增主键的表：导入旧数据后要重置序列
 SERIAL_TABLES = ("projects", "users", "api_tokens", "audit_logs", "apps", "jobs", "role_bindings", "clusters",
                  "namespaces", "services", "service_revisions", "service_secrets", "deploy_targets", "deployments",

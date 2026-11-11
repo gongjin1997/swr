@@ -153,5 +153,7 @@ class ServicesMixin:
             if active:
                 return False
             db.execute("DELETE FROM service_secrets WHERE service_id = %s", (service_id,))
+            # 服务层配置集随服务删除（版本与证书引用级联删除）
+            db.execute("DELETE FROM config_sets WHERE scope_type = 'service' AND scope_id = %s", (service_id,))
             db.execute("DELETE FROM service_revisions WHERE service_id = %s", (service_id,))
             return db.execute("DELETE FROM services WHERE id = %s", (service_id,)).rowcount > 0

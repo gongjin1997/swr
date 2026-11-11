@@ -12,7 +12,7 @@ import hashlib
 import logging
 from typing import Any, Callable, List, Tuple
 
-from .schema import BASELINE, ENVIRONMENT_CONFIG, utcnow
+from .schema import BASELINE, ENVIRONMENT_CONFIG, MANAGED_DELIVERY, utcnow
 
 logger = logging.getLogger("swr_builder.store")
 
@@ -32,9 +32,15 @@ def _environment_config(db: Any) -> None:
         db.execute(statement)
 
 
+def _managed_delivery(db: Any) -> None:
+    for statement in MANAGED_DELIVERY:
+        db.execute(statement)
+
+
 MIGRATIONS: List[Migration] = [
     (1, "v2-postgresql-baseline", _baseline),
     (2, "v2-environment-profiles-config-sets-certificates", _environment_config),
+    (3, "v2-managed-service-manifests", _managed_delivery),
 ]
 
 
