@@ -8,6 +8,7 @@ import type { Job } from '@/api/types'
 import JobDetail from '@/components/JobDetail.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusTag from '@/components/StatusTag.vue'
+import TablePager from '@/components/TablePager.vue'
 import { notifyError, notifySuccess } from '@/composables/useAction'
 import { usePolling } from '@/composables/usePolling'
 import { JOB_FINAL, JOB_STATUSES, MODE_TEXT, STATUS_TEXT } from '@/constants'
@@ -16,7 +17,7 @@ import { useSession } from '@/stores/session'
 import { copyText, fmtDuration, fmtTime } from '@/utils/format'
 
 const props = defineProps<{ projectId?: number; embedded?: boolean }>()
-const PAGE = 30
+const PAGE = 20
 const session = useSession()
 const platform = usePlatform()
 const route = useRoute()
@@ -28,6 +29,8 @@ const filters = reactive({
 })
 const jobs = ref<Job[]>([])
 const total = ref(0)
+const page = ref(1)
+const pageSize = ref(PAGE)
 const loading = ref(false)
 const detail = ref<number | null>(props.embedded ? null : (Number(route.query.detail) || null))
 const apps = computed(() => platform.apps.filter((a) => !filters.projectId || a.project_id === filters.projectId))
@@ -36,7 +39,7 @@ const { run: refresh } = usePolling(async (isCurrent) => {
   loading.value = true
   try {
     const data = await jobApi.list({ project_id: filters.projectId, app_id: filters.appId, status: filters.status,
-      limit: Math.max(PAGE, jobs.value.length), offset: 0 })
+      limit: pageSize.value, offset: (page.value - 1) * pageSize.value })
     if (!isCurrent()) return false
     jobs.value = data.items
     total.value = data.total
@@ -48,20 +51,6 @@ const { run: refresh } = usePolling(async (isCurrent) => {
     if (isCurrent()) loading.value = false
   }
 })
-
-async function more() {
-  loading.value = true
-  try {
-    const data = await jobApi.list({ project_id: filters.projectId, app_id: filters.appId, status: filters.status, limit: PAGE,
-      offset: jobs.value.length })
-    jobs.value = jobs.value.concat(data.items)
-    total.value = data.total
-  } catch (e) {
-    notifyError(e)
-  } finally {
-    loading.value = false
-  }
-}
 
 async function copyImage(image: string) {
   try {
@@ -81,6 +70,7 @@ watch(detail, (id) => {
 })
 watch(() => [filters.projectId, filters.appId, filters.status], () => {
   jobs.value = []
+  page.value = 1
   if (!props.embedded) {
     void router.replace({ query: { ...route.query, project: filters.projectId ? String(filters.projectId) : undefined,
       app: filters.appId ? String(filters.appId) : undefined } })
@@ -137,9 +127,7 @@ onMounted(() => {
           </template>
         </el-table-column>
       </el-table>
-      <div v-if="jobs.length < total" class="more">
-        <el-button :loading="loading" @click="more">加载更多（{{ jobs.length }} / {{ total }}）</el-button>
-      </div>
+      <TablePager v-model:page="page" v-model:size="pageSize" :total="total" @change="refresh" />
     </el-card>
 
     <el-drawer v-model="drawer" :title="`构建详情 #${detail ?? ''}`" size="min(1000px, 100vw)" destroy-on-close>
@@ -148,6 +136,3 @@ onMounted(() => {
   </div>
 </template>
 
-<style scoped>
-.more { display: flex; justify-content: center; padding-top: 12px; }
-</style>

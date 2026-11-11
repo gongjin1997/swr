@@ -8,6 +8,8 @@ import PageHeader from '@/components/PageHeader.vue'
 import { notifyError } from '@/composables/useAction'
 import { TIER_TAG, TIER_TEXT, TIERS } from '@/constants'
 import { useSession } from '@/stores/session'
+import TablePager from '@/components/TablePager.vue'
+import { usePagination } from '@/composables/usePagination'
 
 const session = useSession()
 const items = ref<EnvironmentSummary[]>([])
@@ -15,6 +17,7 @@ const loading = ref(false)
 const filters = reactive({ keyword: '', tier: '' })
 const filtered = computed(() => items.value.filter((e) => (!filters.tier || e.tier === filters.tier) &&
   (!filters.keyword.trim() || `${e.name} ${e.cluster_name}`.toLowerCase().includes(filters.keyword.trim().toLowerCase()))))
+const pager = usePagination(() => filtered.value, { resetOn: () => [filters.keyword, filters.tier] })
 
 const projectNames = (ids: number[]) => ids.map((id) => session.projectName(id)).join('、')
 
@@ -44,7 +47,7 @@ onMounted(load)
         <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
         <span class="count">共 {{ filtered.length }} 个环境</span>
       </div>
-      <el-table v-loading="loading" :data="filtered" empty-text="暂无可见环境；平台管理员在“集群与命名空间”中纳管命名空间后即出现在这里">
+      <el-table v-loading="loading" :data="pager.rows.value" empty-text="暂无可见环境；平台管理员在“集群与命名空间”中纳管命名空间后即出现在这里">
         <el-table-column label="环境" min-width="200">
           <template #default="{ row }">
             <RouterLink :to="{ name: 'environment-detail', params: { id: row.id } }"><b>{{ row.name }}</b></RouterLink>
@@ -76,6 +79,7 @@ onMounted(load)
           </template>
         </el-table-column>
       </el-table>
+      <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
     </el-card>
   </div>
 </template>

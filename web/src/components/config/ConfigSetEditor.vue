@@ -4,7 +4,9 @@ import { Clock, Delete, Edit, Plus, View } from '@element-plus/icons-vue'
 import { computed, reactive, ref } from 'vue'
 import { certificateApi, configApi } from '@/api'
 import type { CertificateOption, ConfigChange, ConfigEntryInput, ConfigSet, ConfigVersion, FileFormat } from '@/api/types'
+import TablePager from '@/components/TablePager.vue'
 import { confirmAction, notifyError, useAction } from '@/composables/useAction'
+import { usePagination } from '@/composables/usePagination'
 import { CONFIG_KIND_HINT, CONFIG_KIND_TEXT } from '@/constants'
 import { fmtSize, fmtTime } from '@/utils/format'
 
@@ -41,6 +43,9 @@ const history = reactive({
   visible: false, items: [] as ConfigVersion[], from: 0, to: 0, changes: [] as ConfigChange[], loaded: false,
 })
 const bulk = reactive({ visible: false, text: '' })
+const pager = usePagination(() => props.set.entries, { size: 20 })
+/** 分页后表格行号对应的条目下标（查看文件内容时使用）。 */
+const entryIndex = (index: number) => (pager.page.value - 1) * pager.size.value + index
 
 function startEdit() {
   rows.value = props.set.entries.map((e) => ({
@@ -181,7 +186,7 @@ async function compareVersions() {
       </div>
     </template>
 
-    <el-table v-if="!editing" :data="set.entries" size="small" empty-text="还没有条目，点击“编辑”添加">
+    <el-table v-if="!editing" :data="pager.rows.value" size="small" empty-text="还没有条目，点击“编辑”添加">
       <el-table-column :label="fileKind ? '文件名' : '键'" min-width="210">
         <template #default="{ row }">
           <span class="mono">{{ row.key }}</span>
@@ -195,12 +200,13 @@ async function compareVersions() {
             <span v-else-if="row.source === 'certificate'">证书：{{ row.certificate_name }} v{{ row.certificate_version }}</span>
             <span v-else class="hint">已设置（{{ fmtSize(row.size) }}）</span>
           </template>
-          <el-button v-else-if="fileKind" link type="primary" @click="openFile($index, true)">查看内容（{{ row.format }}）</el-button>
+          <el-button v-else-if="fileKind" link type="primary" @click="openFile(entryIndex($index), true)">查看内容（{{ row.format }}）</el-button>
           <span v-else class="mono break-word">{{ row.value }}</span>
         </template>
       </el-table-column>
       <el-table-column prop="description" label="说明" min-width="160" />
     </el-table>
+    <TablePager v-if="!editing" v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" compact />
 
     <template v-else>
       <el-table :data="rows" size="small" empty-text="点击下方“添加”">

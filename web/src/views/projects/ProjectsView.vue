@@ -10,6 +10,8 @@ import { TIER_TAG, TIER_TEXT } from '@/constants'
 import { useSession } from '@/stores/session'
 import { fmtTime } from '@/utils/format'
 import ProjectFormDialog from './ProjectFormDialog.vue'
+import TablePager from '@/components/TablePager.vue'
+import { usePagination } from '@/composables/usePagination'
 
 const session = useSession()
 const router = useRouter()
@@ -23,6 +25,7 @@ const { run } = useAction()
 
 const filtered = computed(() => projects.value.filter((p) =>
   !keyword.value.trim() || `${p.name} ${p.slug}`.toLowerCase().includes(keyword.value.trim().toLowerCase())))
+const pager = usePagination(() => filtered.value, { resetOn: () => keyword.value })
 
 function namespaceTag(id: number): { label: string; type: TagType } {
   const ns = namespaces.value.get(id)
@@ -78,7 +81,7 @@ onMounted(load)
         <el-input v-model="keyword" :prefix-icon="Search" placeholder="搜索项目名称或标识" clearable aria-label="搜索项目" />
         <span class="count">共 {{ filtered.length }} 个项目</span>
       </div>
-      <el-table v-loading="loading" :data="filtered" empty-text="暂无可见项目">
+      <el-table v-loading="loading" :data="pager.rows.value" empty-text="暂无可见项目">
         <el-table-column label="项目" min-width="190">
           <template #default="{ row }">
             <RouterLink :to="{ name: 'project-detail', params: { id: row.id } }"><b>{{ row.name }}</b></RouterLink>
@@ -115,6 +118,7 @@ onMounted(load)
           </template>
         </el-table-column>
       </el-table>
+      <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
     </el-card>
     <ProjectFormDialog v-model="dialog" :project="editing" @saved="load" />
   </div>

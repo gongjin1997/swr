@@ -4,8 +4,11 @@ import { clusterApi } from '@/api'
 import type { Cluster, ClusterDiscovery } from '@/api/types'
 import { notifyError, notifySuccess, useAction } from '@/composables/useAction'
 import { Close, Upload } from '@element-plus/icons-vue'
+import TablePager from '@/components/TablePager.vue'
+import { usePagination } from '@/composables/usePagination'
 
 const clusters = ref<Cluster[]>([])
+const pager = usePagination(() => clusters.value)
 const loading = ref(false)
 const testing = ref<number | null>(null)
 const discovery = ref<ClusterDiscovery | null>(null)
@@ -177,7 +180,7 @@ onMounted(load)
     <template #header>
       <div class="card-title"><span>集群</span><el-button type="primary" @click="open(null)">纳管集群</el-button></div>
     </template>
-    <el-table v-loading="loading" :data="clusters" empty-text="暂无纳管集群">
+    <el-table v-loading="loading" :data="pager.rows.value" empty-text="暂无纳管集群">
       <el-table-column label="集群" min-width="180">
         <template #default="{ row }"><b>{{ row.name }}</b><div class="hint">{{ row.cce_cluster_id }}</div></template>
       </el-table-column>
@@ -194,6 +197,7 @@ onMounted(load)
         </template>
       </el-table-column>
     </el-table>
+    <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
   </el-card>
 
   <el-dialog v-model="discoveryOpen" title="集群资源" width="760px">

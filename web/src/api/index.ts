@@ -5,9 +5,11 @@ import type {
   CertificateDetail, CertificateOption, CertificateUpload, Cluster, ClusterDiscovery, ConfigChange, ConfigEntry,
   ConfigEntryInput, ConfigKind, ConfigScope, ConfigSet, ConfigVersion, Deployment, DeploymentTicket, DockerfileImport,
   EffectiveConfig, EnvironmentCompare, EnvironmentDetail, EnvironmentProfile, EnvironmentSummary, GrantInput,
-  GrantOptions, IngressProfile, IngressSpec, Job, LogChunk, Namespace, NamespacePolicy, NamespaceResources, Overview,
-  Page, PlatformInfo, Preview, Project, RbacReview, RegistryOrg, Revision, RevisionDiff, RoleCatalog, RoleDefinition,
-  ScopeType, Service, SessionProfile, SessionRow, SettingsView, SystemInfo, Tier, Versions,
+  GrantOptions, ImageOnlySpec, ImportApply, ImportReport, ImportResult, ImportSource, IngressProfile, IngressSpec, Job,
+  LogChunk, ManagedSpec, ManifestSnapshot, Namespace, NamespacePolicy, NamespaceResources, Overview, Page, PlatformInfo,
+  Preview, Project, RbacReview, RegistryOrg, RenderResult, Revision, RevisionDiff, RoleCatalog, RoleDefinition, ScopeType,
+  Service, ServiceConfigInput, ServiceRuntime, ServiceStatusRow, ServiceTemplate, SessionProfile, SessionRow,
+  SettingsView, SystemInfo, Tier, Versions,
 } from './types'
 
 export const authApi = {
@@ -145,6 +147,8 @@ export const environmentApi = {
     http.get<EffectiveConfig>(`/api/environments/${id}/effective-config`, { project_id: projectId ?? undefined }),
   compare: (left: number, right: number, projectId?: number | null) =>
     http.get<EnvironmentCompare>('/api/environments/compare', { left, right, project_id: projectId ?? undefined }),
+  analyzeImport: (id: number, data: ImportSource) => http.post<ImportReport>(`/api/environments/${id}/import/analyze`, data),
+  applyImport: (id: number, data: ImportApply) => http.post<ImportResult>(`/api/environments/${id}/import/apply`, data),
 }
 
 export const ingressProfileApi = {
@@ -193,13 +197,29 @@ export interface ServiceQuery {
   namespace_id?: number
 }
 
+export interface ServiceCreate {
+  name: string
+  project_id: number
+  namespace_id: number
+  app_id: number
+  spec: ImageOnlySpec | ManagedSpec
+  config?: ServiceConfigInput
+}
+
 export const serviceApi = {
   list: (query: ServiceQuery = {}) => http.get<Page<Service>>('/api/services', { ...query }),
   get: (id: number) => http.get<Service>(`/api/services/${id}`),
-  runtime: (id: number) => http.get<NamespaceResources>(`/api/services/${id}/runtime`),
+  templates: () => http.get<Page<ServiceTemplate>>('/api/service-templates'),
+  status: (ids: number[]) => http.post<Page<ServiceStatusRow>>('/api/services/status', { ids }),
+  runtime: (id: number) => http.get<ServiceRuntime>(`/api/services/${id}/runtime`),
   builds: (id: number) => http.get<Page<Job>>(`/api/services/${id}/builds`),
-  create: (data: { name: string; project_id: number; namespace_id: number; app_id: number; spec: unknown }) =>
-    http.post<Service>('/api/services', data),
+  create: (data: ServiceCreate) => http.post<Service>('/api/services', data),
+  previewNew: (data: ServiceCreate & { dry_run: boolean }) => http.post<RenderResult>('/api/services/preview', data),
+  render: (id: number, data: { revision_id?: number; dry_run?: boolean; spec?: ManagedSpec }) =>
+    http.post<RenderResult>(`/api/services/${id}/render`, data),
+  manifest: (id: number, deploymentId?: number) =>
+    http.get<ManifestSnapshot>(`/api/services/${id}/manifest`, { deployment_id: deploymentId }),
+  effective: (id: number) => http.get<EffectiveConfig>(`/api/services/${id}/effective-config`),
   updateSpec: (id: number, base_revision: number, spec: unknown) =>
     http.put<{ service: Service; revision: Revision }>(`/api/services/${id}`, { base_revision, spec }),
   remove: (id: number) => http.del(`/api/services/${id}`),
@@ -213,6 +233,8 @@ export const serviceApi = {
     http.post<DeploymentTicket>(`/api/services/${id}/rollback`, data, { 'Idempotency-Key': key }),
   restart: (id: number, key: string, remark: string) =>
     http.post<DeploymentTicket>(`/api/services/${id}/restart`, { remark }, { 'Idempotency-Key': key }),
+  adopt: (id: number, key: string, remark: string) =>
+    http.post<DeploymentTicket>(`/api/services/${id}/adopt`, { remark }, { 'Idempotency-Key': key }),
 }
 
 export interface DeploymentQuery {

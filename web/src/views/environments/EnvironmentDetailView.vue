@@ -102,6 +102,9 @@ onMounted(load)
           <span class="hint">服务 {{ env.service_count }} 个</span>
         </div>
       </template>
+      <el-button v-if="env && session.canNamespace(env.id, 'service.create')" type="primary" plain
+        @click="router.push({ name: 'environment-import', params: { id: env.id } })">导入已有服务</el-button>
+      <RouterLink :to="{ name: 'services', query: { namespace: String(id) } }"><el-button>查看服务</el-button></RouterLink>
       <RouterLink :to="{ name: 'environments' }"><el-button>返回列表</el-button></RouterLink>
     </PageHeader>
 
@@ -129,7 +132,7 @@ onMounted(load)
 
         <el-tab-pane label="环境档案" name="profile" lazy>
           <el-alert v-if="!env.profile_saved" type="info" :closable="false" show-icon class="section-gap"
-            title="尚未保存环境档案，下面是平台默认值（与附件中的对象命名一致）。保存后新建服务会使用这些设置。" />
+            title="尚未保存环境档案，下面是平台默认值。保存后新建服务会使用这些设置；也可以通过“导入已有服务”从现有工作负载推断。" />
           <EnvironmentProfileForm v-if="profileDraft" v-model="profileDraft" v-model:ingress-profile-id="ingressDraft"
             :namespace-name="env.name" :ingress-profiles="ingressProfiles" :readonly="!env.can_edit" />
           <div v-if="env.can_edit" class="toolbar profile-actions">

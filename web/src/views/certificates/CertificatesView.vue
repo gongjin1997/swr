@@ -9,6 +9,8 @@ import { confirmAction, notifyError, useAction } from '@/composables/useAction'
 import { CONFIG_KIND_TEXT, CONFIG_SCOPE_TEXT, EXPIRY_TAG, EXPIRY_TEXT } from '@/constants'
 import { useSession } from '@/stores/session'
 import { downloadBase64, fmtSize, fmtTime, readFileBase64 } from '@/utils/format'
+import TablePager from '@/components/TablePager.vue'
+import { usePagination } from '@/composables/usePagination'
 
 const session = useSession()
 const items = ref<Certificate[]>([])
@@ -19,6 +21,7 @@ const manage = computed(() => session.canGlobal('certificate.manage'))
 const canDownload = computed(() => session.canGlobal('secret.view'))
 const filtered = computed(() => items.value.filter((c) => !keyword.value.trim() ||
   `${c.name} ${c.filename} ${String(c.metadata.subject ?? '')}`.toLowerCase().includes(keyword.value.trim().toLowerCase())))
+const pager = usePagination(() => filtered.value, { resetOn: () => keyword.value })
 
 const uploader = reactive({
   visible: false, rotate: null as CertificateDetail | null, name: '', description: '', password: '', notAfter: '', note: '',
@@ -127,7 +130,7 @@ onMounted(load)
         <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
         <span class="count">共 {{ filtered.length }} 个</span>
       </div>
-      <el-table v-loading="loading" :data="filtered" empty-text="还没有证书" @row-click="onRowClick">
+      <el-table v-loading="loading" :data="pager.rows.value" empty-text="还没有证书" @row-click="onRowClick">
         <el-table-column label="名称" min-width="200">
           <template #default="{ row }"><b>{{ row.name }}</b><div class="hint mono">{{ row.filename }}</div></template>
         </el-table-column>
@@ -145,6 +148,7 @@ onMounted(load)
         <el-table-column label="被引用" width="80"><template #default="{ row }">{{ row.used_by }}</template></el-table-column>
         <el-table-column label="大小" width="90"><template #default="{ row }">{{ fmtSize(row.size) }}</template></el-table-column>
       </el-table>
+      <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
     </el-card>
 
     <el-dialog v-model="uploader.visible" :title="uploader.rotate ? `上传新版本 · ${uploader.rotate.name}` : '上传证书或文件'" width="600px"

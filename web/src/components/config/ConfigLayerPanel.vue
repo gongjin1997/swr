@@ -1,5 +1,8 @@
 <script setup lang="ts">
-/** 某一层（平台、项目、环境）的全部配置：环境变量与敏感变量每层一个，配置文件与敏感文件按名称可以有多个。 */
+/**
+ * 某一层（平台、项目、环境、服务）的全部配置：环境变量与敏感变量每层一个，配置文件与敏感文件按名称可以有多个。
+ * 服务层只有环境变量、敏感变量和一个名为 properties 的配置文件集（渲染为 <服务>-properties）。
+ */
 import { Plus } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { configApi } from '@/api'
@@ -9,15 +12,16 @@ import { CONFIG_KIND_HINT, CONFIG_KIND_TEXT } from '@/constants'
 import { useSession } from '@/stores/session'
 import ConfigSetEditor from './ConfigSetEditor.vue'
 
-const props = defineProps<{ scopeType: ConfigScope; scopeId: number }>()
+const props = defineProps<{ scopeType: ConfigScope; scopeId: number; namespaceId?: number }>()
 const emit = defineEmits<{ changed: [] }>()
 const session = useSession()
 const sets = ref<ConfigSet[]>([])
 const loading = ref(false)
 const { busy, run } = useAction()
 const creator = reactive({ visible: false, kind: 'files' as ConfigKind, name: '', description: '' })
-const KINDS: ConfigKind[] = ['env', 'secret_env', 'files', 'secret_files']
-const SINGLETON: ConfigKind[] = ['env', 'secret_env']
+const service = computed(() => props.scopeType === 'service')
+const KINDS = computed<ConfigKind[]>(() => (service.value ? ['env', 'secret_env', 'files'] : ['env', 'secret_env', 'files', 'secret_files']))
+const SINGLETON = computed<ConfigKind[]>(() => (service.value ? ['env', 'secret_env', 'files'] : ['env', 'secret_env']))
 const DEFAULT_NAMES: Partial<Record<ConfigKind, string>> = {
   files: 'shared-config', secret_files: 'trust-store',
 }
@@ -26,10 +30,13 @@ const canEdit = computed(() => {
   if (props.scopeType === 'platform') return session.canGlobal('config.manage')
   if (props.scopeType === 'project') return session.canProject(props.scopeId, 'config.manage')
   if (props.scopeType === 'environment') return session.canNamespace(props.scopeId, 'environment.config')
-  return false
+  return session.canNamespace(props.namespaceId, 'service.config')
 })
+const kindHint = (kind: ConfigKind) => (service.value && kind === 'files'
+  ? '服务自己的配置文件（例如 service.properties），渲染为 <服务>-properties，按文件挂载'
+  : service.value && kind !== 'secret_files' ? `${CONFIG_KIND_HINT[kind]}；服务层的值覆盖上层同名的键` : CONFIG_KIND_HINT[kind])
 const byKind = (kind: ConfigKind) => sets.value.filter((s) => s.kind === kind)
-const singleton = (kind: ConfigKind) => SINGLETON.includes(kind)
+const singleton = (kind: ConfigKind) => SINGLETON.value.includes(kind)
 
 async function load() {
   loading.value = true
@@ -47,7 +54,8 @@ async function create() {
   const ok = await run(async () => {
     const created = await configApi.create({
       scope_type: props.scopeType, scope_id: props.scopeId, kind: creator.kind, entries: [],
-      name: singleton(creator.kind) ? undefined : creator.name.trim(), description: creator.description.trim(),
+      name: singleton(creator.kind) ? (service.value && creator.kind === 'files' ? 'properties' : undefined) : creator.name.trim(),
+      description: creator.description.trim(),
     })
     sets.value = [...sets.value, created]
     emit('changed')
@@ -83,7 +91,7 @@ defineExpose({ reload: load })
     <section v-for="kind in KINDS" :key="kind" class="layer-section">
       <div class="section-title">
         <h3>{{ CONFIG_KIND_TEXT[kind] }}</h3>
-        <span class="hint">{{ CONFIG_KIND_HINT[kind] }}</span>
+        <span class="hint">{{ kindHint(kind) }}</span>
         <el-button v-if="canEdit && (!singleton(kind) || !byKind(kind).length)" size="small" :icon="Plus" :loading="busy"
           @click="openCreator(kind)">{{ singleton(kind) ? '创建' : '新建' }}{{ CONFIG_KIND_TEXT[kind] }}</el-button>
       </div>

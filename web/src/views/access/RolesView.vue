@@ -10,6 +10,8 @@ import { confirmAction, notifyError, useAction } from '@/composables/useAction'
 import { SCOPE_TEXT } from '@/constants'
 import { useCatalog } from '@/stores/catalog'
 import { useSession } from '@/stores/session'
+import TablePager from '@/components/TablePager.vue'
+import { usePagination } from '@/composables/usePagination'
 
 const session = useSession()
 const catalog = useCatalog()
@@ -23,6 +25,7 @@ const form = reactive({ visible: false, code: null as string | null, data: { cod
 const rows = computed(() => catalog.roles.filter((role) =>
   (!filters.scope || role.scope_type === filters.scope) &&
   (!filters.keyword.trim() || `${role.name} ${role.code} ${role.description}`.toLowerCase().includes(filters.keyword.trim().toLowerCase()))))
+const pager = usePagination(() => rows.value, { resetOn: () => [filters.scope, filters.keyword] })
 
 async function load(force = true) {
   loading.value = true
@@ -82,7 +85,7 @@ onMounted(() => load(false))
       <span class="count">共 {{ rows.length }} 个角色</span>
       <el-button v-if="editable" type="primary" :icon="Plus" @click="open()">新建角色</el-button>
     </div>
-    <el-table v-loading="loading" :data="rows" row-key="code" empty-text="暂无角色">
+    <el-table v-loading="loading" :data="pager.rows.value" row-key="code" empty-text="暂无角色">
       <el-table-column type="expand">
         <template #default="{ row }"><div class="expand"><PermissionTags :permissions="row.permissions" /></div></template>
       </el-table-column>
@@ -111,6 +114,7 @@ onMounted(() => load(false))
         </template>
       </el-table-column>
     </el-table>
+    <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
   </el-card>
 
   <el-dialog v-model="form.visible" :title="form.code ? '编辑角色' : '新建角色'" width="760px" top="6vh" :close-on-click-modal="false">

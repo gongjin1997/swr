@@ -13,7 +13,9 @@ import DeployDialog from '@/components/DeployDialog.vue'
 import DeploymentLogDialog from '@/components/DeploymentLogDialog.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusTag from '@/components/StatusTag.vue'
+import TablePager from '@/components/TablePager.vue'
 import { notifyError, useAction } from '@/composables/useAction'
+import { usePagination } from '@/composables/usePagination'
 import { usePolling } from '@/composables/usePolling'
 import { DEPLOYMENT_ACTIVE, DEPLOYMENT_KIND_TEXT, DEPLOYMENT_STATUSES, STATUS_TEXT, TIER_TAG, TIER_TEXT } from '@/constants'
 import { useSession } from '@/stores/session'
@@ -45,6 +47,8 @@ const scopedServices = computed(() => services.value.filter((s) =>
   (!filters.appId || s.app_id === filters.appId) && (!filters.serviceId || s.id === filters.serviceId) &&
   (!filters.namespaceId || s.namespace_id === filters.namespaceId)))
 const scoped = computed(() => !!(filters.appId || filters.serviceId || filters.namespaceId))
+const servicePager = usePagination(() => scopedServices.value, { size: 10, resetOn: () => [filters.appId, filters.serviceId, filters.namespaceId] })
+const pageSize = ref(PAGE)
 
 const { run: refresh } = usePolling(async (isCurrent) => {
   loading.value = true
@@ -52,7 +56,8 @@ const { run: refresh } = usePolling(async (isCurrent) => {
     const [s, d] = await Promise.all([
       serviceApi.list(filters.projectId ? { project_id: filters.projectId } : {}),
       deploymentApi.list({ project_id: filters.projectId, app_id: filters.appId, service_id: filters.serviceId,
-        namespace_id: filters.namespaceId, status: filters.status || undefined, limit: PAGE, offset: (page.value - 1) * PAGE }),
+        namespace_id: filters.namespaceId, status: filters.status || undefined, limit: pageSize.value,
+        offset: (page.value - 1) * pageSize.value }),
     ])
     if (!isCurrent()) return false
     services.value = s.items
@@ -125,7 +130,7 @@ onMounted(() => {
           <el-button v-if="scoped" size="small" @click="clearScope">显示全部服务</el-button>
         </div>
       </template>
-      <el-table :data="scopedServices" empty-text="暂无可见服务：请先在项目中分配命名空间并创建服务">
+      <el-table :data="servicePager.rows.value" empty-text="暂无可见服务：请先在项目中分配命名空间并创建服务">
         <el-table-column label="服务" min-width="160">
           <template #default="{ row }"><RouterLink :to="{ name: 'service-detail', params: { id: row.id } }"><b>{{ row.name }}</b></RouterLink></template>
         </el-table-column>
@@ -145,6 +150,7 @@ onMounted(() => {
           </template>
         </el-table-column>
       </el-table>
+      <TablePager v-model:page="servicePager.page.value" v-model:size="servicePager.size.value" :total="servicePager.total.value" compact />
     </el-card>
 
     <el-card>
@@ -194,8 +200,7 @@ onMounted(() => {
           </template>
         </el-table-column>
       </el-table>
-      <el-pagination v-if="total > PAGE" v-model:current-page="page" :page-size="PAGE" :total="total"
-        layout="prev, pager, next, total" class="section-gap" @current-change="refresh" />
+      <TablePager v-model:page="page" v-model:size="pageSize" :total="total" @change="refresh" />
     </el-card>
     <DeployDialog v-model="deployOpen" :service="deployTarget" :job-id="jobId" @submitted="refresh" />
     <DeploymentLogDialog v-model="logId" />

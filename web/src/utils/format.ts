@@ -30,6 +30,34 @@ export function shortImage(ref: string | null | undefined): string {
   return (ref || '').split('/').slice(-2).join('/')
 }
 
+/** 镜像摘要缩写：sha256:abcdef123456… */
+export function shortDigest(ref: string | null | undefined): string {
+  const value = ref || ''
+  const index = value.indexOf('sha256:')
+  return index < 0 ? value : `${value.slice(index, index + 19)}…`
+}
+
+/** 与 kubectl 的 AGE 一致的时长：45 秒、12 分钟、3 小时 5 分、2 天 4 小时。 */
+export function fmtAge(iso: string | null | undefined, now: number = Date.now()): string {
+  if (!iso) return '-'
+  const time = new Date(iso).getTime()
+  if (Number.isNaN(time)) return '-'
+  const seconds = Math.max(0, Math.floor((now - time) / 1000))
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 ? `${hours} 小时 ${minutes % 60} 分` : `${hours} 小时`
+  const days = Math.floor(hours / 24)
+  return hours % 24 ? `${days} 天 ${hours % 24} 小时` : `${days} 天`
+}
+
+/** 相对时间：3 分钟前。 */
+export function fmtAgo(iso: string | null | undefined, now: number = Date.now()): string {
+  const age = fmtAge(iso, now)
+  return age === '-' ? '-' : `${age}前`
+}
+
 export async function copyText(text: string): Promise<void> {
   if (navigator.clipboard && window.isSecureContext) {
     await navigator.clipboard.writeText(text)

@@ -11,6 +11,8 @@ import { useCatalog } from '@/stores/catalog'
 import { useSession } from '@/stores/session'
 import { fmtTime } from '@/utils/format'
 import UserDrawer from './UserDrawer.vue'
+import TablePager from '@/components/TablePager.vue'
+import { usePagination } from '@/composables/usePagination'
 
 const session = useSession()
 const catalog = useCatalog()
@@ -33,6 +35,7 @@ const filtered = computed(() => users.value.filter((u) => {
   if (filters.kind === 'none' && u.grant_count) return false
   return true
 }))
+const pager = usePagination(() => filtered.value, { resetOn: () => [filters.keyword, filters.status, filters.kind] })
 const detailId = computed<number | null>(() => (route.query.user ? Number(route.query.user) : null))
 
 async function load() {
@@ -190,7 +193,7 @@ onMounted(load)
       <span class="count">共 {{ filtered.length }} 个账号</span>
       <el-button type="primary" :icon="Plus" @click="openCreator">新增账号</el-button>
     </div>
-    <el-table v-loading="loading" :data="filtered" empty-text="没有匹配的账号">
+    <el-table v-loading="loading" :data="pager.rows.value" empty-text="没有匹配的账号">
       <el-table-column label="账号" min-width="190">
         <template #default="{ row }">
           <el-button link type="primary" @click="openDetail(row)">{{ row.display_name }}</el-button>
@@ -226,6 +229,7 @@ onMounted(load)
         </template>
       </el-table-column>
     </el-table>
+    <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
   </el-card>
 
   <el-dialog v-model="creator.visible" title="新增账号" width="680px" :close-on-click-modal="false">

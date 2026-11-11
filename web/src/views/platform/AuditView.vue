@@ -4,10 +4,11 @@ import { onMounted, reactive, ref } from 'vue'
 import { auditApi } from '@/api'
 import type { AuditEntry } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
+import TablePager from '@/components/TablePager.vue'
 import { notifyError } from '@/composables/useAction'
 import { fmtTime } from '@/utils/format'
 
-const PAGE = 50
+const PAGE = 20
 /** 常用操作前缀，与后端审计动作命名一致。 */
 const PREFIXES: [string, string][] = [
   ['auth.', '登录'], ['account.', '个人账号'], ['user.', '账号管理'], ['binding.', '授权'], ['role.', '角色'],
@@ -16,15 +17,18 @@ const PREFIXES: [string, string][] = [
 ]
 const items = ref<AuditEntry[]>([])
 const total = ref(0)
+const page = ref(1)
+const pageSize = ref(PAGE)
 const loading = ref(false)
 const filters = reactive({ username: '', action: '' })
 
 async function load(reset = true) {
+  if (reset) page.value = 1
   loading.value = true
   try {
-    const data = await auditApi.list({ limit: PAGE, offset: reset ? 0 : items.value.length,
+    const data = await auditApi.list({ limit: pageSize.value, offset: (page.value - 1) * pageSize.value,
       username: filters.username.trim(), action: filters.action.trim() })
-    items.value = reset ? data.items : items.value.concat(data.items)
+    items.value = data.items
     total.value = data.total
   } catch (e) {
     notifyError(e)
@@ -63,14 +67,11 @@ onMounted(() => load(true))
         </el-table-column>
         <el-table-column prop="ip" label="IP" width="140" />
       </el-table>
-      <div v-if="items.length < total" class="more">
-        <el-button :loading="loading" @click="load(false)">加载更多（{{ items.length }} / {{ total }}）</el-button>
-      </div>
+      <TablePager v-model:page="page" v-model:size="pageSize" :total="total" @change="load(false)" />
     </el-card>
   </div>
 </template>
 
 <style scoped>
 .prefixes { display: flex; flex-wrap: wrap; gap: 8px; margin: -6px 0 16px; }
-.more { display: flex; justify-content: center; padding-top: 12px; }
 </style>

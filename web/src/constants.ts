@@ -36,7 +36,46 @@ export const DEPLOYMENT_ACTIVE = new Set(['queued', 'applying', 'verifying'])
 export const DEPLOYMENT_STATUSES = ['pending_approval', 'queued', 'applying', 'verifying', 'success', 'failed',
   'rejected', 'expired', 'cancelled', 'unknown'] as const
 
-export const DEPLOYMENT_KIND_TEXT: Record<string, string> = { deploy: '发布', rollback: '回滚', restart: '重新发布' }
+export const DEPLOYMENT_KIND_TEXT: Record<string, string> = {
+  deploy: '发布', rollback: '回滚', restart: '重新发布', adopt: '接管发布',
+}
+
+// ------------------------------------------------------------------ 服务与运行状态
+export const SERVICE_MODE_TEXT: Record<string, string> = { managed: '托管', image_only: '纳管' }
+export const SERVICE_MODE_HINT: Record<string, string> = {
+  managed: '平台按模板生成并下发 Deployment、Service、Ingress、HPA 与配置对象',
+  image_only: '关联集群中已有的 Deployment，发布时只更新容器镜像',
+}
+export const RUNTIME_STATE_TEXT: Record<string, string> = {
+  healthy: '运行正常', progressing: '滚动中', degraded: '部分可用', failed: '滚动失败', stopped: '已停止',
+  paused: '已暂停', missing: '未找到工作负载', unknown: '无法读取',
+}
+export const RUNTIME_STATE_TAG: Record<string, TagType> = {
+  healthy: 'success', progressing: 'primary', degraded: 'warning', failed: 'danger', stopped: 'info', paused: 'info',
+  missing: 'info', unknown: 'info',
+}
+export const LEVEL_TAG: Record<string, TagType> = { ok: 'success', warning: 'warning', error: 'danger' }
+export const CONTAINER_STATE_TEXT: Record<string, string> = {
+  running: '运行中', waiting: '等待', terminated: '已终止', unknown: '未知',
+}
+export const APPLY_ACTION_TEXT: Record<string, string> = {
+  create: '新建', update: '更新', unchanged: '无变化', skip: '保持线上', delete: '删除', error: '失败',
+}
+export const APPLY_ACTION_TAG: Record<string, TagType> = {
+  create: 'success', update: 'warning', unchanged: 'info', skip: 'info', delete: 'danger', error: 'danger',
+}
+export const CONFIG_CHANGE_TEXT: Record<string, string> = {
+  updated: '有新版本', added: '新增', removed: '已删除', replaced: '被下层同名配置替换',
+}
+export const PROBE_TYPES: [string, string][] = [['http', 'HTTP(S) 请求'], ['tcp', 'TCP 端口'], ['none', '不检查']]
+export const SERVICE_TYPES = ['ClusterIP', 'NodePort', 'LoadBalancer'] as const
+export const PULL_POLICIES = ['IfNotPresent', 'Always', 'Never'] as const
+export const IMPORT_ACTION_TEXT: Record<string, string> = {
+  create: '新建托管服务', convert: '纳管服务转为托管', skip: '已托管，跳过', unsupported: '模板不支持',
+}
+export const IMPORT_ACTION_TAG: Record<string, TagType> = {
+  create: 'success', convert: 'primary', skip: 'info', unsupported: 'danger',
+}
 
 export const BUILD_STEPS: [string, string][] = [
   ['resolve', '解析版本'],

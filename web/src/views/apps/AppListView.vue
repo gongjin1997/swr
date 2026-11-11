@@ -12,6 +12,8 @@ import { usePlatform } from '@/stores/platform'
 import { useSession } from '@/stores/session'
 import { fmtTime } from '@/utils/format'
 import AppFormDialog from './AppFormDialog.vue'
+import TablePager from '@/components/TablePager.vue'
+import { usePagination } from '@/composables/usePagination'
 
 const props = defineProps<{ projectId?: number; embedded?: boolean }>()
 const platform = usePlatform()
@@ -31,6 +33,7 @@ const filtered = computed(() => platform.apps.filter((app) =>
   (!route.query.app || props.embedded || app.id === Number(route.query.app)) &&
   (!mode.value || app.default_mode === mode.value) &&
   (!keyword.value.trim() || `${app.name} ${app.description} ${app.image_repo}`.toLowerCase().includes(keyword.value.trim().toLowerCase()))))
+const pager = usePagination(() => filtered.value, { resetOn: () => [keyword.value, mode.value, project.value] })
 const canCreate = computed(() => project.value ? session.canProject(project.value, 'app.manage') : session.can('app.manage'))
 
 async function load() {
@@ -82,7 +85,7 @@ onMounted(load)
         <span class="count">共 {{ filtered.length }} 个应用</span>
         <el-button v-if="embedded && canCreate" type="primary" :icon="Plus" @click="open(null)">新建应用</el-button>
       </div>
-      <el-table v-loading="loading" :data="filtered" :empty-text="keyword || mode ? '没有匹配的应用' : '还没有应用'">
+      <el-table v-loading="loading" :data="pager.rows.value" :empty-text="keyword || mode ? '没有匹配的应用' : '还没有应用'">
         <el-table-column label="应用" min-width="200">
           <template #default="{ row }">
             <b>{{ row.name }}</b>
@@ -109,6 +112,7 @@ onMounted(load)
           </template>
         </el-table-column>
       </el-table>
+      <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
     </el-card>
     <AppFormDialog v-model="dialog" :app="editing" :project-id="project ?? undefined" @saved="load" />
   </div>

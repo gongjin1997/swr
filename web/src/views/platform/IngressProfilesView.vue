@@ -5,18 +5,23 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ingressProfileApi } from '@/api'
 import type { IngressProfile, IngressSpec } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
+import TablePager from '@/components/TablePager.vue'
 import { confirmAction, notifyError, useAction } from '@/composables/useAction'
+import { usePagination } from '@/composables/usePagination'
 import { useSession } from '@/stores/session'
 
 const session = useSession()
 const items = ref<IngressProfile[]>([])
+const pager = usePagination(() => items.value)
 const loading = ref(false)
 const { busy, run } = useAction()
 const manage = computed(() => session.canGlobal('certificate.manage'))
 const ELB_CLASSES: [string, string][] = [['performance', '独享型（performance）'], ['union', '共享型（union）']]
+const URL_MODES: [string, string][] = [['', '不设置（CCE 默认）'], ['STARTS_WITH', '前缀匹配（STARTS_WITH）'],
+  ['EQUAL_TO', '精确匹配（EQUAL_TO）'], ['REGEX', '正则匹配（REGEX）']]
 const editor = reactive({
   visible: false, item: null as IngressProfile | null, name: '', description: '', ingressClass: 'cce', elbClass: 'performance',
-  elbId: '', port: 443, certificates: '', annotations: '',
+  elbId: '', port: 443, certificates: '', annotations: '', urlMatchMode: '',
 })
 
 async function load() {
@@ -37,6 +42,7 @@ function open(item: IngressProfile | null) {
     elbClass: spec?.elb_class ?? 'performance', elbId: spec?.elb_id ?? '', port: spec?.port ?? 443,
     certificates: (spec?.certificate_ids ?? []).join('\n'),
     annotations: Object.entries(spec?.annotations ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'),
+    urlMatchMode: spec?.url_match_mode ?? '',
   })
 }
 
@@ -52,6 +58,7 @@ function buildSpec(): IngressSpec {
   return {
     ingress_class: editor.ingressClass.trim(), elb_class: editor.elbClass, elb_id: editor.elbId.trim(), port: editor.port,
     certificate_ids: editor.certificates.split(/[\s,]+/).map((c) => c.trim()).filter(Boolean), annotations,
+    url_match_mode: editor.urlMatchMode,
   }
 }
 
@@ -86,7 +93,7 @@ onMounted(load)
         <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
         <span class="count">共 {{ items.length }} 个</span>
       </div>
-      <el-table v-loading="loading" :data="items" empty-text="还没有负载均衡入口">
+      <el-table v-loading="loading" :data="pager.rows.value" empty-text="还没有负载均衡入口">
         <el-table-column label="名称" min-width="180">
           <template #default="{ row }"><b>{{ row.name }}</b><div class="hint">{{ row.description }}</div></template>
         </el-table-column>
@@ -105,6 +112,7 @@ onMounted(load)
           </template>
         </el-table-column>
       </el-table>
+      <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
     </el-card>
 
     <el-dialog v-model="editor.visible" :title="editor.item ? `编辑 · ${editor.item.name}` : '新建负载均衡入口'" width="640px" :close-on-click-modal="false">
@@ -120,6 +128,11 @@ onMounted(load)
           <el-form-item label="IngressClass"><el-input v-model="editor.ingressClass" /></el-form-item>
           <el-form-item label="ELB 实例 ID" class="wide"><el-input v-model="editor.elbId" /></el-form-item>
           <el-form-item label="监听端口"><el-input-number v-model="editor.port" :min="1" :max="65535" /></el-form-item>
+          <el-form-item label="路径匹配方式">
+            <el-select v-model="editor.urlMatchMode">
+              <el-option v-for="[value, label] in URL_MODES" :key="value" :label="label" :value="value" />
+            </el-select>
+          </el-form-item>
         </div>
         <el-form-item label="ELB 证书 ID（每行一个；第一个为服务器证书，其余为 SNI 证书）">
           <el-input v-model="editor.certificates" type="textarea" :rows="3" class="mono" />

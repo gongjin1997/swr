@@ -64,6 +64,8 @@ export const routes: RouteRecordRaw[] = [
         meta: { title: '应用', perms: ['app.view'] } },
       { path: 'services', name: 'services', component: () => import('@/views/services/ServicesView.vue'),
         meta: { title: '服务', perms: ['namespace.view', 'app.view'] } },
+      { path: 'services/new', name: 'service-create', component: () => import('@/views/services/ServiceCreateView.vue'),
+        meta: { title: '新建服务', perms: ['service.create', 'service.config'] } },
       { path: 'services/:id(\\d+)', name: 'service-detail', component: () => import('@/views/services/ServiceDetailView.vue'),
         meta: { title: '服务详情', perms: ['namespace.view', 'app.view'] }, props: (r) => ({ id: Number(r.params.id) }) },
       // 环境
@@ -72,6 +74,9 @@ export const routes: RouteRecordRaw[] = [
       { path: 'environments/:id(\\d+)', name: 'environment-detail',
         component: () => import('@/views/environments/EnvironmentDetailView.vue'),
         meta: { title: '环境详情', perms: ['namespace.view'] }, props: (r) => ({ id: Number(r.params.id) }) },
+      { path: 'environments/:id(\\d+)/import', name: 'environment-import',
+        component: () => import('@/views/environments/EnvironmentImportView.vue'),
+        meta: { title: '导入已有服务', perms: ['service.create'] }, props: (r) => ({ id: Number(r.params.id) }) },
       { path: 'config', name: 'config-center', component: () => import('@/views/config/ConfigCenterView.vue'),
         meta: { title: '配置中心', perms: ['config.manage', 'environment.config'] } },
       { path: 'certificates', name: 'certificates', component: () => import('@/views/certificates/CertificatesView.vue'),
