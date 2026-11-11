@@ -375,7 +375,7 @@ def _check_locked(store: Store, scope_type: str, scope_id: int, kind: str, entri
 
 
 def effective_config(store: Store, me: Principal, namespace_id: int, project_id: Optional[int] = None) -> Dict[str, Any]:
-    """环境（可选再叠加一个项目）生效的配置：每个键注明来自哪一层。"""
+    """环境（可选再叠加一个项目）生效的配置：每个键的 origin 注明来自哪一层，overrides 是被它覆盖的上层。"""
     sets = store.list_config_sets(_layers(project_id, namespace_id))
     order = {scope: index for index, scope in enumerate(SCOPES)}
     sets.sort(key=lambda s: order[s["scope_type"]])
@@ -383,23 +383,23 @@ def effective_config(store: Store, me: Principal, namespace_id: int, project_id:
     files: Dict[str, Dict[str, Any]] = {}
     warnings: List[str] = []
     for item in sets:
-        source = {"scope_type": item["scope_type"], "scope_id": item["scope_id"], "config_set_id": item["id"],
+        origin = {"scope_type": item["scope_type"], "scope_id": item["scope_id"], "config_set_id": item["id"],
                   "version": item.get("version") or 0}
         if item["kind"] in merged:
             target = merged[item["kind"]]
             for entry in public_entries(store, item["kind"], item["entries"]):
                 current = target.get(entry["key"])
                 if current and current["locked"]:
-                    warnings.append(f"{entry['key']} 被{SCOPE_LABELS[current['source']['scope_type']]}层锁定，"
+                    warnings.append(f"{entry['key']} 被{SCOPE_LABELS[current['origin']['scope_type']]}层锁定，"
                                     f"{SCOPE_LABELS[item['scope_type']]}层的值未生效")
                     continue
-                overridden = ([current["source"]] + current.get("overrides", [])) if current else []
-                target[entry["key"]] = dict(entry, source=source, overrides=overridden)
+                overridden = ([current["origin"]] + current.get("overrides", [])) if current else []
+                target[entry["key"]] = dict(entry, origin=origin, overrides=overridden)
         else:
             replaced = files.get(item["name"])
-            files[item["name"]] = {"name": item["name"], "kind": item["kind"], "source": source,
+            files[item["name"]] = {"name": item["name"], "kind": item["kind"], "origin": origin,
                                    "keys": [e["key"] for e in item["entries"]],
-                                   "overrides": [replaced["source"]] if replaced else []}
+                                   "overrides": [replaced["origin"]] if replaced else []}
     return {"env": list(merged["env"].values()), "secret_env": list(merged["secret_env"].values()),
             "files": list(files.values()), "warnings": warnings}
 

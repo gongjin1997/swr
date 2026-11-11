@@ -522,3 +522,238 @@ export interface Deployment {
 
 /** 提交发布、回滚、重新发布的响应；完整记录用 deploymentApi.get 获取。 */
 export type DeploymentTicket = Pick<Deployment, 'id' | 'service_id' | 'job_id' | 'revision_id' | 'kind' | 'status' | 'digest' | 'created_at'>
+
+// ------------------------------------------------------------------ 环境与配置
+export type ConfigScope = 'platform' | 'project' | 'environment' | 'service'
+export type ConfigKind = 'env' | 'secret_env' | 'files' | 'secret_files'
+export type FileFormat = 'properties' | 'yaml' | 'json' | 'xml' | 'text'
+
+/** 接口返回的条目：敏感条目不带值，只说明来源（直接填写或引用证书）。 */
+export interface ConfigEntry {
+  key: string
+  description: string
+  locked: boolean
+  value?: string
+  format?: FileFormat
+  secret?: boolean
+  source?: 'value' | 'certificate'
+  certificate_id?: number
+  certificate_name?: string
+  certificate_version?: number | null
+  size?: number | null
+}
+
+/** 保存时提交的条目：敏感条目三选一——value（新值）、keep（沿用上一版本）、certificate_id（引用证书）。 */
+export interface ConfigEntryInput {
+  key: string
+  description?: string
+  locked?: boolean
+  value?: string
+  format?: FileFormat
+  keep?: boolean
+  certificate_id?: number
+  certificate_version?: number
+}
+
+export interface ConfigSet {
+  id: number
+  scope_type: ConfigScope
+  scope_id: number
+  name: string
+  kind: ConfigKind
+  description: string
+  version: number
+  updated_at: string
+  created_at: string
+  entries: ConfigEntry[]
+  can_edit: boolean
+  can_reveal: boolean
+}
+
+export interface ConfigVersion {
+  id: number
+  number: number
+  checksum: string
+  note: string
+  created_by: number | null
+  created_by_username: string | null
+  created_at: string
+}
+
+export interface ConfigChange {
+  key: string
+  change: 'added' | 'removed' | 'changed'
+  old?: string | null
+  new?: string | null
+}
+
+export interface ConfigOrigin {
+  scope_type: ConfigScope
+  scope_id: number
+  config_set_id: number
+  version: number
+}
+
+export interface EffectiveEntry extends ConfigEntry {
+  origin: ConfigOrigin
+  overrides: ConfigOrigin[]
+}
+
+export interface EffectiveFile {
+  name: string
+  kind: ConfigKind
+  origin: ConfigOrigin
+  keys: string[]
+  overrides: ConfigOrigin[]
+}
+
+export interface EffectiveConfig {
+  env: EffectiveEntry[]
+  secret_env: EffectiveEntry[]
+  files: EffectiveFile[]
+  warnings: string[]
+}
+
+export type CompareStatus = 'same' | 'different' | 'left_only' | 'right_only' | 'hidden'
+
+export interface CompareRow {
+  key: string
+  left: string | null
+  right: string | null
+  status: CompareStatus
+}
+
+export interface CompareFile {
+  name: string
+  status: CompareStatus | ''
+  files: { key: string; status: CompareStatus; properties?: CompareRow[] }[]
+}
+
+export interface EnvironmentCompare {
+  env: CompareRow[]
+  secret_env: CompareRow[]
+  files: CompareFile[]
+}
+
+export type NamingKey = 'deployment' | 'service' | 'ingress' | 'configmap' | 'secret' | 'properties'
+
+export interface EnvironmentProfile {
+  naming: Record<NamingKey, string>
+  host: string
+  scheduling: { node_pool_label: string; node_pool: string; anti_affinity: boolean; zone_spread: boolean }
+  image_pull_secret: string
+  log: { enabled: boolean; host_path: string; mount_path: string; sub_path_expr: string }
+  defaults: { replicas: number; cpu_request: string; memory_request: string; cpu_limit: string; memory_limit: string }
+}
+
+export interface IngressSpec {
+  ingress_class: string
+  elb_class: string
+  elb_id: string
+  port: number
+  certificate_ids: string[]
+  annotations: Record<string, string>
+}
+
+export interface IngressProfile {
+  id: number
+  name: string
+  description: string
+  spec: IngressSpec
+  version: number
+  environment_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface EnvironmentSummary {
+  id: number
+  name: string
+  cluster_id: number
+  cluster_name: string
+  tier: Tier
+  project_ids: number[]
+  profile_version: number
+  ingress_profile_id: number | null
+  ingress_profile_name: string | null
+  service_count: number
+  can_edit: boolean
+}
+
+export interface EnvironmentDetail extends EnvironmentSummary {
+  policy: NamespacePolicy
+  profile: EnvironmentProfile
+  profile_saved: boolean
+  ingress_profile: IngressProfile | null
+  config_sets: ConfigSet[]
+  can_reveal: boolean
+}
+
+export type ExpiryStatus = 'ok' | 'warning' | 'expiring' | 'expired' | 'unknown'
+
+export interface Certificate {
+  id: number
+  name: string
+  kind: 'x509' | 'pkcs12' | 'jks' | 'key' | 'file'
+  kind_label: string
+  description: string
+  version: number
+  filename: string
+  size: number
+  sha256: string
+  metadata: Record<string, unknown>
+  not_after: string | null
+  used_by: number
+  status: ExpiryStatus
+  days_left: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CertificateVersion {
+  number: number
+  filename: string
+  size: number
+  sha256: string
+  metadata: Record<string, unknown>
+  not_after: string | null
+  note: string
+  created_at: string
+  created_by_username: string | null
+  status: ExpiryStatus
+  days_left: number | null
+}
+
+export interface CertificateUsage {
+  id: number
+  scope_type: ConfigScope
+  scope_id: number
+  name: string
+  kind: ConfigKind
+  entry_key: string
+  certificate_version: number
+}
+
+export interface CertificateDetail extends Certificate {
+  versions: CertificateVersion[]
+  usage: CertificateUsage[]
+}
+
+export interface CertificateOption {
+  id: number
+  name: string
+  kind: Certificate['kind']
+  kind_label: string
+  version: number
+  filename: string
+  status: ExpiryStatus
+  days_left: number | null
+}
+
+export interface CertificateUpload {
+  filename: string
+  content_base64: string
+  password?: string
+  not_after?: string
+  note?: string
+}

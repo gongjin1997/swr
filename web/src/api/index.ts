@@ -1,11 +1,13 @@
 /** 各领域的接口函数。后端所有列表接口返回 { items, total }，删除接口返回 204。 */
 import { http, upload } from './http'
 import type {
-  Account, AccountDetail, ApiToken, App, AppFields, AuditEntry, BindableUser, Binding, BindingRow, Cluster,
-  ClusterDiscovery, Deployment, DeploymentTicket, DockerfileImport, GrantInput, GrantOptions, Job, LogChunk, Namespace,
-  NamespacePolicy, NamespaceResources, Overview, Page, PlatformInfo, Preview, Project, RbacReview, RegistryOrg,
-  Revision, RevisionDiff, RoleCatalog, RoleDefinition, ScopeType, Service, SessionProfile, SessionRow, SettingsView,
-  SystemInfo, Tier, Versions,
+  Account, AccountDetail, ApiToken, App, AppFields, AuditEntry, BindableUser, Binding, BindingRow, Certificate,
+  CertificateDetail, CertificateOption, CertificateUpload, Cluster, ClusterDiscovery, ConfigChange, ConfigEntry,
+  ConfigEntryInput, ConfigKind, ConfigScope, ConfigSet, ConfigVersion, Deployment, DeploymentTicket, DockerfileImport,
+  EffectiveConfig, EnvironmentCompare, EnvironmentDetail, EnvironmentProfile, EnvironmentSummary, GrantInput,
+  GrantOptions, IngressProfile, IngressSpec, Job, LogChunk, Namespace, NamespacePolicy, NamespaceResources, Overview,
+  Page, PlatformInfo, Preview, Project, RbacReview, RegistryOrg, Revision, RevisionDiff, RoleCatalog, RoleDefinition,
+  ScopeType, Service, SessionProfile, SessionRow, SettingsView, SystemInfo, Tier, Versions,
 } from './types'
 
 export const authApi = {
@@ -131,6 +133,57 @@ export const namespaceApi = {
   update: (id: number, data: { tier: Tier; policy: NamespacePolicy }) => http.put<Namespace>(`/api/namespaces/${id}`, data),
   review: (id: number) => http.post<RbacReview>(`/api/namespaces/${id}/review`),
   rbacYaml: (id: number) => http.get<{ yaml: string; warning: string }>(`/api/namespaces/${id}/rbac-yaml`),
+}
+
+// ------------------------------------------------------------------ 环境与配置
+export const environmentApi = {
+  list: () => http.get<Page<EnvironmentSummary>>('/api/environments'),
+  get: (id: number) => http.get<EnvironmentDetail>(`/api/environments/${id}`),
+  saveProfile: (id: number, data: { base_version: number; profile: EnvironmentProfile; ingress_profile_id: number | null }) =>
+    http.put<EnvironmentDetail>(`/api/environments/${id}/profile`, data),
+  effective: (id: number, projectId?: number | null) =>
+    http.get<EffectiveConfig>(`/api/environments/${id}/effective-config`, { project_id: projectId ?? undefined }),
+  compare: (left: number, right: number, projectId?: number | null) =>
+    http.get<EnvironmentCompare>('/api/environments/compare', { left, right, project_id: projectId ?? undefined }),
+}
+
+export const ingressProfileApi = {
+  list: () => http.get<Page<IngressProfile>>('/api/ingress-profiles'),
+  create: (data: { name: string; description: string; spec: IngressSpec }) =>
+    http.post<IngressProfile>('/api/ingress-profiles', data),
+  update: (id: number, data: { base_version: number; name: string; description: string; spec: IngressSpec }) =>
+    http.put<IngressProfile>(`/api/ingress-profiles/${id}`, data),
+  remove: (id: number) => http.del(`/api/ingress-profiles/${id}`),
+}
+
+export const configApi = {
+  list: (scope_type: ConfigScope, scope_id: number) => http.get<Page<ConfigSet>>('/api/config-sets', { scope_type, scope_id }),
+  get: (id: number) => http.get<ConfigSet>(`/api/config-sets/${id}`),
+  create: (data: { scope_type: ConfigScope; scope_id: number; kind: ConfigKind; name?: string; description?: string;
+    entries: ConfigEntryInput[]; note?: string }) => http.post<ConfigSet>('/api/config-sets', data),
+  update: (id: number, data: { base_version: number; entries: ConfigEntryInput[]; note?: string; description?: string }) =>
+    http.put<ConfigSet>(`/api/config-sets/${id}`, data),
+  remove: (id: number) => http.del(`/api/config-sets/${id}`),
+  versions: (id: number) => http.get<Page<ConfigVersion>>(`/api/config-sets/${id}/versions`),
+  version: (id: number, number: number) =>
+    http.get<{ number: number; note: string; created_at: string; entries: ConfigEntry[] }>(`/api/config-sets/${id}/versions/${number}`),
+  diff: (id: number, from: number, to: number) => http.get<Page<ConfigChange>>(`/api/config-sets/${id}/diff`, { from, to }),
+  reveal: (id: number, keys?: string[], version?: number) =>
+    http.post<{ values: Record<string, { value: string; encoding: 'text' | 'base64' }> }>(`/api/config-sets/${id}/reveal`,
+      { ...(keys ? { keys } : {}), ...(version ? { version } : {}) }),
+}
+
+export const certificateApi = {
+  list: () => http.get<Page<Certificate>>('/api/certificates'),
+  options: () => http.get<Page<CertificateOption>>('/api/certificates/options'),
+  get: (id: number) => http.get<CertificateDetail>(`/api/certificates/${id}`),
+  create: (data: CertificateUpload & { name: string; description: string }) =>
+    http.post<CertificateDetail>('/api/certificates', data),
+  rotate: (id: number, data: CertificateUpload & { base_version: number }) =>
+    http.post<CertificateDetail>(`/api/certificates/${id}/versions`, data),
+  content: (id: number, number: number) =>
+    http.get<{ filename: string; number: number; content_base64: string }>(`/api/certificates/${id}/versions/${number}/content`),
+  remove: (id: number) => http.del(`/api/certificates/${id}`),
 }
 
 // ------------------------------------------------------------------ 服务与发布

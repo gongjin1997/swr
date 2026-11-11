@@ -56,3 +56,27 @@ export function toLocalInput(iso: string | null | undefined): string {
   const p = (x: number) => String(x).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
 }
+
+/** 读取文件为 Base64（不含 data: 前缀），用于上传证书与密钥文件。 */
+export function readFileBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error(`读取 ${file.name} 失败`))
+    reader.onload = () => {
+      const result = String(reader.result ?? '')
+      resolve(result.slice(result.indexOf(',') + 1))
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+/** 把接口返回的 Base64 内容保存为本地文件。 */
+export function downloadBase64(filename: string, base64: string): void {
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+  const url = URL.createObjectURL(new Blob([bytes]))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+}

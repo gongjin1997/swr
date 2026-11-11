@@ -2,8 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  ArrowDown, Box, Connection, Document, Expand, Files, Fold, Grid, Key, Lock, Menu, Monitor, Moon, Odometer, Promotion,
-  Setting, Share, Sunny, UserFilled,
+  ArrowDown, Box, Collection, Connection, Document, Expand, Files, Fold, Grid, Guide, Key, Lock, Menu, Monitor, Moon,
+  Odometer, Operation, Postcard, Promotion, Setting, Share, Sunny, UserFilled,
 } from '@element-plus/icons-vue'
 import { allowed } from '@/router'
 import { useSession } from '@/stores/session'
@@ -24,13 +24,17 @@ const groups = [
   { title: '概览', items: [{ name: 'dashboard', icon: Odometer }] },
   { title: '交付', items: [{ name: 'build', icon: Box }, { name: 'jobs', icon: Document }, { name: 'releases', icon: Promotion }] },
   { title: '资源', items: [{ name: 'projects', icon: Files }, { name: 'apps', icon: Grid }, { name: 'services', icon: Share }] },
+  { title: '环境', items: [
+    { name: 'environments', icon: Collection }, { name: 'config-center', icon: Operation }, { name: 'certificates', icon: Postcard },
+  ] },
   { title: '平台', items: [
-    { name: 'kubernetes', icon: Connection }, { name: 'access', icon: Lock }, { name: 'audit', icon: Monitor },
-    { name: 'settings', icon: Setting },
+    { name: 'kubernetes', icon: Connection }, { name: 'ingress-profiles', icon: Guide }, { name: 'access', icon: Lock },
+    { name: 'audit', icon: Monitor }, { name: 'settings', icon: Setting },
   ] },
 ]
 const OWNER: Record<string, string> = {
-  'project-detail': 'projects', 'service-detail': 'services', users: 'access', roles: 'access', bindings: 'access',
+  'project-detail': 'projects', 'service-detail': 'services', 'environment-detail': 'environments', users: 'access',
+  roles: 'access', bindings: 'access',
 }
 
 const menu = computed(() => session.mustChangePassword ? [] : groups.map((group) => ({

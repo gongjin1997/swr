@@ -97,12 +97,12 @@ def test_layered_env_config_merge_locks_secrets_and_permissions(env):
     assert "s3cret" not in str(secret)
 
     effective = c.get(f"/api/environments/{sit}/effective-config", params={"project_id": project}).json()
-    env_values = {e["key"]: (e["value"], e["source"]["scope_type"]) for e in effective["env"]}
+    env_values = {e["key"]: (e["value"], e["origin"]["scope_type"]) for e in effective["env"]}
     assert env_values == {"JAVA_OPTS": ("-Xmx2g", "environment"), "APM_ENABLED": ("true", "platform"),
                           "APP_ID": ("orders", "project"), "spring.profiles.active": ("sit", "environment")}
     java = next(e for e in effective["env"] if e["key"] == "JAVA_OPTS")
     assert [o["scope_type"] for o in java["overrides"]] == ["platform"]
-    assert [e["key"] for e in effective["secret_env"]] == ["DB_PASSWORD", "SIGN_KEY"]
+    assert [(e["key"], e["source"]) for e in effective["secret_env"]] == [("DB_PASSWORD", "value"), ("SIGN_KEY", "value")]
 
     revealed = c.post(f"/api/config-sets/{secret['id']}/reveal", json={"keys": ["DB_PASSWORD"]}).json()
     assert revealed == {"values": {"DB_PASSWORD": {"value": "s3cret", "encoding": "text"}}}

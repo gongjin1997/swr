@@ -1,4 +1,4 @@
-import type { ScopeType, TagType, Tier } from '@/api/types'
+import type { CompareStatus, ConfigKind, ConfigScope, ExpiryStatus, ScopeType, TagType, Tier } from '@/api/types'
 
 export const MODE_TEXT: Record<string, string> = { incremental: '累加构建', full: '全量构建' }
 
@@ -62,3 +62,32 @@ export const WEEKDAYS: [number, string][] = [
 ]
 
 export const TAG_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/
+
+// ------------------------------------------------------------------ 环境与配置
+export const CONFIG_SCOPE_TEXT: Record<ConfigScope, string> = {
+  platform: '平台', project: '项目', environment: '环境', service: '服务',
+}
+export const CONFIG_SCOPE_TAG: Record<ConfigScope, TagType> = {
+  platform: 'info', project: 'primary', environment: 'success', service: 'warning',
+}
+export const CONFIG_KIND_TEXT: Record<ConfigKind, string> = {
+  env: '环境变量', secret_env: '敏感环境变量', files: '配置文件', secret_files: '敏感文件',
+}
+export const CONFIG_KIND_HINT: Record<ConfigKind, string> = {
+  env: '合并后写入每个服务的 <服务>-configmap，以 envFrom 注入容器；下层覆盖上层同名的键',
+  secret_env: '合并后写入每个服务的 <服务>-secrets；值加密保存，界面默认不显示',
+  files: '生成同名 ConfigMap，按文件挂载到容器（例如公共 properties 文件）；下层同名配置整体替换上层',
+  secret_files: '生成同名 Secret，按文件挂载（例如证书目录）；文件通常引用证书库中的证书或密钥',
+}
+export const EXPIRY_TEXT: Record<ExpiryStatus, string> = {
+  ok: '有效', warning: '90 天内到期', expiring: '30 天内到期', expired: '已过期', unknown: '未知',
+}
+export const EXPIRY_TAG: Record<ExpiryStatus, TagType> = {
+  ok: 'success', warning: 'warning', expiring: 'danger', expired: 'danger', unknown: 'info',
+}
+export const COMPARE_TEXT: Record<CompareStatus, string> = {
+  same: '相同', different: '不同', left_only: '仅左侧', right_only: '仅右侧', hidden: '无权比较',
+}
+export const COMPARE_TAG: Record<CompareStatus, TagType> = {
+  same: 'success', different: 'warning', left_only: 'info', right_only: 'info', hidden: 'info',
+}
