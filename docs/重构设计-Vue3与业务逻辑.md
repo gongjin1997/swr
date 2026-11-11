@@ -2,6 +2,34 @@
 
 > 状态：已实施（v1.3.0-dev.1，分支 refactor/v1.3-vue3）｜基线：v1.2.0-dev.2（commit 797de51）｜日期：2026-11-06
 
+## 2026-11-11 整体重构（v1.3.0-dev.2）
+
+目标：账号权限只有一套模型，业务规则只在服务层，页面围绕项目组织。下文 §3.3 路由表与 §3.6 权限是初版设计，已被本节取代。
+
+**权限**：账号权限只来自授权记录；权限目录与内置角色在 `access/catalog.py` 定义一次，请求主体 `Principal` 在中间件、服务层、发布 worker 共用；路由用 `@requires` 声明权限。详见《账号与权限设计.md》。
+
+**服务层与接口**：业务规则从路由移入 `services/`；列表统一 `{items, total}`，删除 204，重复数据 409，上游失败 502。
+
+**页面与路由**
+
+| 分组 | 路径 | 页面 | 权限（任一） |
+| --- | --- | --- | --- |
+| 概览 | `/dashboard` | 工作台：汇总、待我审批、最近构建 | 登录即可 |
+| 交付 | `/build`、`/jobs`、`/releases` | 构建镜像、构建记录、发布中心 | `build.run`、`job.view`、`deploy.view` / `namespace.view` / `app.view` |
+| 资源 | `/projects`、`/projects/:id?tab=` | 项目列表、项目工作台（概览、应用、服务、构建记录、发布记录、成员） | `project.view` |
+| 资源 | `/apps`、`/services`、`/services/:id` | 应用、服务、服务详情 | `app.view`、`namespace.view` / `app.view` |
+| 平台 | `/platform/kubernetes?tab=` | 集群、命名空间（策略、权限自检、成员） | `cluster.manage`、`namespace.member.manage` |
+| 平台 | `/platform/access/users`、`/roles`、`/bindings` | 账号、角色、授权 | `user.manage`、`role.manage`、成员管理权限 |
+| 平台 | `/platform/audit`、`/platform/settings` | 操作审计、系统设置 | `audit.view`、`settings.manage` |
+| 个人 | `/account` | 资料与密码、我的权限、API 令牌、登录设备 | 登录即可 |
+
+- 项目工作台的标签页直接复用 `AppListView`、`ServicesView`、`JobListView`、`ReleasesView`，通过 `projectId` 与 `embedded` 属性固定为当前项目，列表页与项目内看到的是同一个组件。
+- 授权对话框、授权表、成员面板放在 `components/access/`，账号详情、项目成员、命名空间成员共用。对话框只展示 `/api/bindings/options` 返回的可授予组合。
+- 按钮按具体资源判断：`session.canProject(id, p)`、`session.canNamespace(id, p)`、`session.canGlobal(p)`；菜单与路由用 `session.can(p)`（任一范围拥有）。
+- 旧地址 `/deploy`、`/resources/*`、`/admin/*`、`/settings` 跳转到新位置。
+
+**验证**：后端测试在 CI（GitHub Actions）中全部通过；前端在 CI 中通过 `vue-tsc` 与 `vite build`。另用 CI 构建产物配合模拟 Kubernetes API，以管理员、开发者、审批人、命名空间管理员、无授权账号分别登录，逐页核对菜单、按钮、页面错误与授权、审批流程。
+
 ## 2026-11-09 前端界面更新
 
 本次界面以 HCS 巡检平台前端为参考，迁移其品牌色、中性色、间距和侧栏设计令牌至 `web/src/styles/tokens.css`，在当前 Vue 3 / Element Plus 工程重写页面框架。HCS 的巡检、租户和告警接口不属于 SWR 业务，因此未复制这些模块。

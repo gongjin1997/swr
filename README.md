@@ -42,21 +42,25 @@ python -m swr_builder -c config.yaml
 - 如指定初始化密码，请使用强密码；该配置只用于首次创建账号，不是后续密码重置机制。
 - 原 v1.0 的 `server.users` 会在空账号库首次启动时迁移为管理员，并要求改密。
 - 生产务必使用 HTTPS，配置 `server.secure_cookie: true`，限制访问来源；平台没有“免登录”运行模式。
-- 管理员在“账号管理”创建开发者或只读账号；“我的账号”支持资料、密码、登录设备和 API 令牌。
+- 管理员在“平台 › 访问控制”创建账号，并授予项目或命名空间角色（**新账号默认没有任何权限**）；“我的账号”支持资料、密码、我的权限、登录设备和 API 令牌。
 
 > 构建 worker 与旧版部署目标仍限定单进程运行。v1.2 服务发布队列使用 SQLite 持久化与租约；跨主机高可用尚未实现。
 
 ### 前端工作台
 
-前端沿用 HCS 巡检平台的浅色侧栏、设计令牌和 Element Plus 组件规范，按 SWR 的业务重新组织：
+前端沿用 HCS 巡检平台的浅色侧栏、设计令牌和 Element Plus 组件规范，按“项目 → 应用 → 构建 → 服务 → 发布”的交付流程组织。菜单只显示当前账号有权限的入口：
 
-- **工作台概览**：当前权限范围内的应用数、构建总数、运行中任务、成功率与最近记录。
-- **工作空间**：构建镜像、构建记录和应用管理；构建页面按应用、版本、制品分组，右侧显示实时日志。
-- **资源与发布**：项目、服务及旧部署中心，菜单和路由使用同一套权限检查。
-- **平台管理**：Kubernetes 集群、命名空间、成员授权、账号、审计和系统设置。Kubernetes 配置集中在系统设置；支持 kubeconfig `kind: Config` 的静态 Token/内嵌证书，不依赖 HCS 配置。
+| 分组 | 页面 | 内容 |
+| --- | --- | --- |
+| 概览 | 工作台 | 可见范围内的项目、应用、服务、构建汇总，待我审批的发布，最近构建 |
+| 交付 | 构建镜像 / 构建记录 / 发布中心 | 上传制品构建并查看实时日志；按项目、应用、状态筛选构建；选择成功构建发布到命名空间并审批 |
+| 资源 | 项目 / 应用 / 服务 | 项目详情是项目工作台：概览（SWR 授权、命名空间）、应用、服务、构建记录、发布记录、成员 |
+| 平台 | 集群与命名空间 / 访问控制 / 操作审计 / 系统设置 | 纳管集群与命名空间并设置发布策略；账号、角色、授权；审计记录；仓库、构建、安全等设置 |
+
+- Kubernetes 集群支持 kubeconfig `kind: Config` 的静态 Token/内嵌证书，不依赖 HCS 配置。
 - 侧栏可折叠；手机使用抽屉导航；外观支持浅色、深色与跟随系统，偏好保存在当前浏览器。
 
-旧的业务 URL 和 API 继续可用，登录后的默认入口改为 `/dashboard`。前端生产产物仍输出到 `swr_builder/webui/`，由 FastAPI 托管，无需更换部署方式。
+登录后的默认入口为 `/dashboard`。v1.3.0-dev.1 及之前的页面地址（如 `/deploy`、`/resources/services/3`、`/admin/users`、`/settings`）会自动跳转到新位置。前端生产产物仍输出到 `swr_builder/webui/`，由 FastAPI 托管，无需更换部署方式。
 
 ## 3. 部署方式
 
@@ -118,7 +122,9 @@ location / {
 
 ## 5. 使用流程
 
-1. **应用管理 → 新建应用**：粘贴现有 Dockerfile 点“导入”，自动识别基础镜像、工作目录、目标文件名、属主（`--chown`）；填写镜像名（如 `cnnc-coding-chc-fin`）和构建平台（如 `linux/arm64`）。
+开始前，平台管理员在“资源 › 项目”新建项目并填写允许推送的 SWR 组织，再在“访问控制”或项目的“成员”标签页给开发人员授予项目角色（如“开发者”）。
+
+1. **项目 › 应用 → 新建应用**：粘贴现有 Dockerfile 点“导入”，自动识别基础镜像、工作目录、目标文件名、属主（`--chown`）；填写镜像名（如 `cnnc-coding-chc-fin`）和构建平台（如 `linux/arm64`）。
    `config.example.yaml` 已按附件的 Dockerfile 预置了 `cnnc-coding-chc-fin` 应用。
 2. **构建镜像**：选择应用，页面自动显示上一版本、层数、架构和建议的新版本号。
 3. 选择 **累加构建**（默认）或 **全量构建**，可指定“基于版本”和“新版本号”（留空自动递增）。
@@ -147,7 +153,7 @@ location / {
 
 ## 7. 配置说明
 
-管理员可在“系统设置”维护站点、仓库、构建、安全与 Kubernetes 集群/命名空间配置。Kubernetes 直连 kubeconfig，不要求配置华为云 Stack。优先级为 **环境变量 > 数据库中的页面设置 > config.yaml / 默认值**。环境变量控制的项在页面只读；敏感值不回显，留空保持，明确勾选才清空。设置生效不需要重启；有未结束的构建时不能修改仓库及构建参数。
+管理员可在“平台 › 系统设置”维护站点、仓库、构建与安全设置；Kubernetes 集群与命名空间在“平台 › 集群与命名空间”管理。Kubernetes 直连 kubeconfig，不要求配置华为云 Stack。优先级为 **环境变量 > 数据库中的页面设置 > config.yaml / 默认值**。环境变量控制的项在页面只读；敏感值不回显，留空保持，明确勾选才清空。设置生效不需要重启；有未结束的构建时不能修改仓库及构建参数。
 
 镜像仓库的“跳过 Registry API TLS 校验”只影响平台读取 Registry API。`docker login/build/push` 由宿主机 Docker daemon 连接仓库；遇到 x509/SAN 错误时，应修复仓库证书，或在 Docker daemon 的 `/etc/docker/daemon.json` 中合并 `insecure-registries` 配置并重启 Docker。该主机级配置不会由平台自动改写或重启。
 
@@ -192,8 +198,17 @@ location / {
 | GET | `/api/apps/{id}/versions` | 版本列表、上一版本、建议版本 |
 | POST | `/api/apps/{id}/preview` | 预览构建计划与 Dockerfile |
 | POST | `/api/builds` | 上传文件并创建构建（multipart） |
-| GET | `/api/jobs`、`/api/jobs/{id}`、`/api/jobs/{id}/log?offset=` | 构建记录、详情、增量日志 |
+| GET | `/api/jobs`、`/api/jobs/{id}`、`/api/jobs/{id}/log?offset=` | 构建记录（可按 `project_id`、`app_id`、`status` 筛选）、详情、增量日志 |
 | POST | `/api/jobs/{id}/cancel` | 取消构建 |
+| GET | `/api/overview` | 工作台：可见范围内的汇总与待我审批的发布 |
+| GET/POST | `/api/projects`；PUT/DELETE `/api/projects/{id}` | 项目；`PUT/DELETE /api/projects/{id}/namespaces/{nid}` 分配命名空间 |
+| GET/POST | `/api/services`；`/api/services/{id}/deployments`、`/rollback`、`/restart` | 服务与发布（需 `Idempotency-Key` 请求头） |
+| GET | `/api/deployments`、`/api/deployments/{id}`；POST `/api/deployments/{id}/approve`、`/reject` | 发布记录与审批 |
+| GET/POST | `/api/users`；GET/PUT/DELETE `/api/users/{id}` | 账号（创建时可带 `grants` 初始授权） |
+| GET/POST | `/api/bindings`；DELETE `/api/bindings/{id}`；GET `/api/bindings/options` | 授权与可授予的范围、角色 |
+| GET/POST | `/api/role-definitions`；PUT/DELETE `/api/role-definitions/{code}` | 角色目录与权限目录、自定义角色 |
+
+约定：列表接口返回 `{"items": [...], "total": n}`；删除成功返回 204；错误响应为 `{"detail": "中文说明", "code": "机器可读代码"}`，重复数据返回 409，无权访问的具体资源按不存在返回 404。
 
 浏览器使用 HttpOnly / SameSite=Lax 会话 Cookie；修改请求额外要求 `X-Requested-With: XMLHttpRequest`。CI 请在“我的账号 → API 令牌”生成限时令牌（仅显示一次），通过环境变量传给调用进程，不在命令行明文写密码；令牌继承所属账号角色。改密、重置密码或停用账号会撤销相关令牌。
 
@@ -206,20 +221,29 @@ curl -H "Authorization: Bearer $BUILDER_API_TOKEN" -F app_id=1 -F mode=increment
 
 ## 10. 账号权限
 
-| 角色 | 权限 |
-| --- | --- |
-| 管理员 | 平台全局管理、应用、项目、集群、命名空间、服务、审批、设置和审计 |
-| 开发者 | 通过项目绑定查看应用、构建和任务；拥有项目权限时可构建/配置，部署另需 namespace 角色 |
-| 只读用户 | 旧版默认项目迁移为只读；新授权使用 `project_viewer` / `namespace_viewer` |
+账号的权限只来自**授权**：在全局、某个项目或某个命名空间范围授予一个角色。新账号默认没有任何权限。项目授权不会带来命名空间权限，反之亦然。
 
-v1.2 开始按项目与命名空间 role binding 做服务端行级授权。项目绑定不会自动授予 namespace 权限；生产发布要求至少一名平台管理员确认。非生产环境可把全局 `deployment_approver` 角色绑定给专职审批人；`namespace_owner` 不能审批发布。命名空间策略也可要求管理员确认。用户组、SSO、机器人账号、CCE 证书自动签发尚未完成。至少保留一名平台管理员。
+| 范围 | 内置角色 |
+| --- | --- |
+| 全局 | 平台管理员（全部权限）、审计员（全局只读与审计）、发布审批员（审批所有非生产环境的发布） |
+| 项目 | 项目管理员（成员、应用、构建）、开发者（维护应用、构建、取消自己的构建）、项目只读 |
+| 命名空间 | 命名空间管理员（成员、服务配置、发布、回滚、密钥）、环境审批员、部署员（配置并发布服务）、命名空间只读 |
+
+- 也可在“访问控制 › 角色”按需组合权限，新建自定义角色。
+- 全局角色只有平台管理员能授予；项目或命名空间的成员管理员只能在自己的范围内授予不超过自身权限、且不含成员管理权限的角色。
+- 账号管理员只能管理全局权限不超过自己的账号。至少保留一名启用的平台管理员。
+- 发起人不能审批自己的发布；生产环境必须由平台管理员确认；命名空间管理员不含审批权限。
+- 用户组、SSO、机器人账号、CCE 证书自动签发尚未完成。
+
+完整的权限点、角色、授权规则与扩展方法见 [账号与权限设计](docs/账号与权限设计.md)。
 
 ## 11. 部署模块
 
-- “部署中心”配置目标：**Webhook** 或 **CCE / Kubernetes**。SSH / Compose 仅为注册表占位，不可执行。
+- 发布流程：在“集群与命名空间”纳管集群和命名空间并分配给项目 → 在项目中创建服务（关联应用与 Deployment/容器）→ 在“发布中心”或服务详情选择成功构建发布 → 按命名空间策略审批 → worker 更新镜像并等待滚动完成。
+- 旧部署目标（**Webhook** 或 **CCE / Kubernetes**，v1.2 起不再执行发布）只保留 `/api/deploy/targets` 接口供迁移核对与连接测试，控制台不再提供入口。SSH / Compose 仅为注册表占位，不可执行。
 - Webhook 固定 POST JSON：`event`、`deployment_id`、`image`、`app`、`job_id`、`tag`、`digest`、`operator`。可配置请求头、TLS 校验及 HMAC-SHA256 签名；`X-SWR-Signature: sha256=<十六进制签名>` 对原始 UTF-8 请求体计算。接收方应按 `deployment_id` 去重，建立自身的防重放/鉴权机制。
 - Webhook 测试会发送 `event=ping`，请确保接收端不会误触发部署。HTTP 2xx 仅表示网关接受请求，不代表应用已就绪；异步回调确认尚未实现。
-- 集群凭据以密文保存，支持标准 kubeconfig Config 中的静态 Token 或内嵌客户端证书/私钥；也可在系统设置中直接上传 PEM 客户端证书、私钥和可选 CA。可纳管已有 namespace、执行 SSAR 权限检查和生成供集群管理员审核的 RBAC 模板。kubeconfig `exec`、`auth-provider` 和外部文件凭据不受支持且不会执行/读取。生产发布只有平台管理员可批准；非生产环境由全局发布审批员角色批准。
+- 集群凭据以密文保存，支持标准 kubeconfig Config 中的静态 Token 或内嵌客户端证书/私钥；也可在“集群与命名空间”中直接上传 PEM 客户端证书、私钥和可选 CA。可纳管已有 namespace、执行 SSAR 权限检查和生成供集群管理员审核的 RBAC 模板。kubeconfig `exec`、`auth-provider` 和外部文件凭据不受支持且不会执行/读取。生产发布只有平台管理员可批准；非生产环境由全局发布审批员角色批准。
 - 服务配置支持不可变 revision、CAS 更新和只写密钥。worker 当前可对 `image_only` 服务执行固定 digest 的 Deployment 镜像更新并等待滚动就绪；`managed` 模式的完整清单 apply 尚未启用。
 - 服务发布写入 SQLite 队列，使用幂等键、租约和 fencing token。工作进程重启时，执行中的 Kubernetes 写操作标记 `unknown`，须先核对集群状态；不会盲目重放。
 - 生产 namespace 始终要求平台管理员审批；审批人与发起人分离。非生产 namespace 可要求普通审批或额外启用管理员审批。回滚、重启、扩缩容请求已有状态与权限入口，仍需扩展测试集群覆盖和操作体验。
@@ -228,11 +252,11 @@ v1.2 开始按项目与命名空间 role binding 做服务端行级授权。项�
 - Webhook / Kubernetes 旧目标保留为迁移查看和管理员连接测试用途。发布请创建服务并使用 namespace 授权与审批队列。
 - 当前不提供灰度发布、自动回滚、CCE 证书轮换、managed 资源 SSA 或生产 SLA 保证。真实 CCE/SWR/Kubernetes 联调、灾备演练和审批业务验收尚未完成。
 
-新增适配器：继承 `deploy/base.py` 的 `Deployer`，实现 `validate / test / deploy`，在 `deploy/__init__.py` 注册；前端从字段描述生成表单。通过 `events.py` 订阅构建/部署事件扩展通知、扫描等模块。
+旧部署适配器（`deploy/base.py` 的 `Deployer`，在 `deploy/__init__.py` 注册）只服务于旧部署目标的迁移核对与连接测试，服务发布不经过适配器。通过 `events.py` 订阅构建/部署事件扩展通知、扫描等模块。
 
 ## 12. 云端依赖
 
-Kubernetes 部署直接使用系统设置中导入的 kubeconfig，不需要华为云 Stack 的 IAM、CCE 或 SWR 管理 API 配置。HCS 后端代码仅作为可选兼容模块保留，不参与镜像构建或 Kubernetes 发布；系统设置界面不展示 HCS 配置。
+Kubernetes 部署直接使用“集群与命名空间”中导入的 kubeconfig，不需要华为云 Stack 的 IAM、CCE 或 SWR 管理 API 配置。HCS 后端代码仅作为可选兼容模块保留，不参与镜像构建或 Kubernetes 发布；系统设置界面不展示 HCS 配置。
 
 ## 13. 测试
 
