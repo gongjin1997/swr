@@ -86,7 +86,8 @@ async function save() {
 </script>
 
 <template>
-  <el-dialog v-model="visible" title="新增授权" width="580px" :close-on-click-modal="false">
+  <!-- 会在账号详情、命名空间成员等抽屉中打开，嵌套时必须挂到 body 上 -->
+  <el-dialog v-model="visible" title="新增授权" width="580px" :close-on-click-modal="false" append-to-body>
     <div v-loading="loading">
       <el-empty v-if="unavailable" description="当前账号没有可以授予的范围或角色。" :image-size="80" />
       <el-form v-else label-position="top">

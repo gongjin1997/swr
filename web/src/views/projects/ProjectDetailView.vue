@@ -27,14 +27,16 @@ const editing = ref(false)
 const { busy, run } = useAction()
 const assign = reactive({ visible: false, selected: [] as number[] })
 
-const TABS = ['overview', 'apps', 'services', 'jobs', 'releases', 'members'] as const
-type Tab = typeof TABS[number]
-const tab = computed<Tab>({
-  get: () => (TABS as readonly string[]).includes(String(route.query.tab)) ? route.query.tab as Tab : 'overview',
-  set: (value) => void router.replace({ query: { tab: value === 'overview' ? undefined : value } }),
-})
+type Tab = 'overview' | 'apps' | 'services' | 'jobs' | 'releases' | 'members'
 const manage = computed(() => session.canGlobal('project.manage'))
 const showMembers = computed(() => session.canProject(props.id, 'project.member.manage') || session.canGlobal('user.manage'))
+/** 当前账号可见的标签页；地址里的 tab 不可用时（如无成员管理权限）回到概览。 */
+const tabs = computed<Tab[]>(() => ['overview', 'apps', 'services', 'jobs',
+  ...(session.deployEnabled ? ['releases' as const] : []), ...(showMembers.value ? ['members' as const] : [])])
+const tab = computed<Tab>({
+  get: () => tabs.value.find((t) => t === route.query.tab) ?? 'overview',
+  set: (value) => void router.replace({ query: { tab: value === 'overview' ? undefined : value } }),
+})
 const assigned = computed(() => namespaces.value.filter((n) => project.value?.namespace_ids.includes(n.id)))
 const namespaceOptions = computed(() => namespaces.value.map((n) => ({
   key: n.id, label: `${n.cluster_name} / ${n.name}（${TIER_TEXT[n.tier]}）`,
@@ -147,8 +149,8 @@ watch(() => props.id, load, { immediate: true })
         <el-tab-pane label="应用" name="apps" lazy><AppListView :project-id="project.id" embedded /></el-tab-pane>
         <el-tab-pane label="服务" name="services" lazy><ServicesView :project-id="project.id" embedded /></el-tab-pane>
         <el-tab-pane label="构建记录" name="jobs" lazy><JobListView :project-id="project.id" embedded /></el-tab-pane>
-        <el-tab-pane v-if="session.deployEnabled" label="发布记录" name="releases" lazy><ReleasesView :project-id="project.id" embedded /></el-tab-pane>
-        <el-tab-pane v-if="showMembers" label="成员" name="members" lazy>
+        <el-tab-pane v-if="tabs.includes('releases')" label="发布记录" name="releases" lazy><ReleasesView :project-id="project.id" embedded /></el-tab-pane>
+        <el-tab-pane v-if="tabs.includes('members')" label="成员" name="members" lazy>
           <el-card><MembersPanel scope-type="project" :scope-id="project.id" /></el-card>
         </el-tab-pane>
       </el-tabs>
