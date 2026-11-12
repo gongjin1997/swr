@@ -380,10 +380,60 @@ PATCH_SCRIPTS = [
     )""",
 ]
 
+# 迁移 5：资源管理、资源绑定与环境预置
+RESOURCE_MANAGEMENT = [
+    """CREATE TABLE resources (
+        id BIGSERIAL PRIMARY KEY,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('platform', 'environment')),
+        scope_id BIGINT NOT NULL DEFAULT 0,
+        type TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        current_version_id BIGINT,
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_resources_scope_name UNIQUE (scope_type, scope_id, name)
+    )""",
+    "CREATE INDEX idx_resources_scope ON resources (scope_type, scope_id)",
+    """CREATE TABLE resource_versions (
+        id BIGSERIAL PRIMARY KEY,
+        resource_id BIGINT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+        number INTEGER NOT NULL,
+        attributes TEXT NOT NULL,
+        checksum TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_resource_versions_number UNIQUE (resource_id, number)
+    )""",
+    """CREATE TABLE service_resource_bindings (
+        service_id BIGINT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+        resource_id BIGINT NOT NULL REFERENCES resources(id) ON DELETE RESTRICT,
+        alias TEXT NOT NULL,
+        PRIMARY KEY (service_id, alias)
+    )""",
+    "CREATE INDEX idx_service_bindings_resource ON service_resource_bindings (resource_id)",
+    """CREATE TABLE environment_presets (
+        id BIGSERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        profile_template TEXT NOT NULL,
+        default_config_sets TEXT NOT NULL,
+        required_resource_types TEXT NOT NULL,
+        required_params TEXT NOT NULL,
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_environment_presets_name UNIQUE (name)
+    )""",
+    "ALTER TABLE environment_profiles ADD COLUMN required_params TEXT NOT NULL DEFAULT '[]'",
+]
+
 # 有自增主键的表：导入旧数据后要重置序列
 SERIAL_TABLES = ("projects", "users", "api_tokens", "audit_logs", "apps", "jobs", "role_bindings", "clusters",
                  "namespaces", "services", "service_revisions", "service_secrets", "deploy_targets", "deployments",
-                 "approvals")
+                 "approvals", "resources", "resource_versions", "environment_presets")
 
 USER_FIELDS = ("username", "display_name", "email", "password_hash", "role", "enabled", "must_change_password",
                "created_at", "updated_at", "last_login_at", "password_changed_at")

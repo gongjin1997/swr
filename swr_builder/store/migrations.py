@@ -12,7 +12,7 @@ import hashlib
 import logging
 from typing import Any, Callable, List, Tuple
 
-from .schema import BASELINE, ENVIRONMENT_CONFIG, MANAGED_DELIVERY, PATCH_SCRIPTS, utcnow
+from .schema import BASELINE, ENVIRONMENT_CONFIG, MANAGED_DELIVERY, PATCH_SCRIPTS, RESOURCE_MANAGEMENT, utcnow
 
 logger = logging.getLogger("swr_builder.store")
 
@@ -42,11 +42,17 @@ def _patch_scripts(db: Any) -> None:
         db.execute(statement)
 
 
+def _resource_management(db: Any) -> None:
+    for statement in RESOURCE_MANAGEMENT:
+        db.execute(statement)
+
+
 MIGRATIONS: List[Migration] = [
     (1, "v2-postgresql-baseline", _baseline),
     (2, "v2-environment-profiles-config-sets-certificates", _environment_config),
     (3, "v2-managed-service-manifests", _managed_delivery),
     (4, "v2-patch-script-history", _patch_scripts),
+    (5, "v2-resource-management-and-bindings", _resource_management),
 ]
 
 
