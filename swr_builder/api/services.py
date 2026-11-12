@@ -9,6 +9,7 @@ from ..delivery.spec import DEFAULT_SPEC, TEMPLATES
 from ..errors import NotFound, NotImplementedYet
 from ..services import catalog, manifests, releases
 from ..services.access import service_or_404
+from ..services.config_resolver import effective_config_with_sources
 from ..services.discovery import service_runtime, services_status
 from ..web.deps import Ctx, Me, audit, authenticated, deploy_module
 
