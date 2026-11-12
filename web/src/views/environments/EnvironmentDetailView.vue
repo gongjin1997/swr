@@ -2,8 +2,8 @@
 /** 环境详情：概览（生效配置）、基础配置、环境档案、环境对比、发布策略、成员。 */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { environmentApi, ingressProfileApi } from '@/api'
-import type { EnvironmentDetail, EnvironmentProfile, EnvironmentSummary, IngressProfile } from '@/api/types'
+import { environmentApi, ingressProfileApi, presetApi } from '@/api'
+import type { EnvironmentDetail, EnvironmentProfile, EnvironmentSummary, IngressProfile, Preset } from '@/api/types'
 import MembersPanel from '@/components/access/MembersPanel.vue'
 import ConfigLayerPanel from '@/components/config/ConfigLayerPanel.vue'
 import EffectiveConfigTable from '@/components/config/EffectiveConfigTable.vue'
@@ -27,6 +27,12 @@ const ingressDraft = ref<number | null>(null)
 const loading = ref(false)
 const effective = ref<InstanceType<typeof EffectiveConfigTable> | null>(null)
 const { busy, run } = useAction()
+
+// 应用预置对话框
+const applyPresetDialog = ref(false)
+const presets = ref<Preset[]>([])
+const selectedPresetId = ref<number | null>(null)
+const presetParams = ref<Record<string, any>>({})
 
 const TABS = ['overview', 'config', 'profile', 'compare', 'policy', 'members'] as const
 type Tab = (typeof TABS)[number]
@@ -88,6 +94,43 @@ function refreshEffective() {
   effective.value?.reload()
 }
 
+async function showApplyPresetDialog() {
+  try {
+    const result = await presetApi.list()
+    presets.value = result.items
+    selectedPresetId.value = null
+    presetParams.value = {}
+    applyPresetDialog.value = true
+  } catch (e) {
+    notifyError(e)
+  }
+}
+
+async function applyPreset() {
+  if (!selectedPresetId.value || !env.value) return
+  await run(async () => {
+    await environmentApi.applyPreset(env.value!.id, {
+      preset_id: selectedPresetId.value!,
+      params: presetParams.value,
+    })
+    applyPresetDialog.value = false
+    await load()
+    refreshEffective()
+  }, '预置已应用')
+}
+
+watch(() => selectedPresetId.value, (presetId) => {
+  if (presetId) {
+    const preset = presets.value.find(p => p.id === presetId)
+    if (preset) {
+      presetParams.value = {}
+      preset.required_params.forEach((param: any) => {
+        presetParams.value[param.key] = param.default || ''
+      })
+    }
+  }
+})
+
 watch(() => props.id, load)
 onMounted(load)
 </script>
@@ -102,6 +145,7 @@ onMounted(load)
           <span class="hint">服务 {{ env.service_count }} 个</span>
         </div>
       </template>
+      <el-button v-if="env && session.canNamespace(env.id, 'environment.config')" @click="showApplyPresetDialog">应用预置</el-button>
       <el-button v-if="env && session.canNamespace(env.id, 'service.create')" type="primary" plain
         @click="router.push({ name: 'environment-import', params: { id: env.id } })">导入已有服务</el-button>
       <RouterLink :to="{ name: 'services', query: { namespace: String(id) } }"><el-button>查看服务</el-button></RouterLink>
@@ -164,6 +208,47 @@ onMounted(load)
         </el-tab-pane>
       </el-tabs>
     </el-card>
+
+    <!-- 应用预置对话框 -->
+    <el-dialog v-model="applyPresetDialog" title="应用预置" width="600px">
+      <el-form label-width="100px">
+        <el-form-item label="选择预置" required>
+          <el-select v-model="selectedPresetId" placeholder="选择预置模板" style="width: 100%">
+            <el-option
+              v-for="preset in presets"
+              :key="preset.id"
+              :label="preset.name"
+              :value="preset.id"
+            >
+              <div>
+                <div>{{ preset.name }}</div>
+                <div style="font-size: 12px; color: var(--el-text-color-secondary)">{{ preset.description }}</div>
+              </div>
+            </el-option>
+          </el-select>
+        </el-form-item>
+
+        <template v-if="selectedPresetId">
+          <el-divider content-position="left">必需参数</el-divider>
+          <el-form-item
+            v-for="param in presets.find(p => p.id === selectedPresetId)?.required_params || []"
+            :key="param.key"
+            :label="param.label"
+            :required="param.required"
+          >
+            <el-input
+              v-model="presetParams[param.key]"
+              :placeholder="param.description"
+            />
+          </el-form-item>
+        </template>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="applyPresetDialog = false">取消</el-button>
+        <el-button type="primary" :disabled="!selectedPresetId" :loading="busy" @click="applyPreset">应用</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
