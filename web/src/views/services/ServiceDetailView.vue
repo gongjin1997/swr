@@ -17,6 +17,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import ServiceRuntimeView from '@/components/runtime/ServiceRuntime.vue'
 import ManagedSpecForm from '@/components/service/ManagedSpecForm.vue'
 import ManifestPanel from '@/components/service/ManifestPanel.vue'
+import ServiceResourceBindings from '@/components/service/ServiceResourceBindings.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import TablePager from '@/components/TablePager.vue'
 import { confirmAction, notifyError, useAction } from '@/composables/useAction'
@@ -382,6 +383,10 @@ onMounted(load)
 
           <el-tab-pane v-if="managed" label="对象清单" name="manifest" lazy>
             <ManifestPanel :service="service" />
+          </el-tab-pane>
+
+          <el-tab-pane v-if="managed" label="资源绑定" name="bindings" lazy>
+            <ServiceResourceBindings v-if="service" :service-id="service.id" :namespace-id="service.namespace_id" />
           </el-tab-pane>
 
           <el-tab-pane v-if="session.deployEnabled" :label="`发布记录（${deploymentPage.total.value}）`" name="deployments">
