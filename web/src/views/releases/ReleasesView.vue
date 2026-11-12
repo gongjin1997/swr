@@ -19,7 +19,7 @@ import { usePagination } from '@/composables/usePagination'
 import { usePolling } from '@/composables/usePolling'
 import { DEPLOYMENT_ACTIVE, DEPLOYMENT_KIND_TEXT, DEPLOYMENT_STATUSES, STATUS_TEXT, TIER_TAG, TIER_TEXT } from '@/constants'
 import { useSession } from '@/stores/session'
-import { fmtTime } from '@/utils/format'
+import { fmtTime, shortDigest, shortImage } from '@/utils/format'
 
 const PAGE = 30
 const props = defineProps<{ projectId?: number; embedded?: boolean }>()
@@ -163,7 +163,7 @@ onMounted(() => {
         </div>
       </template>
       <el-table v-loading="loading && !records.length" :data="records" empty-text="暂无发布记录">
-        <el-table-column label="发布 / 服务" min-width="160">
+        <el-table-column label="发布 / 服务" min-width="140">
           <template #default="{ row }">
             <b>#{{ row.id }}</b> <span class="hint">{{ DEPLOYMENT_KIND_TEXT[row.kind] ?? row.kind }}</span>
             <div>
@@ -172,26 +172,29 @@ onMounted(() => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="项目 / 环境" min-width="200">
+        <el-table-column label="项目 / 环境" min-width="170">
           <template #default="{ row }">
             {{ row.project_name }} / {{ row.app_name }}
             <div class="hint">{{ row.cluster_name }} / {{ row.namespace_name }} · {{ TIER_TEXT[row.environment] ?? row.environment }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="构建 / 镜像" min-width="240">
+        <el-table-column label="构建 / 镜像" min-width="180">
           <template #default="{ row }">
-            <RouterLink :to="{ name: 'jobs', query: { app: row.app_id, detail: row.job_id } }">构建 #{{ row.job_id }}</RouterLink>
-            <div class="hint mono break-word">{{ row.image }}</div>
+            <RouterLink v-if="row.job_id" :to="{ name: 'jobs', query: { app: row.app_id, detail: row.job_id } }">构建 #{{ row.job_id }}</RouterLink>
+            <span v-else class="hint">线上镜像（接管发布）</span>
+            <el-tooltip :content="row.image" placement="top">
+              <div class="hint mono break-word">{{ shortImage(row.image.split('@')[0]) }}<template v-if="row.digest"> · {{ shortDigest(row.digest) }}</template></div>
+            </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="160">
+        <el-table-column label="状态" width="150">
           <template #default="{ row }">
             <StatusTag :status="row.status" />
             <div v-if="row.status === 'pending_approval'" class="hint">{{ row.require_admin_approval ? '需要平台管理员确认' : '等待独立审批' }}</div>
             <div v-else-if="row.error" class="hint">{{ row.error }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="提交" width="165"><template #default="{ row }">{{ row.operator }}<div class="hint">{{ fmtTime(row.created_at) }}</div></template></el-table-column>
+        <el-table-column label="提交" width="150"><template #default="{ row }">{{ row.operator }}<div class="hint">{{ fmtTime(row.created_at) }}</div></template></el-table-column>
         <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
             <el-button v-if="row.can_approve" link type="primary" :disabled="busy" @click="decide(row, true)">批准</el-button>

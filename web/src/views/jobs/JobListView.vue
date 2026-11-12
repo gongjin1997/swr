@@ -106,21 +106,20 @@ onMounted(() => {
         <span class="count">共 {{ total }} 条记录</span>
       </div>
       <el-table v-loading="loading && !jobs.length" :data="jobs" empty-text="暂无构建记录">
-        <el-table-column label="#" width="80"><template #default="{ row }"><span class="mono">#{{ row.id }}</span></template></el-table-column>
-        <el-table-column label="应用" min-width="170">
+        <el-table-column label="#" width="70"><template #default="{ row }"><span class="mono">#{{ row.id }}</span></template></el-table-column>
+        <el-table-column label="应用" min-width="150">
           <template #default="{ row }">{{ row.app_name }}<div v-if="!embedded" class="hint">{{ session.projectName(row.project_id) }}</div></template>
         </el-table-column>
-        <el-table-column label="版本" min-width="180">
+        <el-table-column label="版本" min-width="160">
           <template #default="{ row }">
             <span class="mono"><template v-if="row.prev_tag">{{ row.prev_tag }} → </template><b>{{ row.new_tag || row.requested_tag || '自动' }}</b></span>
           </template>
         </el-table-column>
         <el-table-column label="方式" width="100"><template #default="{ row }">{{ MODE_TEXT[row.mode] || '-' }}</template></el-table-column>
         <el-table-column label="状态" width="100"><template #default="{ row }"><StatusTag :status="row.status" /></template></el-table-column>
-        <el-table-column prop="operator" label="提交人" width="120" />
-        <el-table-column label="提交时间" width="170"><template #default="{ row }">{{ fmtTime(row.created_at) }}</template></el-table-column>
-        <el-table-column label="耗时" width="100"><template #default="{ row }">{{ fmtDuration(row.started_at, row.finished_at) }}</template></el-table-column>
-        <el-table-column label="操作" width="170" fixed="right">
+        <el-table-column label="提交" width="160"><template #default="{ row }">{{ row.operator }}<div class="hint">{{ fmtTime(row.created_at) }}</div></template></el-table-column>
+        <el-table-column label="耗时" width="80"><template #default="{ row }">{{ fmtDuration(row.started_at, row.finished_at) }}</template></el-table-column>
+        <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="detail = row.id">日志</el-button>
             <el-button v-if="row.status === 'success' && row.image" link @click="copyImage(row.image)">复制镜像</el-button>

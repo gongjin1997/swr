@@ -132,8 +132,8 @@ onMounted(load)
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="对象" min-width="240">
-            <template #default="{ row }"><span class="hint kind">{{ row.kind }}</span><span class="mono">{{ row.name }}</span></template>
+          <el-table-column label="对象" min-width="220">
+            <template #default="{ row }"><span class="obj"><span class="hint kind">{{ row.kind }}</span><span class="mono break-word">{{ row.name }}</span></span></template>
           </el-table-column>
           <el-table-column label="校验结果" width="110">
             <template #default="{ row }">
@@ -141,13 +141,13 @@ onMounted(load)
               <span v-else class="hint">未校验</span>
             </template>
           </el-table-column>
-          <el-table-column label="变化的字段" min-width="220">
+          <el-table-column label="变化的字段" min-width="180">
             <template #default="{ row }">
               <span v-if="changedFields(row.check)" class="mono break-word">{{ changedFields(row.check) }}</span>
               <span v-else class="hint">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="说明" min-width="220" show-overflow-tooltip>
+          <el-table-column label="说明" min-width="160" show-overflow-tooltip>
             <template #default="{ row }">{{ row.check?.message ?? '' }}</template>
           </el-table-column>
         </el-table>
@@ -175,7 +175,9 @@ onMounted(load)
 .gap-b { margin-bottom: 10px; }
 .summary { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
 .detail { display: grid; gap: 10px; margin: 0 12px 0 48px; min-width: 0; }
-.kind { display: inline-block; min-width: 150px; }
+/* 宽时类型与名称在一行并对齐；列较窄时名称整体换到下一行，不在单词中间断开 */
+.obj { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; }
+.kind { flex: 0 0 150px; }
 .pins { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
 .tall { max-height: 640px; }
 </style>

@@ -313,7 +313,7 @@ async function compareVersions() {
 /* 标题区可以收窄、说明在标题区内换行，操作按钮固定在右侧；窄屏时按钮整体换到下一行 */
 .set-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .set-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; flex: 1 1 320px; }
-.set-header > .toolbar { flex: none; }
+.set-header > .toolbar { flex: 0 1 auto; margin-left: auto; justify-content: flex-end; }
 .set-title .desc { flex-basis: 100%; }
 .lock-tag { margin-left: 6px; }
 .cell-gap { margin-top: 6px; }

@@ -386,11 +386,11 @@ onMounted(load)
 
           <el-tab-pane v-if="session.deployEnabled" :label="`发布记录（${deploymentPage.total.value}）`" name="deployments">
             <el-table :data="deployments" empty-text="暂无发布">
-              <el-table-column label="#" width="80"><template #default="{ row }"><span class="mono">#{{ row.id }}</span></template></el-table-column>
+              <el-table-column label="#" width="70"><template #default="{ row }"><span class="mono">#{{ row.id }}</span></template></el-table-column>
               <el-table-column label="类型" width="90"><template #default="{ row }">{{ DEPLOYMENT_KIND_TEXT[row.kind] ?? row.kind }}</template></el-table-column>
               <el-table-column label="构建 / 修订" width="130"><template #default="{ row }">{{ row.job_id ? `#${row.job_id}` : '线上镜像' }} / {{ row.revision_id }}</template></el-table-column>
-              <el-table-column label="镜像" min-width="220"><template #default="{ row }"><span class="mono break-word">{{ shortImage(row.image.split('@')[0]) }}</span><div class="hint mono">{{ shortDigest(row.digest) }}</div></template></el-table-column>
-              <el-table-column label="状态" min-width="170">
+              <el-table-column label="镜像" min-width="190"><template #default="{ row }"><span class="mono break-word">{{ shortImage(row.image.split('@')[0]) }}</span><div class="hint mono">{{ shortDigest(row.digest) }}</div></template></el-table-column>
+              <el-table-column label="状态" min-width="150">
                 <template #default="{ row }">
                   <StatusTag :status="row.status" />
                   <div v-if="row.status === 'pending_approval'" class="hint">{{ row.require_admin_approval ? '需要平台管理员确认' : '等待独立审批' }}</div>

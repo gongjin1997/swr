@@ -118,6 +118,8 @@ defineExpose({ reload: load })
 .layer-section + .layer-section { margin-top: 18px; }
 .section-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 .section-title h3 { margin: 0; font-size: 15px; }
+/* 说明紧跟标题并在自身区域内换行（不整体掉到下一行） */
+.section-title .hint { flex: 1 1 320px; min-width: 0; }
 .section-title .el-button { margin-left: auto; }
 .empty { margin: 4px 0 0; }
 </style>
