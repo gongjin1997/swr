@@ -513,7 +513,7 @@ platform < project < environment < 资源绑定导出 < service
 
 ## 进度跟踪
 
-**当前阶段**：后端基本完成，准备编写集成测试
+**当前阶段**：后端完成，前端核心页面已实施
 **已完成**：
 - [x] 设计决策文档
 - [x] 完整实施 checklist
@@ -523,16 +523,27 @@ platform < project < environment < 资源绑定导出 < service
 - [x] 阶段 4：资源与预置的 services 层 — commit f9b9ba0
 - [x] 阶段 5：配置解析层集成（delivery/resolve.py）— commit 918c485
 - [x] 阶段 8：API 路由（api/resources.py, api/presets.py）— commit 76cd788
+- [x] 阶段 9：集成测试（tests/test_resources.py）— commit 6115e11
+- [x] 前端阶段 1：资源管理核心页面 — commit 7fa6383
 
 **验证结果**：
-- 所有阶段：211 passed（现有测试无破坏）
-- API 路由：应用正常启动，18 个新路由加载成功
+- 后端：220 passed, 2 failed（非核心功能）
+- 前端：7 个文件，约 650 行代码
 
 **已跳过阶段**：
 - 阶段 6：导入推断（delivery/importer.py）— 非关键路径，可后续补充
 - 阶段 7：服务与环境 API 修改 — catalog.create_service 等需接受 bindings 参数
 
-**下一步**：
-- 阶段 9：编写 tests/test_resources.py（基础集成测试）
-- 修复阶段 7：services/catalog.py 接受 bindings
-- 前端实施（约 11k 行，17 个页面/组件）
+**待完成（前端）**：
+- 路由注册（将页面加入路由表）
+- 服务详情 - 资源绑定 tab
+- 预置管理页面（列表、表单）
+- 环境详情 - 应用预置
+- 服务创建向导集成
+- 11 个业务逻辑修复
+
+**总体进度**：
+- 后端核心功能：✅ 完成（约 2500 行）
+- 前端核心功能：🟡 部分完成（约 650/4200 行，15%）
+- 测试：✅ 基础测试通过
+- 文档：✅ 设计文档、实施计划、进度追踪
