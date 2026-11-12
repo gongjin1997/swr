@@ -145,6 +145,31 @@ async def service_effective_config(id: int, ctx: Ctx, me: Me):
     return catalog.effective_config(ctx.store, me, id)
 
 
+@router.get("/api/services/{id}/params")
+@authenticated
+async def service_params_with_sources(id: int, ctx: Ctx, me: Me):
+    """
+    服务的生效参数，包含完整的来源追踪（基于 XAC getParams）。
+
+    返回每个参数的：
+    - value: 最终值
+    - source_layer: feature/resource/config/du_attr/artifact/external
+    - source_type: config/resource/attribute
+    - source_name: 来源名称
+    - scope: platform/project/environment/du
+    - version: 版本号
+    - locked: 是否锁定
+    - overridden: 是否被覆盖
+    """
+    from ..services.config_resolver import effective_config_with_sources
+    try:
+        return effective_config_with_sources(ctx.store, me, id)
+    except ValueError as e:
+        return Response(status_code=404, content=str(e))
+    except PermissionError as e:
+        return Response(status_code=403, content=str(e))
+
+
 @router.put("/api/services/{id}/secrets/{key}")
 @authenticated
 async def update_secret(id: int, key: str, request: Request, ctx: Ctx, me: Me, data: dict = Body(...)):

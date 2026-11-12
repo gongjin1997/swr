@@ -35,7 +35,8 @@ def shell(*args):
 
 
 def inspect(tag: str) -> dict:
-    image = json.loads(shell("docker", "image", "inspect", tag))[0]
+    # containerd image store 下的多架构标签默认解析为 manifest index，不带架构字段。
+    image = json.loads(shell("docker", "image", "inspect", "--platform", "linux/arm64", tag))[0]
     if image["Architecture"] != "arm64" or image["Os"] != "linux":
         raise SystemExit(f"镜像 {tag} 必须是 linux/arm64")
     return image
