@@ -171,10 +171,18 @@ onMounted(() => {
 .brand { height: var(--hi-header-height); flex: none; padding: 0 17px; display: flex; align-items: center; gap: 10px; color: var(--el-color-primary); overflow: hidden; }
 .brand svg { width: 30px; height: 30px; flex: none; }
 .site-name { font-size: 14px; font-weight: 600; color: var(--hi-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.side-menu { padding: 6px 10px 12px; overflow-y: auto; flex: 1; }
-.menu-group { margin: 0 0 6px; }
-.group-title { padding: 12px 10px 6px; font-size: 12px; color: var(--hi-text-3); }
-.menu-item { display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 12px; margin: 2px 0; color: var(--hi-sider-text); border-radius: 8px; white-space: nowrap; font-size: 14px; }
+/* 菜单在 900px 高的屏幕上完整显示；更矮时可以滚动，可继续滚动的一侧显示阴影（覆盖层随内容滚动，阴影固定在边缘） */
+.side-menu {
+  padding: 4px 10px 10px; overflow-y: auto; flex: 1; overscroll-behavior: contain;
+  background:
+    linear-gradient(var(--hi-sider-bg) 30%, transparent) center top / 100% 28px no-repeat local,
+    linear-gradient(transparent, var(--hi-sider-bg) 70%) center bottom / 100% 28px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, var(--hi-scroll-shadow), transparent) center top / 100% 10px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, var(--hi-scroll-shadow), transparent) center bottom / 100% 10px no-repeat scroll;
+}
+.menu-group { margin: 0 0 4px; }
+.group-title { padding: 10px 10px 4px; font-size: 12px; line-height: 18px; color: var(--hi-text-3); }
+.menu-item { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 12px; margin: 1px 0; color: var(--hi-sider-text); border-radius: 8px; white-space: nowrap; font-size: 14px; }
 .menu-item:hover { background: var(--hi-bg-soft); }
 .menu-item.active { color: var(--el-color-primary); background: var(--hi-sider-active-bg); font-weight: 600; }
 .collapsed .menu-item { padding: 0; justify-content: center; }

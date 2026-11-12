@@ -7,7 +7,7 @@ import type { CertificateOption, ConfigChange, ConfigEntryInput, ConfigSet, Conf
 import TablePager from '@/components/TablePager.vue'
 import { confirmAction, notifyError, useAction } from '@/composables/useAction'
 import { usePagination } from '@/composables/usePagination'
-import { CONFIG_KIND_HINT, CONFIG_KIND_TEXT } from '@/constants'
+import { CONFIG_KIND_TEXT } from '@/constants'
 import { fmtSize, fmtTime } from '@/utils/format'
 
 const props = defineProps<{ set: ConfigSet }>()
@@ -173,7 +173,8 @@ async function compareVersions() {
           <el-tag size="small" effect="plain">{{ CONFIG_KIND_TEXT[set.kind] }}</el-tag>
           <el-tag size="small" type="info" effect="plain">v{{ set.version }}</el-tag>
           <span class="hint">{{ fmtTime(set.updated_at) }}</span>
-          <div class="hint">{{ set.description || CONFIG_KIND_HINT[set.kind] }}</div>
+          <!-- 类型的说明已在分组标题里，这里只显示配置自己的说明 -->
+          <div v-if="set.description" class="hint desc">{{ set.description }}</div>
         </div>
         <div class="toolbar">
           <el-button v-if="secret && set.can_reveal && !editing" :icon="View" :loading="busy" @click="reveal">查看明文</el-button>
@@ -309,9 +310,11 @@ async function compareVersions() {
 
 <style scoped>
 .config-set { margin-bottom: 12px; }
-.set-header { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.set-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
-.set-title .hint:last-child { flex-basis: 100%; }
+/* 标题区可以收窄、说明在标题区内换行，操作按钮固定在右侧；窄屏时按钮整体换到下一行 */
+.set-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.set-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; flex: 1 1 320px; }
+.set-header > .toolbar { flex: none; }
+.set-title .desc { flex-basis: 100%; }
 .lock-tag { margin-left: 6px; }
 .cell-gap { margin-top: 6px; }
 .format-select { width: 120px; margin-right: 8px; }

@@ -290,4 +290,6 @@ const ingressPortOptions = computed(() => spec.value.service.ports.map((p) => p.
 .gap-l { margin-left: 6px; }
 .annotation { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px; gap: 8px; margin-bottom: 8px; }
 .spec-form :deep(.el-input-number) { width: 100%; }
+/* 开关、单选组后面的说明文字与控件之间留出间距 */
+.spec-form :deep(.el-form-item__content) { column-gap: 10px; }
 </style>

@@ -283,9 +283,11 @@ onMounted(load)
               <div class="card-title"><span>环境档案</span>
                 <el-checkbox v-model="options.saveProfile" :disabled="!report.permissions.environment_config">保存为环境档案</el-checkbox></div>
             </template>
-            <el-tag v-if="report.profile.same" size="small" type="success" effect="plain">与当前环境档案一致</el-tag>
-            <el-tag v-else-if="report.profile.saved" size="small" type="warning" effect="plain">与当前环境档案（v{{ report.profile.version }}）不同，保存会生成新版本</el-tag>
-            <el-descriptions :column="1" size="small" class="section-gap">
+            <div v-if="report.profile.same || report.profile.saved" class="gap-b">
+              <el-tag v-if="report.profile.same" size="small" type="success" effect="plain">与当前环境档案一致</el-tag>
+              <el-tag v-else size="small" type="warning" effect="plain">与当前环境档案（v{{ report.profile.version }}）不同，保存会生成新版本</el-tag>
+            </div>
+            <el-descriptions :column="1" size="small">
               <el-descriptions-item label="对象命名"><span class="mono">{{ Object.values(report.profile.proposed.naming).join('、') }}</span></el-descriptions-item>
               <el-descriptions-item label="主机名规则"><span class="mono">{{ report.profile.proposed.host || '—' }}</span></el-descriptions-item>
               <el-descriptions-item label="调度">节点池 {{ report.profile.proposed.scheduling.node_pool || '不限' }}
@@ -417,4 +419,6 @@ h4 { margin: 18px 0 8px; }
 .list.warn, .warn-text { color: var(--el-color-warning-dark-2, #b88230); }
 .expand { padding: 4px 16px 4px 48px; display: grid; gap: 6px; }
 .tag { margin: 2px 4px 2px 0; }
+/* 并排的卡片标题等高（一个带复选框、一个不带） */
+.card-title { min-height: 32px; }
 </style>

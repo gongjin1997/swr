@@ -3,6 +3,7 @@
  * 服务详情：运行状态（Pod、事件、访问地址）、配置（生效配置与服务层配置）、对象清单（预览、服务端校验、发布快照）、
  * 发布记录（审批、日志、回滚）与修订历史。托管服务与纳管服务共用，按服务方式显示可用的操作。
  */
+import { ArrowDown } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { deploymentApi, environmentApi, serviceApi } from '@/api'
@@ -75,6 +76,15 @@ const summary = computed(() => runtime.value?.summary)
 const needsAdopt = computed(() => managed.value && configStatus.value?.deployed === false && !!runtime.value?.found
   && runtime.value.deployment?.platform_service !== String(service.value?.id))
 const canAdopt = computed(() => needsAdopt.value && session.deployEnabled && can('service.deploy'))
+/** 不常用或有风险的操作放进“更多”，标题区只保留发布与修改配置。 */
+const moreActions = computed(() => [
+  ...(!managed.value && can('secret.manage') ? [{ command: 'secret', label: '设置密钥', danger: false }] : []),
+  ...(can('service.delete') ? [{ command: 'delete', label: '删除服务', danger: true }] : []),
+])
+function onMore(command: string | number | object) {
+  if (command === 'secret') secret.visible = true
+  else if (command === 'delete') void remove()
+}
 const restartsTone = computed(() => ((summary.value?.restarts ?? 0) > 0 ? 'warning' : ''))
 const changeText = (change: string) => CONFIG_CHANGE_TEXT[change] ?? change
 /** 镜像名（组织/仓库:标签），按 digest 固定的镜像不显示 digest。 */
@@ -275,8 +285,15 @@ onMounted(load)
         <el-button v-if="session.deployEnabled && can('service.deploy')" type="primary" @click="deployOpen = true">发布</el-button>
         <el-button v-if="session.deployEnabled && can('service.operate') && lastSuccess" @click="restart">重新发布</el-button>
         <el-button v-if="can('service.config')" @click="openEditor">修改配置</el-button>
-        <el-button v-if="!managed && can('secret.manage')" @click="secret.visible = true">设置密钥</el-button>
-        <el-button v-if="can('service.delete')" type="danger" plain @click="remove">删除</el-button>
+        <el-dropdown v-if="moreActions.length" trigger="click" @command="onMore">
+          <el-button>更多<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-for="(item, index) in moreActions" :key="item.command" :command="item.command"
+                :divided="item.danger && index > 0" :class="{ 'danger-item': item.danger }">{{ item.label }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </PageHeader>
 
       <div class="cards">
@@ -295,7 +312,7 @@ onMounted(load)
           <b class="num" :class="restartsTone && 'tone-warning'">{{ summary?.restarts ?? '-' }}</b>
           <span class="hint">{{ summary ? `${summary.pods} 个 Pod · ${summary.warning_events} 条警告事件` : '' }}</span>
         </div>
-        <div class="card">
+        <div class="card wide">
           <span class="label">当前镜像</span>
           <b class="mono ellipsis" :title="summary?.image">{{ imageName(summary?.image) }}</b>
           <span class="hint mono ellipsis" :title="summary?.running_images.join('\n')">{{ imageDigest(summary) }}</span>
@@ -475,9 +492,14 @@ onMounted(load)
 
 <style scoped>
 .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
-.cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
-@media (max-width: 1280px) { .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* 五张卡片：宽屏一行；较窄时镜像卡片占两列（镜像名较长），dense 让其余卡片补齐空位，不留空格子 */
+.cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-auto-flow: row dense; gap: 12px; }
+@media (max-width: 1280px) {
+  .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .card.wide { grid-column: span 2; }
+}
 @media (max-width: 767px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.danger-item { color: var(--el-color-danger); }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; background: var(--hi-bg-card); border: 1px solid var(--hi-border); border-radius: 10px; min-width: 0; }
 .card .label { font-size: 12px; color: var(--hi-text-3); }

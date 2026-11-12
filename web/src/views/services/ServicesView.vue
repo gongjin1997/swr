@@ -157,28 +157,28 @@ onMounted(async () => {
         <el-button v-if="embedded && canCreate" type="primary" :icon="Plus" @click="create">新建服务</el-button>
       </div>
       <el-table v-loading="loading" :data="pager.rows.value" empty-text="暂无可见服务">
-        <el-table-column label="服务" min-width="190">
+        <el-table-column label="服务" min-width="170">
           <template #default="{ row }">
             <RouterLink :to="{ name: 'service-detail', params: { id: row.id } }"><b>{{ row.name }}</b></RouterLink>
             <el-tooltip :content="SERVICE_MODE_HINT[row.mode]">
               <el-tag size="small" :type="row.mode === 'managed' ? 'primary' : 'info'" effect="plain" class="gap">{{ SERVICE_MODE_TEXT[row.mode] }}</el-tag>
             </el-tooltip>
-            <div class="hint mono">{{ row.workload }}</div>
+            <div v-if="row.workload && row.workload !== row.name" class="hint mono">{{ row.workload }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="项目 / 应用" min-width="170">
+        <el-table-column label="项目 / 应用" min-width="140">
           <template #default="{ row }">
             <RouterLink v-if="!embedded" :to="{ name: 'project-detail', params: { id: row.project_id } }">{{ row.project_name }}</RouterLink>
             <div :class="{ hint: !embedded }">{{ row.app_name }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="环境" min-width="190">
+        <el-table-column label="环境" min-width="170">
           <template #default="{ row }">
             <el-tag size="small" :type="TIER_TAG[row.tier]" effect="plain">{{ TIER_TEXT[row.tier] }}</el-tag>
             <span class="hint gap">{{ row.cluster_name }} / {{ row.namespace_name }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="运行状态" min-width="200">
+        <el-table-column label="运行状态" min-width="170">
           <template #default="{ row }">
             <template v-if="rowStatus(row)">
               <el-tooltip :content="rowStatus(row)?.message" placement="top">
@@ -191,14 +191,14 @@ onMounted(async () => {
             <span v-else class="hint">{{ statusLoading ? '读取中…' : '未读取' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="配置" width="150">
+        <el-table-column label="配置" width="120">
           <template #default="{ row }">
             <el-tag v-if="!row.deployed_revision_id" size="small" type="info" effect="plain">尚未发布</el-tag>
             <el-tag v-else-if="row.deployed_revision_id !== row.current_revision_id || row.config_status?.pending" size="small" type="warning">有未发布配置</el-tag>
             <span v-else class="hint">已同步</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="140" fixed="right">
+        <el-table-column label="操作" width="110" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="router.push({ name: 'service-detail', params: { id: row.id } })">详情</el-button>
             <el-button v-if="session.deployEnabled && session.canNamespace(row.namespace_id, 'service.deploy')" link type="primary" @click="openDeploy(row)">发布</el-button>
