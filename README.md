@@ -297,7 +297,19 @@ pytest -q        # 使用模拟 SWR、假 docker 与模拟的 Kubernetes API，�
 
 CI 在 PostgreSQL 16 与 openGauss 5.0（PG 兼容模式，代表 GaussDB）上各运行一遍后端测试。
 
-详细设计见 `docs/系统设计.md`；v1.3 的前端与后端分层见 `docs/重构设计-Vue3与业务逻辑.md`。
+文档：
+
+| 文档 | 内容 |
+| --- | --- |
+| [docs/系统架构.md](docs/系统架构.md) | 运行时结构、代码分层、数据与安全架构、部署架构 |
+| [docs/系统设计.md](docs/系统设计.md) | 业务规则：构建、环境与配置、服务、发布、导入、运行状态、状态机 |
+| [docs/开发文档.md](docs/开发文档.md) | 开发约定、模块职责、迁移、测试方法 |
+| [DESIGN.md](DESIGN.md) | 前端设计规范：布局、组件、状态、文案、响应式与深色模式 |
+| [docs/账号与权限设计.md](docs/账号与权限设计.md) | 权限模型与授予规则 |
+| [docs/v2-服务创建与环境配置设计.md](docs/v2-服务创建与环境配置设计.md) | v2 的方案比较与决定记录 |
+| [AGENTS.md](AGENTS.md) / [CLAUDE.md](CLAUDE.md) | 编码代理（Codex / Claude Code）的协作规则 |
+
+v1.3 的前端与后端分层重构记录见 `docs/重构设计-Vue3与业务逻辑.md`。
 
 
 ## 14. 升级与上线检查

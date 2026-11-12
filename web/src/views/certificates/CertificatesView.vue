@@ -138,7 +138,7 @@ onMounted(load)
         <el-table-column label="主题" min-width="220">
           <template #default="{ row }"><span class="mono break-word">{{ metaText(row) || '—' }}</span></template>
         </el-table-column>
-        <el-table-column label="到期" width="190">
+        <el-table-column label="到期" width="180">
           <template #default="{ row }">
             <el-tag size="small" :type="expiryTag(row.status)">{{ expiryText(row.status) }}</el-tag>
             <div class="hint">{{ row.not_after ? fmtTime(row.not_after) : '—' }}</div>
