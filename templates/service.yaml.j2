@@ -1,0 +1,29 @@
+# service.yaml.j2 - Service 对象模板
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ values.name }}
+  namespace: {{ values.namespace }}
+  labels:
+    app: {{ values.app }}
+    project: {{ values.labels.project }}
+    environment: {{ values.labels.environment }}
+    managed-by: {{ values.labels['managed-by'] }}
+spec:
+  type: {{ values.service.type }}
+  {% if values.service.sessionAffinity != 'None' %}
+  sessionAffinity: {{ values.service.sessionAffinity }}
+  {% endif %}
+  selector:
+    app: {{ values.app }}
+  ports:
+  {% for port in values.service.ports %}
+  - name: {{ port.name }}
+    port: {{ port.port }}
+    targetPort: {{ port.targetPort }}
+    protocol: {{ port.protocol }}
+    {% if port.nodePort is defined %}
+    nodePort: {{ port.nodePort }}
+    {% endif %}
+  {% endfor %}

@@ -1,0 +1,182 @@
+# deployment.yaml.j2 - Deployment 对象模板
+# 第二阶段渲染：使用 values 作为最高优先级作用域
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ values.name }}
+  namespace: {{ values.namespace }}
+  labels:
+    app: {{ values.app }}
+    project: {{ values.labels.project }}
+    environment: {{ values.labels.environment }}
+    managed-by: {{ values.labels['managed-by'] }}
+  annotations:
+    swr-builder/deployment-id: "{{ deployment_id }}"
+    swr-builder/config-hash: "{{ config_hash }}"
+spec:
+  replicas: {% if values.hpa.enabled %}null{% else %}{{ values.replicas }}{% endif %}
+
+  revisionHistoryLimit: {{ values.revisionHistoryLimit }}
+
+  strategy:
+    type: {{ values.strategy.type }}
+    rollingUpdate:
+      maxSurge: {{ values.strategy.rollingUpdate.maxSurge }}
+      maxUnavailable: {{ values.strategy.rollingUpdate.maxUnavailable }}
+
+  minReadySeconds: {{ values.minReadySeconds }}
+  progressDeadlineSeconds: {{ values.progressDeadlineSeconds }}
+
+  selector:
+    matchLabels:
+      app: {{ values.app }}
+
+  template:
+    metadata:
+      labels:
+        app: {{ values.app }}
+        project: {{ values.labels.project }}
+        environment: {{ values.labels.environment }}
+        version: {{ values.image.tag or 'latest' }}
+      annotations:
+        swr-builder/deployment-id: "{{ deployment_id }}"
+        swr-builder/config-hash: "{{ config_hash }}"
+        kubectl.kubernetes.io/restartedAt: "{{ restarted_at }}"
+    spec:
+      containers:
+      - name: {{ values.name }}
+        image: {% if values.image.digest %}{{ values.image.repository }}/{{ values.name }}@{{ values.image.digest }}{% else %}{{ values.image.repository }}/{{ values.name }}:{{ values.image.tag }}{% endif %}
+
+        imagePullPolicy: {{ values.image.pullPolicy }}
+
+        ports:
+        {% for port in values.ports %}
+        - name: {{ port.name }}
+          containerPort: {{ port.containerPort }}
+          protocol: {{ port.protocol }}
+        {% endfor %}
+
+        resources:
+          requests:
+            cpu: {{ values.resources.requests.cpu }}
+            memory: {{ values.resources.requests.memory }}
+          limits:
+            cpu: {{ values.resources.limits.cpu }}
+            memory: {{ values.resources.limits.memory }}
+
+        livenessProbe:
+          httpGet:
+            path: {{ values.livenessProbe.httpGet.path }}
+            port: {{ values.livenessProbe.httpGet.port }}
+            scheme: {{ values.livenessProbe.httpGet.scheme }}
+          initialDelaySeconds: {{ values.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ values.livenessProbe.periodSeconds }}
+          timeoutSeconds: {{ values.livenessProbe.timeoutSeconds }}
+          failureThreshold: {{ values.livenessProbe.failureThreshold }}
+
+        readinessProbe:
+          httpGet:
+            path: {{ values.readinessProbe.httpGet.path }}
+            port: {{ values.readinessProbe.httpGet.port }}
+            scheme: {{ values.readinessProbe.httpGet.scheme }}
+          initialDelaySeconds: {{ values.readinessProbe.initialDelaySeconds }}
+          periodSeconds: {{ values.readinessProbe.periodSeconds }}
+          timeoutSeconds: {{ values.readinessProbe.timeoutSeconds }}
+          failureThreshold: {{ values.readinessProbe.failureThreshold }}
+
+        {% if values.startupProbe is defined %}
+        startupProbe:
+          httpGet:
+            path: {{ values.startupProbe.httpGet.path }}
+            port: {{ values.startupProbe.httpGet.port }}
+            scheme: {{ values.startupProbe.httpGet.scheme }}
+          initialDelaySeconds: {{ values.startupProbe.initialDelaySeconds }}
+          periodSeconds: {{ values.startupProbe.periodSeconds }}
+          timeoutSeconds: {{ values.startupProbe.timeoutSeconds }}
+          failureThreshold: {{ values.startupProbe.failureThreshold }}
+        {% endif %}
+
+        envFrom:
+        {% for envFrom in values.envFrom %}
+        - {% if envFrom.configMapRef is defined %}configMapRef:
+            name: {{ envFrom.configMapRef.name }}
+          {% elif envFrom.secretRef is defined %}secretRef:
+            name: {{ envFrom.secretRef.name }}
+          {% endif %}
+        {% endfor %}
+
+        volumeMounts:
+        {% for mount in values.volumeMounts %}
+        - name: {{ mount.name }}
+          mountPath: {{ mount.mountPath }}
+          readOnly: {{ mount.readOnly }}
+        {% endfor %}
+
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              {% for cmd in values.lifecycle.preStop.exec.command %}
+              - {{ cmd }}
+              {% endfor %}
+
+        securityContext:
+          runAsNonRoot: {{ values.securityContext.runAsNonRoot }}
+          runAsUser: {{ values.securityContext.runAsUser }}
+          capabilities:
+            drop:
+            {% for cap in values.securityContext.capabilities.drop %}
+            - {{ cap }}
+            {% endfor %}
+            {% if values.securityContext.capabilities.add is defined %}
+            add:
+            {% for cap in values.securityContext.capabilities.add %}
+            - {{ cap }}
+            {% endfor %}
+            {% endif %}
+
+      imagePullSecrets:
+      {% for secret in values.image.pullSecrets %}
+      - name: {{ secret }}
+      {% endfor %}
+
+      {% if values.nodeSelector is defined %}
+      nodeSelector:
+        {% for key, value in values.nodeSelector.items() %}
+        {{ key }}: {{ value }}
+        {% endfor %}
+      {% endif %}
+
+      {% if values.tolerations is defined %}
+      tolerations:
+      {% for toleration in values.tolerations %}
+      - key: {{ toleration.key }}
+        {% if toleration.value is defined %}value: {{ toleration.value }}{% endif %}
+
+        effect: {{ toleration.effect }}
+        operator: {{ toleration.operator }}
+      {% endfor %}
+      {% endif %}
+
+      {% if values.affinity is defined %}
+      affinity:
+        {{ values.affinity | tojson(indent=2) | indent(8) }}
+      {% endif %}
+
+      volumes:
+      {% for volume in values.volumes %}
+      - name: {{ volume.name }}
+        {% if volume.configMap is defined %}
+        configMap:
+          name: {{ volume.configMap.name }}
+        {% elif volume.secret is defined %}
+        secret:
+          secretName: {{ volume.secret.secretName }}
+        {% endif %}
+      {% endfor %}
+
+      terminationGracePeriodSeconds: {{ values.terminationGracePeriodSeconds }}
+
+      securityContext:
+        fsGroup: {{ values.securityContext.fsGroup }}

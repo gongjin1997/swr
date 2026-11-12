@@ -1,0 +1,277 @@
+# values.yaml.j2 - 参数装配模板
+# 第一阶段渲染：将所有参数装配成统一的 values 结构
+
+# ===== 服务标识 =====
+name: {{ service.name }}
+namespace: {{ service.namespace }}
+app: {{ service.app }}
+
+# ===== 镜像配置 =====
+image:
+  repository: {{ config.get('IMAGE_REPOSITORY', 'swr.cn-north-4.myhuaweicloud.com') }}
+  tag: {{ image_digest.split(':')[1] if ':' in image_digest else image_digest }}
+  digest: {{ image_digest if '@' in image_digest else '' }}
+  pullPolicy: {{ config.get('IMAGE_PULL_POLICY', 'IfNotPresent') }}
+  pullSecrets:
+    - {{ service.namespace }}-image-secret
+
+# ===== 副本和资源 =====
+replicas: {{ service.replicas }}
+
+resources:
+  requests:
+    cpu: {{ service.resources.requests.cpu if service.resources else config.get('RESOURCES_REQUESTS_CPU', '100m') }}
+    memory: {{ service.resources.requests.memory if service.resources else config.get('RESOURCES_REQUESTS_MEMORY', '128Mi') }}
+  limits:
+    cpu: {{ service.resources.limits.cpu if service.resources else config.get('RESOURCES_LIMITS_CPU', '1000m') }}
+    memory: {{ service.resources.limits.memory if service.resources else config.get('RESOURCES_LIMITS_MEMORY', '512Mi') }}
+
+# ===== 滚动更新策略 =====
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: {{ config.get('ROLLOUT_MAX_SURGE', environment.profile.rollout_strategy.maxSurge) }}
+    maxUnavailable: {{ config.get('ROLLOUT_MAX_UNAVAILABLE', environment.profile.rollout_strategy.maxUnavailable) }}
+
+revisionHistoryLimit: {{ config.get('REVISION_HISTORY_LIMIT', 10) }}
+minReadySeconds: {{ config.get('MIN_READY_SECONDS', 10) }}
+progressDeadlineSeconds: {{ config.get('PROGRESS_DEADLINE_SECONDS', 600) }}
+
+# ===== 健康检查 =====
+livenessProbe:
+  httpGet:
+    path: {{ config.get('LIVENESS_PATH', environment.profile.default_liveness_probe.path) }}
+    port: {{ config.get('LIVENESS_PORT', environment.profile.default_liveness_probe.port) }}
+    scheme: {{ config.get('LIVENESS_SCHEME', 'HTTP') }}
+  initialDelaySeconds: {{ config.get('LIVENESS_INITIAL_DELAY', environment.profile.default_liveness_probe.initialDelaySeconds) }}
+  periodSeconds: {{ config.get('LIVENESS_PERIOD', environment.profile.default_liveness_probe.periodSeconds) }}
+  timeoutSeconds: {{ config.get('LIVENESS_TIMEOUT', environment.profile.default_liveness_probe.timeoutSeconds) }}
+  failureThreshold: {{ config.get('LIVENESS_FAILURE_THRESHOLD', environment.profile.default_liveness_probe.failureThreshold) }}
+
+readinessProbe:
+  httpGet:
+    path: {{ config.get('READINESS_PATH', environment.profile.default_readiness_probe.path) }}
+    port: {{ config.get('READINESS_PORT', environment.profile.default_readiness_probe.port) }}
+    scheme: {{ config.get('READINESS_SCHEME', 'HTTP') }}
+  initialDelaySeconds: {{ config.get('READINESS_INITIAL_DELAY', environment.profile.default_readiness_probe.initialDelaySeconds) }}
+  periodSeconds: {{ config.get('READINESS_PERIOD', environment.profile.default_readiness_probe.periodSeconds) }}
+  timeoutSeconds: {{ config.get('READINESS_TIMEOUT', environment.profile.default_readiness_probe.timeoutSeconds) }}
+  failureThreshold: {{ config.get('READINESS_FAILURE_THRESHOLD', environment.profile.default_readiness_probe.failureThreshold) }}
+
+{% if config.get('STARTUP_ENABLED', 'false').lower() == 'true' %}
+startupProbe:
+  httpGet:
+    path: {{ config.get('STARTUP_PATH', '/health') }}
+    port: {{ config.get('STARTUP_PORT', 8080) }}
+    scheme: {{ config.get('STARTUP_SCHEME', 'HTTP') }}
+  initialDelaySeconds: {{ config.get('STARTUP_INITIAL_DELAY', 0) }}
+  periodSeconds: {{ config.get('STARTUP_PERIOD', 5) }}
+  timeoutSeconds: {{ config.get('STARTUP_TIMEOUT', 3) }}
+  failureThreshold: {{ config.get('STARTUP_FAILURE_THRESHOLD', 30) }}
+{% endif %}
+
+# ===== 端口配置 =====
+ports:
+{% for port in service.ports %}
+  - name: {{ port.get('name', 'http') }}
+    containerPort: {{ port.get('containerPort', 8080) }}
+    protocol: {{ port.get('protocol', 'TCP') }}
+{% endfor %}
+{% if not service.ports %}
+  - name: http
+    containerPort: {{ config.get('SERVER_PORT', 8080) }}
+    protocol: TCP
+{% endif %}
+
+# ===== 环境变量（从 ConfigMap/Secret）=====
+envFrom:
+  - configMapRef:
+      name: {{ name }}-env
+  - secretRef:
+      name: {{ name }}-env-secret
+
+# ===== 卷挂载 =====
+volumes:
+  - name: config
+    configMap:
+      name: {{ name }}-config
+  - name: secret
+    secret:
+      secretName: {{ name }}-secret
+
+volumeMounts:
+  - name: config
+    mountPath: /app/config
+    readOnly: true
+  - name: secret
+    mountPath: /app/secret
+    readOnly: true
+
+# ===== 生命周期钩子 =====
+lifecycle:
+  preStop:
+    exec:
+      command:
+        - /bin/sh
+        - -c
+        - sleep {{ config.get('PRESTOP_SLEEP', 5) }}
+
+terminationGracePeriodSeconds: {{ config.get('TERMINATION_GRACE_PERIOD', 30) }}
+
+# ===== 安全上下文 =====
+securityContext:
+  runAsNonRoot: {{ config.get('RUN_AS_NON_ROOT', 'true').lower() == 'true' }}
+  runAsUser: {{ config.get('RUN_AS_USER', 1000) }}
+  fsGroup: {{ config.get('FS_GROUP', 1000) }}
+  capabilities:
+    drop:
+      - ALL
+{% if config.get('ADD_CAPABILITIES') %}
+    add:
+{% for cap in config.get('ADD_CAPABILITIES', '').split(',') %}
+      - {{ cap.strip() }}
+{% endfor %}
+{% endif %}
+
+# ===== 调度配置 =====
+{% if config.get('NODE_SELECTOR') or environment.profile.node_selector %}
+nodeSelector:
+{% if config.get('NODE_SELECTOR') %}
+{% for item in config.get('NODE_SELECTOR', '').split(',') %}
+{% set key, value = item.split('=') %}
+  {{ key.strip() }}: {{ value.strip() }}
+{% endfor %}
+{% else %}
+{{ environment.profile.node_selector | tojson(indent=2) | indent(2) }}
+{% endif %}
+{% endif %}
+
+{% if config.get('TOLERATIONS') or environment.profile.tolerations %}
+tolerations:
+{% if config.get('TOLERATIONS') %}
+  # 从配置解析 tolerations
+  # 格式: key=value:effect,key=value:effect
+{% for item in config.get('TOLERATIONS', '').split(',') %}
+{% set parts = item.split(':') %}
+{% set kv = parts[0].split('=') %}
+  - key: {{ kv[0].strip() }}
+    value: {{ kv[1].strip() if kv|length > 1 else '' }}
+    effect: {{ parts[1].strip() if parts|length > 1 else 'NoSchedule' }}
+    operator: {{ 'Equal' if kv|length > 1 else 'Exists' }}
+{% endfor %}
+{% else %}
+{{ environment.profile.tolerations | tojson(indent=2) | indent(2) }}
+{% endif %}
+{% endif %}
+
+{% if config.get('AFFINITY') or environment.profile.affinity %}
+affinity:
+{% if config.get('AFFINITY') %}
+  # 从配置解析 affinity (简化版)
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+            - key: {{ config.get('AFFINITY_KEY', 'node-role') }}
+              operator: In
+              values:
+                - {{ config.get('AFFINITY_VALUE', 'worker') }}
+{% else %}
+{{ environment.profile.affinity | tojson(indent=2) | indent(2) }}
+{% endif %}
+{% endif %}
+
+# ===== Service 配置 =====
+service:
+  type: {{ config.get('SERVICE_TYPE', 'ClusterIP') }}
+  sessionAffinity: {{ config.get('SERVICE_SESSION_AFFINITY', 'None') }}
+  ports:
+{% for port in service.ports %}
+    - name: {{ port.get('name', 'http') }}
+      port: {{ port.get('port', port.get('containerPort', 8080)) }}
+      targetPort: {{ port.get('name', 'http') }}
+      protocol: {{ port.get('protocol', 'TCP') }}
+{% if config.get('SERVICE_TYPE', 'ClusterIP') == 'NodePort' and port.get('nodePort') %}
+      nodePort: {{ port.get('nodePort') }}
+{% endif %}
+{% endfor %}
+{% if not service.ports %}
+    - name: http
+      port: {{ config.get('SERVICE_PORT', 8080) }}
+      targetPort: http
+      protocol: TCP
+{% endif %}
+
+# ===== Ingress 配置 =====
+ingress:
+  enabled: {{ service.ingress_enabled }}
+{% if service.ingress_enabled %}
+  className: {{ config.get('INGRESS_CLASS', 'nginx') }}
+  annotations:
+{% if config.get('INGRESS_ANNOTATIONS') %}
+{% for item in config.get('INGRESS_ANNOTATIONS', '').split(',') %}
+{% set key, value = item.split('=') %}
+    {{ key.strip() }}: {{ value.strip() }}
+{% endfor %}
+{% endif %}
+{% if certificates %}
+{% for alias, cert in certificates.items() %}
+    kubernetes.io/elb.id: {{ cert.get('elb_id', '') }}
+    kubernetes.io/elb.class: {{ cert.get('elb_class', 'union') }}
+{% endfor %}
+{% endif %}
+  hosts:
+    - host: {{ service.ingress_host }}
+      paths:
+        - path: {{ service.ingress_path }}
+          pathType: {{ config.get('INGRESS_PATH_TYPE', 'Prefix') }}
+{% if certificates %}
+  tls:
+{% for alias, cert in certificates.items() %}
+    - secretName: {{ name }}-tls-{{ alias }}
+      hosts:
+        - {{ cert.get('domain', service.ingress_host) }}
+{% endfor %}
+{% endif %}
+{% endif %}
+
+# ===== HPA 配置 =====
+hpa:
+  enabled: {{ service.hpa_enabled }}
+{% if service.hpa_enabled %}
+  minReplicas: {{ service.hpa_min_replicas }}
+  maxReplicas: {{ service.hpa_max_replicas }}
+  targetCPU: {{ service.hpa_cpu_target }}
+{% if service.hpa_memory_target %}
+  targetMemory: {{ service.hpa_memory_target }}
+{% endif %}
+{% endif %}
+
+# ===== PDB 配置 =====
+pdb:
+  enabled: {{ service.pdb_enabled }}
+{% if service.pdb_enabled %}
+  minAvailable: {{ service.pdb_min_available }}
+{% endif %}
+
+# ===== 监控配置 =====
+monitoring:
+  enabled: {{ service.monitoring_enabled }}
+{% if service.monitoring_enabled %}
+  portName: {{ config.get('METRICS_PORT_NAME', 'metrics') }}
+  path: {{ service.metrics_path }}
+  interval: {{ config.get('METRICS_INTERVAL', '30s') }}
+{% endif %}
+
+# ===== 元数据标签 =====
+labels:
+  app: {{ service.app }}
+  project: {{ project.name }}
+  environment: {{ environment.name }}
+  managed-by: swr-builder
+
+# ===== 平台特定配置 =====
+platform:
+  version: {{ platform_version }}
+  builderManaged: {{ builder_managed }}
