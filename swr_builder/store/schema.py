@@ -380,10 +380,64 @@ PATCH_SCRIPTS = [
     )""",
 ]
 
+# 迁移 5：资源、资源绑定、环境预置
+RESOURCES_BINDINGS_PRESETS = [
+    """CREATE TABLE resources (
+        id BIGSERIAL PRIMARY KEY,
+        scope_type TEXT NOT NULL CHECK (scope_type IN ('platform', 'environment')),
+        scope_id BIGINT NOT NULL DEFAULT 0,
+        type TEXT NOT NULL,
+        name TEXT NOT NULL,
+        parent_id BIGINT REFERENCES resources(id) ON DELETE CASCADE,
+        description TEXT NOT NULL DEFAULT '',
+        current_version_id BIGINT,
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_resources_scope_name UNIQUE (scope_type, scope_id, name)
+    )""",
+    "CREATE INDEX idx_resources_parent ON resources (parent_id)",
+    "CREATE INDEX idx_resources_type ON resources (type, scope_type, scope_id)",
+    """CREATE TABLE resource_versions (
+        id BIGSERIAL PRIMARY KEY,
+        resource_id BIGINT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+        number INTEGER NOT NULL,
+        attributes TEXT NOT NULL,
+        checksum TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_resource_versions_number UNIQUE (resource_id, number)
+    )""",
+    """CREATE TABLE service_resource_bindings (
+        id BIGSERIAL PRIMARY KEY,
+        service_id BIGINT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+        resource_id BIGINT NOT NULL REFERENCES resources(id) ON DELETE RESTRICT,
+        alias TEXT NOT NULL DEFAULT '',
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_service_resource_bindings_service_resource UNIQUE (service_id, resource_id)
+    )""",
+    "CREATE INDEX idx_service_resource_bindings_resource ON service_resource_bindings (resource_id)",
+    """CREATE TABLE environment_presets (
+        id BIGSERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        profile_template TEXT NOT NULL,
+        config_defaults TEXT NOT NULL,
+        required_resources TEXT NOT NULL DEFAULT '[]',
+        required_params TEXT NOT NULL DEFAULT '[]',
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_environment_presets_name UNIQUE (name)
+    )""",
+]
+
 # 有自增主键的表：导入旧数据后要重置序列
 SERIAL_TABLES = ("projects", "users", "api_tokens", "audit_logs", "apps", "jobs", "role_bindings", "clusters",
                  "namespaces", "services", "service_revisions", "service_secrets", "deploy_targets", "deployments",
-                 "approvals")
+                 "approvals", "resources", "resource_versions", "service_resource_bindings", "environment_presets")
 
 USER_FIELDS = ("username", "display_name", "email", "password_hash", "role", "enabled", "must_change_password",
                "created_at", "updated_at", "last_login_at", "password_changed_at")
