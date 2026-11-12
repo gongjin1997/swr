@@ -179,6 +179,76 @@ def _current_bindings(store: Store, box: Optional[SecretBox], service_id: int, r
 
         chain.append(resources_by_id[resource_id])
 
+        # 展开父链（如果有父资源）
+        parent_chain_data: List[Dict[str, Any]] = []
+        if resource.get("parent_resource_id"):
+            try:
+                # 查询父资源并添加到链中
+                parent_id = resource["parent_resource_id"]
+                parent_resource = store.get_resource(parent_id)
+                if parent_resource:
+                    parent_attributes = parent_resource.get("attributes") or {}
+                    if reveal and box:
+                        parent_decrypted = {}
+                        for key, value in parent_attributes.items():
+                            if key in resource_types.secret_attributes(parent_resource["type"]):
+                                try:
+                                    parent_decrypted[key] = box.decrypt(value)
+                                except Exception:
+                                    parent_decrypted[key] = ""
+                            else:
+                                parent_decrypted[key] = value
+                        parent_attributes = parent_decrypted
+
+                    parent_data = {
+                        "id": parent_id,
+                        "type": parent_resource["type"],
+                        "attributes": parent_attributes,
+                        "scope_type": parent_resource["scope_type"],
+                        "scope_id": parent_resource["scope_id"],
+                    }
+                    resources_by_id[parent_id] = parent_data
+                    chain.append(parent_data)
+                    parent_chain_data.append({
+                        "resource_id": parent_id,
+                        "version": parent_resource.get("version") or 0,
+                    })
+
+                    # 递归查询祖父资源（如果有）
+                    if parent_resource.get("parent_resource_id"):
+                        grandparent_id = parent_resource["parent_resource_id"]
+                        grandparent_resource = store.get_resource(grandparent_id)
+                        if grandparent_resource:
+                            grandparent_attributes = grandparent_resource.get("attributes") or {}
+                            if reveal and box:
+                                grandparent_decrypted = {}
+                                for key, value in grandparent_attributes.items():
+                                    if key in resource_types.secret_attributes(grandparent_resource["type"]):
+                                        try:
+                                            grandparent_decrypted[key] = box.decrypt(value)
+                                        except Exception:
+                                            grandparent_decrypted[key] = ""
+                                    else:
+                                        grandparent_decrypted[key] = value
+                                grandparent_attributes = grandparent_decrypted
+
+                            grandparent_data = {
+                                "id": grandparent_id,
+                                "type": grandparent_resource["type"],
+                                "attributes": grandparent_attributes,
+                                "scope_type": grandparent_resource["scope_type"],
+                                "scope_id": grandparent_resource["scope_id"],
+                            }
+                            resources_by_id[grandparent_id] = grandparent_data
+                            chain.append(grandparent_data)
+                            parent_chain_data.append({
+                                "resource_id": grandparent_id,
+                                "version": grandparent_resource.get("version") or 0,
+                            })
+            except Exception:
+                # 父链展开失败，仅使用当前资源
+                pass
+
         # 计算导出
         try:
             resource_exports = resource_types.compute_exports(chain)
@@ -188,13 +258,12 @@ def _current_bindings(store: Store, box: Optional[SecretBox], service_id: int, r
             continue
 
         # 记录资源 pin（包括父链）
-        # TODO: 完整实现需要展开父链
         resource_pins.append({
             "resource_id": resource_id,
             "alias": binding["alias"],
             "type": resource["type"],
             "version": resource.get("version") or 0,
-            "parent_chain": [{"resource_id": resource_id, "version": resource.get("version") or 0}],
+            "parent_chain": parent_chain_data,
         })
 
     return bindings, exports, resource_pins
