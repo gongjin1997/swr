@@ -5,8 +5,7 @@
 - 负载均衡入口：Ingress 类、ELB 类型 / ID / 端口、证书 ID（取多数），与多数不一致的 Ingress 列为问题；
 - 环境层配置：所有服务取值都相同的环境变量与敏感变量（至少两个服务时才上提）；
 - 共享配置：被挂载的公共 ConfigMap / Secret，作为环境层的配置文件 / 敏感文件；
-- 每个服务的托管规格与服务层配置，以及模板不支持、接管后会变化的地方；
-- 资源推断：从 Deployment 和 ConfigMap 推断需要的资源类型（GaussDB、Redis、Kafka 等）。
+- 每个服务的托管规格与服务层配置，以及模板不支持、接管后会变化的地方。
 
 敏感值只在内部以 bytes 传递；接口响应由 services/imports.py 生成，不含敏感值。
 """
@@ -20,7 +19,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from ..core.resource_inference import analyze_namespace_yaml
 from .spec import DEFAULT_SPEC, DOWNWARD_ENV, PROBE_TIMINGS, SECURITY_CONTEXT, default_spec
 
 MAX_YAML_BYTES = 20 * 1024 * 1024
@@ -465,13 +463,9 @@ def analyze(objects: List[Dict[str, Any]], namespace: str) -> Dict[str, Any]:
             continue
         services.append(_service_spec(draft, index, profile, ingress_profile, entries, common_env, common_secret,
                                       env_maps, secret_maps, source_namespace))
-    # ---------------------------------------------------------------- 资源推断
-    resource_analysis = analyze_namespace_yaml(objects)
-
     return {"source_namespace": source_namespace, "counts": {k: len(v) for k, v in index.by_kind.items()},
             "ignored": dict(index.ignored), "profile": profile, "ingress": ingress_profile,
             "env": common_env, "secret_env": common_secret, "files": files, "services": services,
-            "resource_inferences": resource_analysis,
             "warnings": warnings, "unused": unused}
 
 

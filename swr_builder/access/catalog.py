@@ -87,8 +87,6 @@ PERMISSIONS: Dict[str, Permission] = {p.code: p for p in (
     Permission("secret.view", "查看敏感配置与证书内容", "config", _GPN, ("project.view", "namespace.view")),
     Permission("certificate.view", "查看证书与负载均衡入口", "config", _G),
     Permission("certificate.manage", "上传、轮换证书，维护负载均衡入口", "config", _G, ("certificate.view",)),
-    Permission("resource.view", "查看资源", "config", _GN),
-    Permission("resource.manage", "创建、修改、删除资源", "config", _GN, ("resource.view",)),
     Permission("deploy.manage", "管理旧部署目标", "legacy", _G, grantable=False),
     Permission("deploy.run", "执行旧部署（已停用）", "legacy", _G, grantable=False),
 )}
