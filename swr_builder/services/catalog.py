@@ -235,7 +235,7 @@ def _service_config(store: Store, box: Optional[SecretBox], raw: Any) -> List[Tu
 def create_service(store: Store, me: Principal, data: Any, box: Optional[SecretBox] = None) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("服务请求格式错误")
-    reject_unknown(data, {"name", "project_id", "namespace_id", "app_id", "spec", "config"}, "服务请求包含未知字段")
+    reject_unknown(data, {"name", "project_id", "namespace_id", "app_id", "spec", "config", "bindings"}, "服务请求包含未知字段")
     name = text_field(data, "name", 63).lower()
     if not DNS_LABEL_RE.fullmatch(name):
         raise ValueError("服务名称必须是 DNS-1123 label（小写字母、数字和 -）")
@@ -266,6 +266,26 @@ def create_service(store: Store, me: Principal, data: Any, box: Optional[SecretB
     for kind, entries, refs in prepared:
         set_name = configsets.SINGLETON_NAMES.get(kind) or SERVICE_FILES
         store.create_config_set("service", created["id"], set_name, kind, "", entries, refs, "新建服务时创建", me.id)
+
+    # 创建资源绑定
+    bindings = data.get("bindings") or []
+    if bindings:
+        if not isinstance(bindings, list):
+            raise ValueError("bindings 必须是列表")
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                raise ValueError("每个 binding 必须是字典")
+            resource_id = binding.get("resource_id")
+            alias = binding.get("alias")
+            if type(resource_id) is not int or not isinstance(alias, str):
+                raise ValueError("binding 必须包含 resource_id (int) 和 alias (str)")
+            # 验证资源是否存在且可访问
+            resource = store.get_resource(resource_id)
+            if not resource:
+                raise NotFound(f"资源 #{resource_id} 不存在")
+            # 创建绑定
+            store.create_service_resource_binding(created["id"], resource_id, alias)
+
     return service_response(created)
 
 

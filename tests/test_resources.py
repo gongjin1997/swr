@@ -160,7 +160,8 @@ def test_service_resource_binding():
                                       "credential_encrypted": "{}"})
     namespace_id = store.create_namespace(cluster_id, "test-ns", "dev", {}, project_id)
 
-    service_id = store.create_service("test-service", project_id, namespace_id, app_id, {"mode": "managed"}, user["id"])
+    service = store.create_service("test-service", project_id, namespace_id, app_id, {"mode": "managed"}, user["id"])
+    service_id = service["id"]
 
     # 创建资源
     attrs = {"host": "redis.example", "port": 6379, "password": "secret"}
@@ -206,7 +207,8 @@ def test_resource_binding_prevents_deletion():
                                       "server": "https://k8s.example:6443", "auth_type": "sa_token",
                                       "credential_encrypted": "{}"})
     namespace_id = store.create_namespace(cluster_id, "test-ns", "dev", {}, project_id)
-    service_id = store.create_service("test-service", project_id, namespace_id, app_id, {"mode": "managed"}, user["id"])
+    service = store.create_service("test-service", project_id, namespace_id, app_id, {"mode": "managed"}, user["id"])
+    service_id = service["id"]
 
     attrs = {"host": "redis.example", "port": 6379}
     validated = resource_types.validate_attributes("redis", attrs, box)
