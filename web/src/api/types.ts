@@ -1157,3 +1157,120 @@ export interface CertificateUpload {
   not_after?: string
   note?: string
 }
+
+// ------------------------------------------------------------------ 资源管理
+export type ResourceScopeType = 'platform' | 'environment'
+export type ResourceType = 'gauss_db' | 'gauss_schema' | 'gauss_user' | 'redis' | 'kafka' | 'mqs' | 'config_center' | 'iam_endpoint' | 'endpoint'
+
+export interface Resource {
+  id: number
+  scope_type: ResourceScopeType
+  scope_id: number
+  type: ResourceType
+  name: string
+  description: string
+  version: number
+  attributes: Record<string, any>
+  created_at: string
+  updated_at: string
+  can_edit: boolean
+  can_reveal: boolean
+  binding_count?: number
+}
+
+export interface ResourceVersion {
+  resource_id: number
+  number: number
+  attributes: Record<string, any>
+  checksum: string
+  note: string
+  created_at: string
+  created_by: number
+}
+
+export interface ResourceBinding {
+  alias: string
+  resource_id: number
+  resource: {
+    id: number
+    type: ResourceType
+    name: string
+    scope_type: ResourceScopeType
+    scope_id: number
+    version: number
+    attributes: Record<string, any>
+  }
+}
+
+export interface ResourceExport {
+  resource_id: number
+  resource_type: ResourceType
+  resource_name: string
+  env: [string, string][]
+  secret_env: [string, string][]
+}
+
+export interface CreateResourceRequest {
+  scope_type: ResourceScopeType
+  scope_id?: number
+  type: ResourceType
+  name: string
+  description?: string
+  attributes: Record<string, any>
+  note?: string
+}
+
+export interface UpdateResourceRequest {
+  base_version: number
+  attributes: Record<string, any>
+  note?: string
+  description?: string
+}
+
+export interface BindResourceRequest {
+  resource_id: number
+  alias: string
+}
+
+// ------------------------------------------------------------------ 环境预置
+export interface Preset {
+  id: number
+  name: string
+  description: string
+  profile_template: Record<string, any>
+  default_config_sets: {
+    kind: ConfigKind
+    name: string
+    entries: ConfigEntryInput[]
+  }[]
+  required_resource_types: ResourceType[]
+  required_params: {
+    key: string
+    label: string
+    required?: boolean
+  }[]
+  created_at: string
+  updated_at: string
+  created_by: number
+}
+
+export interface CreatePresetRequest {
+  name: string
+  description?: string
+  profile_template: Record<string, any>
+  default_config_sets: {
+    kind: ConfigKind
+    name: string
+    entries: ConfigEntryInput[]
+  }[]
+  required_resource_types: ResourceType[]
+  required_params: {
+    key: string
+    label: string
+    required?: boolean
+  }[]
+}
+
+export interface ApplyPresetRequest {
+  preset_id: number
+}

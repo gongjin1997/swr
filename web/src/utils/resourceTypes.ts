@@ -3,6 +3,8 @@
  * 与后端 delivery/resources.py 的 RESOURCE_TYPES 保持一致
  */
 
+import type { ResourceType } from '@/api/types'
+
 export interface AttributeDefinition {
   label: string
   type: 'string' | 'integer' | 'boolean'
@@ -16,11 +18,11 @@ export interface ResourceTypeDefinition {
   label: string
   description: string
   attributes: Record<string, AttributeDefinition>
-  parent_type?: string
+  parent_type?: ResourceType
   exports?: string[]
 }
 
-export const RESOURCE_TYPES: Record<string, ResourceTypeDefinition> = {
+export const RESOURCE_TYPES: Record<ResourceType, ResourceTypeDefinition> = {
   gauss_db: {
     label: 'GaussDB 数据库',
     description: 'GaussDB 数据库实例',
@@ -116,26 +118,26 @@ export const RESOURCE_TYPES: Record<string, ResourceTypeDefinition> = {
   },
 }
 
-export const getResourceTypeLabel = (type: string): string => {
+export function getResourceTypeLabel(type: ResourceType): string {
   return RESOURCE_TYPES[type]?.label || type
 }
 
-export const getResourceTypeDescription = (type: string): string => {
+export function getResourceTypeDescription(type: ResourceType): string {
   return RESOURCE_TYPES[type]?.description || ''
 }
 
-export const getResourceAttributes = (type: string): Record<string, AttributeDefinition> => {
+export function getResourceAttributes(type: ResourceType): Record<string, AttributeDefinition> {
   return RESOURCE_TYPES[type]?.attributes || {}
 }
 
-export const getSecretAttributes = (type: string): string[] => {
+export function getSecretAttributes(type: ResourceType): string[] {
   const attributes = getResourceAttributes(type)
   return Object.entries(attributes)
     .filter(([_, def]) => def.secret)
     .map(([key]) => key)
 }
 
-export const maskSecrets = (type: string, attributes: Record<string, any>): Record<string, any> => {
+export function maskSecrets(type: ResourceType, attributes: Record<string, any>): Record<string, any> {
   const secretKeys = getSecretAttributes(type)
   const masked = { ...attributes }
   secretKeys.forEach(key => {
@@ -146,14 +148,21 @@ export const maskSecrets = (type: string, attributes: Record<string, any>): Reco
   return masked
 }
 
-export const getParentType = (type: string): string | undefined => {
+export function getParentType(type: ResourceType): ResourceType | undefined {
   return RESOURCE_TYPES[type]?.parent_type
 }
 
-export const hasParent = (type: string): boolean => {
+export function hasParent(type: ResourceType): boolean {
   return getParentType(type) !== undefined
 }
 
-export const getExportKeys = (type: string): string[] => {
+export function getExportKeys(type: ResourceType): string[] {
   return RESOURCE_TYPES[type]?.exports || []
+}
+
+export function getResourceTypeOptions(): { label: string; value: ResourceType }[] {
+  return Object.entries(RESOURCE_TYPES).map(([key, def]) => ({
+    label: def.label,
+    value: key as ResourceType,
+  }))
 }

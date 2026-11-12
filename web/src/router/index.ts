@@ -81,6 +81,22 @@ export const routes: RouteRecordRaw[] = [
         meta: { title: '配置中心', perms: ['config.manage', 'environment.config'] } },
       { path: 'certificates', name: 'certificates', component: () => import('@/views/certificates/CertificatesView.vue'),
         meta: { title: '证书', perms: ['certificate.view'] } },
+      // 资源管理
+      { path: 'resources', name: 'resources', component: () => import('@/views/resources/ResourcesView.vue'),
+        meta: { title: '资源管理', perms: ['resource.view'] } },
+      { path: 'resources/new', name: 'resource-create', component: () => import('@/views/resources/ResourceFormView.vue'),
+        meta: { title: '创建资源', perms: ['resource.manage'] } },
+      { path: 'resources/:id(\\d+)', name: 'resource-detail', component: () => import('@/views/resources/ResourceDetailView.vue'),
+        meta: { title: '资源详情', perms: ['resource.view'] }, props: (r) => ({ id: Number(r.params.id) }) },
+      { path: 'resources/:id(\\d+)/edit', name: 'resource-edit', component: () => import('@/views/resources/ResourceFormView.vue'),
+        meta: { title: '编辑资源', perms: ['resource.manage'] }, props: (r) => ({ id: Number(r.params.id) }) },
+      // 环境预置
+      { path: 'presets', name: 'presets', component: () => import('@/views/presets/PresetsView.vue'),
+        meta: { title: '环境预置', perms: ['resource.view'] } },
+      { path: 'presets/new', name: 'preset-create', component: () => import('@/views/presets/PresetFormView.vue'),
+        meta: { title: '创建预置', perms: ['resource.manage'] } },
+      { path: 'presets/:id(\\d+)/edit', name: 'preset-edit', component: () => import('@/views/presets/PresetFormView.vue'),
+        meta: { title: '编辑预置', perms: ['resource.manage'] }, props: (r) => ({ id: Number(r.params.id) }) },
       // 平台
       { path: 'platform/kubernetes', name: 'kubernetes', component: () => import('@/views/platform/KubernetesView.vue'),
         meta: { title: '集群与命名空间', perms: ['cluster.manage', 'namespace.member.manage'] } },

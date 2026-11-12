@@ -323,3 +323,8 @@ export const settingsApi = {
   save: (change: SettingsChange) => http.put<{ ok: boolean; changed: string[] }>('/api/settings', change),
   testRegistry: (change: SettingsChange) => http.post<{ ok: boolean; message: string }>('/api/settings/registry/test', change),
 }
+
+// ------------------------------------------------------------------ 资源管理与环境预置
+export { resourceApi, serviceResourceApi } from './resources'
+export { presetApi } from './presets'
+
