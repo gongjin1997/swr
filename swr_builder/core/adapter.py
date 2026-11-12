@@ -55,6 +55,9 @@ class DomainAdapter:
             if not resource_data:
                 continue
 
+            # 构建父链
+            parent_chain = self._build_parent_chain(resource_data)
+
             # 构建 Resource 对象
             resource = Resource(
                 id=resource_data["id"],
@@ -65,6 +68,7 @@ class DomainAdapter:
                 parent_id=resource_data.get("parent_id"),
                 attributes=resource_data["attributes"],
                 version=resource_data.get("current_version", 1),
+                parent_chain=parent_chain,  # 添加父链
             )
 
             binding = ResourceBinding(
@@ -76,6 +80,20 @@ class DomainAdapter:
             bindings.append(binding)
 
         return bindings
+
+    def _build_parent_chain(self, resource: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """构建资源的父链"""
+        chain = []
+        current = resource
+
+        while current and current.get("parent_id"):
+            parent = self.store.get_resource(current["parent_id"])
+            if not parent:
+                break
+            chain.insert(0, parent)
+            current = parent
+
+        return chain
 
     def _load_config_layers(self, service: Dict[str, Any]) -> List[ConfigLayer]:
         """加载配置层（platform → project → environment → service）"""

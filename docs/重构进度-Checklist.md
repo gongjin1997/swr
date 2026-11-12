@@ -7,26 +7,28 @@
 - [x] 资源推断引擎（从 K8s YAML 推断资源需求）
 - [x] CLI 工具（analyze_yaml）
 
-## 阶段 2: 数据库和资源管理（进行中 🔄）
-- [ ] 数据库迁移 6：扩展资源表结构
-- [ ] 资源类型定义完善（gauss_db/schema/user, redis, kafka, mqs, config_center, iam_endpoint, endpoint）
-- [ ] 资源导出规则引擎（properties 文件解析）
-- [ ] 资源绑定 CRUD（store/resources.py）
-- [ ] 资源管理服务（services/resources.py）
-- [ ] 资源管理 API（api/resources.py）
+## 阶段 2: 资源管理（已完成 ✅）
+- [x] 资源类型定义（8 种资源类型，代码定义）
+- [x] 资源导出引擎（属性 → 配置转换）
+- [x] 资源存储层（resource_store.py）
+- [x] 资源管理服务（resource_service.py）
+- [x] 资源管理 API（resource_api.py）
+- [x] 服务资源绑定 API
 
-## 阶段 3: 配置解析集成（待完成 ⏳）
-- [ ] 更新 delivery/resolve.py 使用 ParamResolver
+## 阶段 3: 配置解析集成（进行中 🔄）
+- [x] delivery/resolve.py 已集成资源导出
+- [ ] 使用新的 ParamResolver 替换现有合并逻辑
 - [ ] 配置快照包含资源版本
 - [ ] 来源追踪存储到 deployment_manifests
-- [ ] API 端点：GET /api/services/{id}/params
-- [ ] 必填参数校验
+- [ ] API 端点：GET /api/services/{id}/params（带来源追踪）
+- [ ] 必填参数校验集成
 
 ## 阶段 4: 环境预置（待完成 ⏳）
-- [ ] environment_presets 表
+- [ ] environment_presets 表结构验证
 - [ ] 预置管理服务（services/presets.py）
 - [ ] 预置管理 API（api/presets.py）
 - [ ] 应用预置到环境（复制档案和配置集）
+- [ ] 必填参数记录和校验
 
 ## 阶段 5: 导入增强（待完成 ⏳）
 - [ ] 集成资源推断到导入流程
@@ -51,4 +53,9 @@
 
 ---
 
-## 当前进度：阶段 1 完成，开始阶段 2
+## 当前进度：阶段 2 完成，阶段 3 进行中（集成配置解析）
+
+## 已提交：
+- dbfca4a: 资源推断引擎、分析工具和完整 checklist
+- ba0a687: 完整的资源管理系统（基于 XAC 架构）
+

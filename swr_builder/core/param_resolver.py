@@ -99,16 +99,41 @@ class ParamResolver:
         # 2. resource 层（绑定的资源导出）
         for binding in du.resource_bindings:
             if binding.resource:
-                resource_params = self._export_resource(binding.resource)
-                self._merge_layer(
-                    result_params, result_sources, warnings,
-                    layer="resource", scope="environment",
-                    entries=resource_params,
-                    source_type="resource",
-                    source_id=binding.resource_id,
-                    source_name=binding.resource.name,
-                    version=binding.resource.version
+                # 使用资源导出引擎
+                from .resource_exporter import ResourceExporter
+                exporter = ResourceExporter()
+
+                # 构建父链（用于属性继承）
+                parent_chain = getattr(binding.resource, 'parent_chain', [])
+
+                exported = exporter.export_resource(
+                    {
+                        "type": binding.resource.type,
+                        "name": binding.resource.name,
+                        "attributes": binding.resource.attributes,
+                    },
+                    parent_chain
                 )
+
+                # 合并导出的配置（env 和 secret_env）
+                for kind in ["env", "secret_env"]:
+                    for entry in exported.get(kind, []):
+                        resource_entries = {
+                            entry["key"]: {
+                                "key": entry["key"],
+                                "value": entry["value"],
+                                "locked": False,
+                            }
+                        }
+                        self._merge_layer(
+                            result_params, result_sources, warnings,
+                            layer="resource", scope="environment",
+                            entries=resource_entries,
+                            source_type="resource",
+                            source_id=binding.resource_id,
+                            source_name=binding.resource.name,
+                            version=binding.resource.version
+                        )
 
         # 3. config 层（platform < project < environment < du）
         for config_layer in sorted(du.config_layers, key=lambda c: self.SCOPE_PRIORITY.get(c.scope_type, 0)):
