@@ -11,6 +11,7 @@ from .configs import ConfigMixin
 from .db import Database, IntegrityViolation, close_all, redact_url
 from .deployments import DeploymentsMixin
 from .jobs import JobsMixin
+from .presets import PresetsMixin
 from .projects import ProjectsMixin
 from .resources import ResourcesMixin
 from .roles import RolesMixin
@@ -20,7 +21,7 @@ from .system import SystemMixin
 
 
 class Store(RolesMixin, AppsMixin, ProjectsMixin, ClustersMixin, ConfigMixin, BindingsMixin, ResourcesMixin,
-            ServicesMixin, JobsMixin, AccountsMixin, SystemMixin, DeploymentsMixin, Database):
+            PresetsMixin, ServicesMixin, JobsMixin, AccountsMixin, SystemMixin, DeploymentsMixin, Database):
     pass
 
 

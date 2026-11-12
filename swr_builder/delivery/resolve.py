@@ -290,7 +290,7 @@ def resolve(store: Store, box: Optional[SecretBox], service: Dict[str, Any], spe
     return inputs, snapshot
 
 
-def check_render(inputs: RenderInputs, namespace: Dict[str, Any]) -> List[str]:
+def check_render(inputs: RenderInputs, namespace: Dict[str, Any], snapshot: Optional[Dict[str, Any]] = None) -> List[str]:
     """依赖环境档案、负载均衡入口与命名空间策略的检查，返回错误列表（空列表表示可以下发）。"""
     from ..services.namespaces import effective_policy
 
@@ -326,4 +326,14 @@ def check_render(inputs: RenderInputs, namespace: Dict[str, Any]) -> List[str]:
     for label, data in (("环境变量", {k: v.encode("utf-8") for k, v in inputs.env.items()}), ("敏感变量", inputs.secret_env)):
         if sum(len(k) + len(v) for k, v in data.items()) > MAX_OBJECT_BYTES:
             errors.append(f"合并后的{label}超过 Kubernetes 单个对象 1 MiB 的上限")
+
+    # 检查必填参数（从快照的来源追踪中提取）
+    if snapshot and snapshot.get("required_params"):
+        all_keys = set(inputs.env.keys()) | set(inputs.secret_env.keys())
+        for mount_obj in inputs.mounts.values():
+            all_keys.update(mount_obj.data.keys())
+        missing = [key for key in snapshot["required_params"] if key not in all_keys]
+        if missing:
+            errors.append(f"缺少必填参数: {', '.join(missing[:5])}" + ("..." if len(missing) > 5 else ""))
+
     return errors
