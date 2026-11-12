@@ -7,7 +7,7 @@
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { environmentApi, namespaceApi, projectApi, serviceApi } from '@/api'
+import { environmentApi, namespaceApi, projectApi, resourceApi, serviceApi } from '@/api'
 import type { ServiceCreate } from '@/api'
 import type {
   ConfigEntryInput, EnvironmentDetail, FileSetOption, ManagedSpec, Namespace, NamespaceResources, Project, RenderResult,
@@ -20,6 +20,7 @@ import { notifyError, useAction } from '@/composables/useAction'
 import { APPLY_ACTION_TAG, APPLY_ACTION_TEXT, CONFIG_SCOPE_TEXT, TIER_TEXT } from '@/constants'
 import { usePlatform } from '@/stores/platform'
 import { useSession } from '@/stores/session'
+import { getResourceTypeLabel } from '@/utils/resourceTypes'
 
 type Mode = 'managed' | 'image_only'
 const route = useRoute()
@@ -49,6 +50,8 @@ const config = reactive({
   files: [] as { key: string; value: string }[],
   bulk: '',
 })
+const bindings = ref<{ resource_id: number; alias: string }[]>([])
+const availableResources = ref<any[]>([])
 
 const permission = computed(() => (form.mode === 'managed' ? 'service.create' : 'service.config'))
 const projectOptions = computed(() => projects.value.filter((p) => p.namespace_ids.some((id) => session.canNamespace(id, permission.value))))
@@ -79,7 +82,12 @@ function payload(): ServiceCreate {
     return { ...base, spec: { mode: 'image_only', target: { kind: 'Deployment', name: form.deployment, container: form.container } } }
   }
   if (!spec.value) throw new Error('请先填写工作负载')
-  return { ...base, spec: spec.value, config: { env: entries(config.env), secret_env: entries(config.secret), files: entries(config.files, true) } }
+  return {
+    ...base,
+    spec: spec.value,
+    config: { env: entries(config.env), secret_env: entries(config.secret), files: entries(config.files, true) },
+    bindings: bindings.value.length > 0 ? bindings.value : undefined
+  }
 }
 
 async function load() {
@@ -104,6 +112,10 @@ async function prepareWorkload() {
   environment.value = env
   inherited.value = effective.files.map((f) => ({ name: f.name, kind: f.kind, keys: f.keys,
     scope: CONFIG_SCOPE_TEXT[f.origin.scope_type] }))
+
+  // 加载可用资源
+  await loadAvailableResources()
+
   if (!spec.value) {
     const template = templates.value.find((t) => t.code === form.template) ?? templates.value[0]
     const draft = JSON.parse(JSON.stringify(template.defaults)) as ManagedSpec
@@ -177,6 +189,27 @@ function bulkEnv() {
     else config.env.push({ key, value })
   }
   config.bulk = ''
+}
+
+async function loadAvailableResources() {
+  if (!form.namespaceId) return
+  try {
+    const [platformRes, envRes] = await Promise.all([
+      resourceApi.list({ scope_type: 'platform' }),
+      resourceApi.list({ scope_type: 'environment', scope_id: form.namespaceId }),
+    ])
+    availableResources.value = [...platformRes.items, ...envRes.items]
+  } catch (e) {
+    console.error('加载可用资源失败', e)
+  }
+}
+
+function addBinding() {
+  bindings.value.push({ resource_id: 0, alias: '' })
+}
+
+function removeBinding(index: number) {
+  bindings.value.splice(index, 1)
 }
 
 watch(() => form.projectId, () => {
@@ -293,6 +326,34 @@ onMounted(load)
           <el-table-column width="56"><template #default="{ $index }"><el-button link type="danger" :icon="Delete" aria-label="删除" @click="config.secret.splice($index, 1)" /></template></el-table-column>
         </el-table>
         <el-button size="small" :icon="Plus" class="section-gap" @click="config.secret.push({ key: '', value: '' })">添加</el-button>
+
+        <h3 class="title">资源绑定 <span class="hint">绑定平台/环境资源，自动导出环境变量</span></h3>
+        <el-table :data="bindings" size="small" empty-text="没有绑定资源">
+          <el-table-column label="资源" min-width="200">
+            <template #default="{ row }">
+              <el-select v-model="row.resource_id" placeholder="选择资源" filterable style="width: 100%">
+                <el-option
+                  v-for="resource in availableResources"
+                  :key="resource.id"
+                  :label="`${resource.name} (${resource.type})`"
+                  :value="resource.id"
+                />
+              </el-select>
+            </template>
+          </el-table-column>
+          <el-table-column label="别名" min-width="150">
+            <template #default="{ row }">
+              <el-input v-model="row.alias" placeholder="例如：db, cache" />
+            </template>
+          </el-table-column>
+          <el-table-column width="56">
+            <template #default="{ $index }">
+              <el-button link type="danger" :icon="Delete" aria-label="删除" @click="removeBinding($index)" />
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-button size="small" :icon="Plus" class="section-gap" @click="addBinding">添加绑定</el-button>
+
         <h3 class="title">服务配置文件 <span class="hint">渲染为 &lt;服务&gt;-properties，未挂载时自动挂载到 /app/config</span></h3>
         <div v-for="(file, index) in config.files" :key="index" class="file-row">
           <el-input v-model="file.key" placeholder="service.properties" />
