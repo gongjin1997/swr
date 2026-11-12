@@ -3,6 +3,8 @@ pgdata/
 __pycache__/
 *.pyc
 config.yaml
+# 离线交付包使用的配置模板（不含现场信息）
+!deploy/offline/config.yaml
 *.env
 .pytest_cache/
 web/node_modules/

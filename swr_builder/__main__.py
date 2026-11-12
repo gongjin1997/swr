@@ -18,7 +18,8 @@ import uvicorn
 from .config import load_settings
 
 
-def _db(argv: List[str]) -> int:
+def db_parser() -> argparse.ArgumentParser:
+    """`db` 子命令的参数定义；离线部署控制器的测试也用它核对传给一次性容器的参数。"""
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("-c", "--config", help="配置文件路径，默认 ./config.yaml 或环境变量 BUILDER_CONFIG")
     parser = argparse.ArgumentParser(prog="python -m swr_builder db", description="数据库维护", parents=[common])
@@ -35,7 +36,11 @@ def _db(argv: List[str]) -> int:
                      help="只校验脚本并列出将执行 / 跳过的脚本，不执行脚本，也不执行迁移")
     state = sub.add_parser("status", parents=[common], help="迁移版本、执行中的构建与发布数量、已执行的脚本数量（不执行迁移）")
     state.add_argument("--json", action="store_true")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def _db(argv: List[str]) -> int:
+    args = db_parser().parse_args(argv)
 
     import json
     from pathlib import Path
