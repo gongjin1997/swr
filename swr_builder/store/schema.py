@@ -366,6 +366,20 @@ MANAGED_DELIVERY = [
     "CREATE INDEX idx_deployment_manifests_service ON deployment_manifests (service_id, deployment_id)",
 ]
 
+# 迁移 4：离线补丁包与铺底数据中执行过的 SQL 脚本（见 store/sqlscripts.py），保证同一脚本只执行一次
+PATCH_SCRIPTS = [
+    """CREATE TABLE patch_scripts (
+        id BIGSERIAL PRIMARY KEY,
+        patch TEXT NOT NULL,
+        path TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        transactional BOOLEAN NOT NULL,
+        duration_ms BIGINT NOT NULL,
+        applied_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT uq_patch_scripts_patch_path UNIQUE (patch, path)
+    )""",
+]
+
 # 有自增主键的表：导入旧数据后要重置序列
 SERIAL_TABLES = ("projects", "users", "api_tokens", "audit_logs", "apps", "jobs", "role_bindings", "clusters",
                  "namespaces", "services", "service_revisions", "service_secrets", "deploy_targets", "deployments",

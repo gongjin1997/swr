@@ -264,6 +264,19 @@ class Database:
         self._pool.close()
         _OPEN.discard(self)
 
+    def execute_autocommit(self, sql: str) -> None:
+        """用单独的自动提交连接执行 SQL（不能放在事务里的语句，例如 CREATE INDEX CONCURRENTLY）。"""
+        try:
+            conn = self._driver.connect(self._conninfo, autocommit=True, prepare_threshold=None,
+                                        **self._connect_kwargs)
+        except Exception as exc:
+            raise RuntimeError(f"无法连接数据库 {self.url}：{str(exc).strip()}") from None
+        try:
+            conn.execute("SET TIME ZONE 'UTC'")
+            conn.execute(sql)
+        finally:
+            conn.close()
+
     # ------------------------------------------------------------------ 事务
     @contextmanager
     def _db(self) -> Iterator[Any]:
