@@ -190,7 +190,7 @@ async def restart_service(id: int, request: Request, ctx: Ctx, me: Me, data: dic
 @deploy_module
 async def adopt_service(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(...),
                         idempotency_key: str = Header(..., alias="Idempotency-Key")):
-    """接管发布：导入（或由纳管转为托管）的服务第一次由平台下发，镜像沿用集群中正在运行的 digest。"""
+    """接管发布：导入（或由纳管转为托管）的服务第一次由平台下发，镜像沿用集群中 Deployment 正在使用的镜像地址（通常是版本号）。"""
     service = catalog.writable_service(ctx.store, me, id, "service.deploy", "没有服务发布权限")
     image = await manifests.live_image(ctx, service)
     deployment = releases.submit(ctx.store, me, id, "adopt", data, idempotency_key, live_image=image)

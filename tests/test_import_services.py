@@ -241,7 +241,7 @@ def test_import_apply_then_adopt_takes_over_live_objects(imported):
     assert len(result["apps"]) == 2
     services = {s["deployment"]: s for s in result["services"]}
 
-    # 集群中的现状与导出一致；接管发布沿用线上镜像 digest
+    # 集群中的现状与导出一致；接管发布沿用线上镜像
     for obj in export():
         if obj["kind"] not in ("ReplicaSet", "ServiceAccount", "Pod"):
             kube.put(copy.deepcopy(obj))
@@ -255,7 +255,10 @@ def test_import_apply_then_adopt_takes_over_live_objects(imported):
                 break
             time.sleep(0.03)
         assert record["status"] == "success", record
-        assert record["job_id"] is None and record["image"].endswith("@sha256:" + digest)
+        # 接管沿用 Deployment 中的镜像地址（版本号），digest 取自正在运行的 Pod
+        base = deployment_name.removesuffix("-app")
+        assert record["job_id"] is None and record["image"] == f"swr.example/team/{base}:2.1"
+        assert record["digest"] == "sha256:" + digest
     assert kube.get("configmaps", "order-api-configmap", NS)["data"] == {"SHARED_FLAG": "on", "REGION_CODE": "r1",
                                                                           "OWN_KEY": "o1"}
     billing_secret = kube.get("secrets", "billing-api-secrets", NS)["data"]

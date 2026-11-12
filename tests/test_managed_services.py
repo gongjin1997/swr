@@ -38,13 +38,33 @@ def secret_value(obj, key):
     return base64.b64decode(obj["data"][key]).decode()
 
 
+class RegistryStub:
+    """镜像仓库：只回答清单查询，返回各版本号当前指向的 digest（worker 发布前用来核对版本号）。"""
+
+    def __init__(self):
+        self.digests = {"team/order-api:1.0.0": DIGEST_1, "team/order-api:1.0.1": DIGEST_2}
+        self.requests = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request.url.path)
+        repo, _, reference = request.url.path.removeprefix("/v2/").partition("/manifests/")
+        digest = self.digests.get(f"{repo}:{reference}")
+        if not digest:
+            return httpx.Response(404, json={"errors": [{"code": "MANIFEST_UNKNOWN"}]})
+        return httpx.Response(200, json={"schemaVersion": 2}, headers={"Docker-Content-Digest": digest})
+
+
 @pytest.fixture
 def env(tmp_path):
     settings = Settings()
     settings.build.data_dir = str(tmp_path / "data")
     settings.server.admin_password = "AdminPass123"
+    settings.registry.address = "swr.example"
     kube = FakeKube(["orders-sit"])
-    app = create_app(settings, deploy_transport=httpx.MockTransport(kube))
+    # 节点按版本号拉取镜像时解析到构建时的 digest
+    kube.image_digests = {"swr.example/team/order-api:1.0.0": DIGEST_1, "swr.example/team/order-api:1.0.1": DIGEST_2}
+    registry = RegistryStub()
+    app = create_app(settings, deploy_transport=httpx.MockTransport(kube), registry_transport=httpx.MockTransport(registry))
     with TestClient(app, headers=HEAD) as client:
         login(client)
         store = app.state.store
@@ -86,7 +106,7 @@ def env(tmp_path):
                                  image=f"swr.example/team/order-api:1.0.{i}", digest=digest,
                                  created_at="2026-11-10T00:00:00+00:00") for i, digest in enumerate((DIGEST_1, DIGEST_2))]
         yield {"app": app, "client": client, "store": store, "kube": kube, "project": project, "namespace": namespace,
-               "app_row": app_row, "jobs": jobs, "sets": sets, "elb": elb}
+               "app_row": app_row, "jobs": jobs, "sets": sets, "elb": elb, "registry": registry}
 
 
 def managed_spec(**overrides):
@@ -251,8 +271,11 @@ def test_create_preview_deploy_and_snapshot_without_secret_values(env):
     record = deploy(env, service["id"])
     assert record["status"] == "success", record
     deployment = kube.get("deployments", "order-api-app", "orders-sit")
+    # Deployment 中是版本号，不是 digest；digest 记在发布单上，下发前核对过版本号仍指向它
     assert deployment["spec"]["replicas"] == 2 and deployment["spec"]["template"]["spec"]["containers"][0]["image"] == \
-        "swr.example/team/order-api@" + DIGEST_1
+        "swr.example/team/order-api:1.0.0"
+    assert record["image"] == "swr.example/team/order-api:1.0.0" and record["digest"] == DIGEST_1
+    assert "/v2/team/order-api/manifests/1.0.0" in env["registry"].requests
     own_env = kube.get("configmaps", "order-api-configmap", "orders-sit")["data"]
     assert own_env == {"OWN_KEY": "own", "REGION_CODE": "r-own", "SHARED_FLAG": "on"}  # 服务层覆盖环境层
     secrets = kube.get("secrets", "order-api-secrets", "orders-sit")
@@ -279,7 +302,7 @@ def test_create_preview_deploy_and_snapshot_without_secret_values(env):
     assert "cluster-token" not in str(runtime) and "token-value-1" not in str(runtime)
     status = client.post("/api/services/status", json={"ids": [service["id"], 999]}).json()["items"]
     assert status == [{"service_id": service["id"], "state": "healthy", "message": "2/2 个副本可用", "ready": 2,
-                       "desired": 2, "image": "swr.example/team/order-api@" + DIGEST_1,
+                       "desired": 2, "image": "swr.example/team/order-api:1.0.0",
                        "deployment_id": str(record["id"])}]
 
 
@@ -301,7 +324,7 @@ def test_config_versions_are_pinned_and_rollback_restores_them(env):
     live = kube.get("deployments", "order-api-app", "orders-sit")["spec"]["template"]
     assert live["metadata"]["annotations"]["swr-builder/config-hash"] == hash_before
     assert kube.get("configmaps", "order-api-configmap", "orders-sit")["data"]["SHARED_FLAG"] == "on"
-    assert live["spec"]["containers"][0]["image"].endswith(DIGEST_2)
+    assert live["spec"]["containers"][0]["image"] == "swr.example/team/order-api:1.0.1"
     latest = deploy(env, service["id"], job_index=1, latest=True)
     assert latest["status"] == "success"
     assert kube.get("configmaps", "order-api-configmap", "orders-sit")["data"]["SHARED_FLAG"] == "off"
@@ -314,7 +337,20 @@ def test_config_versions_are_pinned_and_rollback_restores_them(env):
     assert wait(client, rollback.json()["id"])["status"] == "success"
     assert kube.get("configmaps", "order-api-configmap", "orders-sit")["data"]["SHARED_FLAG"] == "on"
     assert kube.get("deployments", "order-api-app", "orders-sit")["spec"]["template"]["spec"]["containers"][0][
-        "image"].endswith(DIGEST_1)
+        "image"] == "swr.example/team/order-api:1.0.0"  # 回滚同样按版本号下发
+
+
+def test_release_stops_when_the_version_tag_points_to_another_image(env):
+    """版本号在平台之外被覆盖（指向的 digest 与构建时不同）或已被删除：发布在写入集群前失败。"""
+    kube, registry = env["kube"], env["registry"]
+    service = create_service(env)
+    registry.digests["team/order-api:1.0.0"] = "sha256:" + "9" * 64
+    record = deploy(env, service["id"])
+    assert record["status"] == "failed" and "不一致" in record["error"] and "未写入集群" in record["error"], record
+    del registry.digests["team/order-api:1.0.1"]
+    record = deploy(env, service["id"], job_index=1)
+    assert record["status"] == "failed" and "不存在" in record["error"], record
+    assert not [r for r in kube.requests if r[0] == "PATCH"]  # 核对在服务端校验与写入之前
 
 
 def test_hpa_handover_prune_and_shared_config_never_downgrades(env):

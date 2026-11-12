@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from ..access import Principal
-from ..apps import AppValidationError, normalize_app
+from ..apps import AppValidationError, normalize_app, version_carry
 from ..config import Settings
 from ..dockerfile import plan_files, render_dockerfile
 from ..errors import Conflict, DomainError, Forbidden, NotFound, UpstreamError
@@ -163,7 +163,8 @@ async def versions(store: Store, settings: Settings, registry: RegistryClient, d
                 latest_info = await registry.get_image_info(repo_path, latest, data.get("platform", ""))
             except RegistryError as exc:
                 warning = f"读取上一版本详情失败：{exc}"
-        upcoming = next_tag(tags, latest, data.get("initial_tag") or "1.0.0", data.get("tag_template") or "")
+        upcoming = next_tag(tags, latest, data.get("initial_tag") or "1.0.0", data.get("tag_template") or "",
+                            carry=version_carry(data))
     except PlanError as exc:
         raise DomainError(str(exc)) from None
     except RegistryError as exc:

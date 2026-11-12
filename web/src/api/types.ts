@@ -250,6 +250,8 @@ export interface AppFields {
   platform: string
   latest_strategy: 'version' | 'time'
   initial_tag: string
+  /** carry：逢十进一（1.0.9 → 1.1.0）；last：末位递增（1.0.9 → 1.0.10） */
+  version_increment: 'carry' | 'last'
   tag_template: string
   tag_regex: string
   push_latest: boolean

@@ -167,8 +167,8 @@ def manifest(ctx, me: Principal, service_id: int, deployment_id: Optional[int] =
 
 
 async def live_image(ctx, service: Dict[str, Any]) -> Dict[str, str]:
-    """接管发布使用的镜像：集群中目标容器正在运行的 digest（Deployment 已按 digest 固定时直接使用）。
-    镜像必须属于服务对应应用的镜像仓库。"""
+    """接管发布使用的镜像：Deployment 中目标容器当前的镜像地址原样沿用（通常是 仓库:版本号），接管不改变镜像。
+    同时记录 Pod 正在运行的 digest（Deployment 已按 digest 引用时取引用中的 digest），镜像必须属于服务对应应用的镜像仓库。"""
     if mode_of(service) != "managed":
         raise Unprocessable("只有托管服务需要接管发布")
     namespace = ctx.store.get_namespace(service["namespace_id"])
@@ -205,4 +205,4 @@ async def live_image(ctx, service: Dict[str, Any]) -> Dict[str, str]:
     if not ref or (expected and ref.repo != expected):
         raise Unprocessable(f"线上镜像 {image} 不属于应用 {app.get('name', '')} 的镜像仓库 {expected}")
     digest = digests.pop()
-    return {"image": f"{ref.host}/{ref.repo}@{digest}", "digest": digest, "source": image}
+    return {"image": image, "digest": digest, "source": image}

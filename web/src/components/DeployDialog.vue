@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * 发布服务：选择一次成功构建（固定 digest）和配置。同一次对话框内重复提交复用幂等键。
+ * 发布服务：选择一次成功构建和配置。Deployment 中写入构建的版本号（仓库:版本号），
+ * 平台在写入集群前核对该版本号仍指向构建时的镜像。同一次对话框内重复提交复用幂等键。
  * 托管服务勾选“使用最新配置”时按当前修订与各层配置的最新版本渲染；不勾选时只换镜像，配置沿用上次成功发布的快照。
  */
 import { reactive, ref, watch } from 'vue'
@@ -49,13 +50,14 @@ async function submit() {
 <template>
   <el-dialog v-model="visible" :title="`发布 ${service?.name ?? ''}`" width="620px">
     <el-form label-position="top">
-      <el-form-item label="成功构建">
+      <el-form-item label="镜像版本">
         <el-select v-model="form.jobId" filterable placeholder="该服务应用暂无成功构建" style="width: 100%">
           <el-option v-for="j in jobs" :key="j.id" :value="j.id" :label="`#${j.id} · ${j.new_tag || j.image}`">
             <span>#{{ j.id }} · {{ j.new_tag || j.image }}</span>
             <span class="hint digest">{{ j.digest ? j.digest.slice(0, 19) + '…' : '无 digest' }}</span>
           </el-option>
         </el-select>
+        <div class="hint">Deployment 中写入版本号；发布前平台会确认该版本号仍是构建时的镜像，不一致则停止发布。</div>
       </el-form-item>
       <el-form-item>
         <el-checkbox v-model="form.useLatest" :disabled="!service?.deployed_revision_id">

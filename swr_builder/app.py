@@ -48,7 +48,7 @@ def build_context(settings: Settings, registry_transport: Any = None, deploy_tra
     manager = BuildManager(settings, store, registry, events)
     ctx = AppContext(settings=settings, store=store, box=box, sysconfig=sysconfig, registry=registry, events=events,
                      manager=manager, auth=AuthService(settings, store),
-                     deploy=DeployManager(settings, store, box, events, deploy_transport),
+                     deploy=DeployManager(settings, store, box, events, deploy_transport, registry=registry),
                      docker=DockerStatus(settings, lambda: manager.docker_env),
                      registry_transport=registry_transport, deploy_transport=deploy_transport,
                      hcs_transport=hcs_transport)

@@ -1,5 +1,6 @@
 """服务发布 worker：从数据库队列领取发布任务，写入 Kubernetes 并等待滚动发布完成。
 
+- 镜像按构建的版本号引用（仓库:版本号）；写入集群前核对该版本号仍指向构建时记录的 digest；
 - 纳管服务（image_only）：只更新目标容器的镜像与两个 Pod 模板注解（strategic merge patch）；
 - 托管服务（managed）：按发布快照重新渲染对象清单（此时才解密敏感值），先对全部对象做服务端 dry-run，
   全部通过后用 Server-Side Apply 逐个下发（见 swr_builder/delivery/apply.py）。
@@ -32,7 +33,7 @@ from ..delivery.apply import apply_objects, failures
 from ..delivery.render import render
 from ..delivery.resolve import resolve
 from ..policy import deployment_policy_block
-from ..registry import parse_image_ref
+from ..registry import RegistryError, parse_image_ref
 from ..services.namespaces import effective_policy, required_approvals
 from ..services.releases import valid_approval_count
 from ..store import utcnow
@@ -60,8 +61,9 @@ class DeployDisabled(Exception):
 
 
 class ServiceDeploymentWorker:
-    def __init__(self, settings, store, box, events, transport=None):
+    def __init__(self, settings, store, box, events, transport=None, registry=None):
         self.settings, self.store, self.box, self.events, self.transport = settings, store, box, events, transport
+        self.registry = registry  # RegistryClient：写入集群前核对版本号指向的 digest
         self.worker_id = f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
         self._task: Optional[asyncio.Task] = None
 
@@ -151,6 +153,7 @@ class ServiceDeploymentWorker:
             if cluster["auth_type"] == "client_cert" and not (credential.get("client_cert_pem") and credential.get("client_key_pem")):
                 raise ValueError("集群客户端证书凭据不完整")
             self._precheck(deployment, namespace)
+            await self._verify_image(deployment, log)
             if mode == "managed":
                 await self._apply_managed(deployment, service, revision, namespace, cluster, credential, log, progress)
             else:
@@ -236,6 +239,26 @@ class ServiceDeploymentWorker:
         image_org = image_ref.repo.split("/", 1)[0] if image_ref else ""
         if not image_org or image_org not in policy["allowed_registry_orgs"]:
             raise ValueError("部署镜像组织不符合当前命名空间策略")
+
+    async def _verify_image(self, deployment: Dict[str, Any], log: JobLog) -> None:
+        """发布按版本号（仓库:版本号）下发：写入集群前确认该版本号仍指向构建时记录的 digest。
+        平台不覆盖已有版本，这里防止版本号在平台之外被覆盖后，发布了与构建、审批时不同的镜像。
+
+        只核对平台构建的镜像（有构建记录、按版本号引用、在当前配置的镜像仓库中）；接管发布沿用线上镜像，不需要核对。"""
+        image = deployment.get("image") or ""
+        ref = parse_image_ref(image)
+        if (self.registry is None or not deployment.get("job_id") or not ref or "@" in image
+                or ref.host.lower() != self.settings.registry.host.lower()):
+            return
+        recorded = deployment.get("digest") or ""
+        try:
+            current = await self.registry.manifest_digest(ref.repo, ref.reference)
+        except RegistryError as exc:
+            raise ValueError(f"无法从镜像仓库核对版本 {ref.repo}:{ref.reference}：{exc}") from None
+        if current != recorded:
+            raise ValueError(f"镜像 {ref.repo}:{ref.reference} 当前指向 {current[:19]}…，与构建时的 {recorded[:19]}… 不一致"
+                             "（版本号可能在平台之外被覆盖），未写入集群")
+        log.info(f"已核对镜像版本：{ref.repo}:{ref.reference} 仍是构建时的 {recorded[:19]}…")
 
     def _check_lease(self, deployment_id: int, token: int, stage: str) -> None:
         if not self.store.service_deployment_lease_valid(deployment_id, self.worker_id, token):

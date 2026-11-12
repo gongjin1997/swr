@@ -41,7 +41,7 @@ const strategy = computed(() => {
   if (!s) return '-'
   return s.type === 'RollingUpdate' ? `滚动更新（最多超出 ${s.max_surge ?? '25%'}，最多不可用 ${s.max_unavailable ?? '25%'}）` : s.type
 })
-/** 镜像缩写：组织/仓库:标签，按 digest 固定时为 组织/仓库@sha256:前 12 位…。 */
+/** 镜像缩写：组织/仓库:版本号；按 digest 引用时为 组织/仓库@sha256:前 12 位…。 */
 function imageShort(ref: string): string {
   const [name, digest] = ref.split('@')
   return digest ? `${shortImage(name)}@${shortDigest(digest)}` : shortImage(name)

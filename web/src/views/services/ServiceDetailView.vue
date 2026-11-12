@@ -87,7 +87,7 @@ function onMore(command: string | number | object) {
 }
 const restartsTone = computed(() => ((summary.value?.restarts ?? 0) > 0 ? 'warning' : ''))
 const changeText = (change: string) => CONFIG_CHANGE_TEXT[change] ?? change
-/** 镜像名（组织/仓库:标签），按 digest 固定的镜像不显示 digest。 */
+/** 镜像名（组织/仓库:版本号）；按 digest 引用的镜像（旧的发布或接管的服务）不显示 digest。 */
 const imageName = (image?: string) => (image ? shortImage(image.split('@')[0]) : '-')
 /** 正在运行的 digest：多个 Pod 运行着不同版本时都列出（滚动中）。 */
 function imageDigest(value?: { image: string; running_images: string[] }): string {
@@ -244,7 +244,7 @@ async function publishLatestConfig() {
 }
 
 async function adopt() {
-  if (!(await confirmAction('由平台接管集群中的现有对象：镜像沿用正在运行的 digest，配置按平台中的版本下发。下发前会先做服务端校验。',
+  if (!(await confirmAction('由平台接管集群中的现有对象：镜像沿用 Deployment 当前的镜像版本，配置按平台中的版本下发。下发前会先做服务端校验。',
     '接管发布'))) return
   await submitted('接管发布已提交', () => serviceApi.adopt(props.id, idempotencyKey(), '接管已有服务'))
 }

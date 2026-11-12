@@ -2,7 +2,7 @@
 
 面向华为云 Stack SWR 的轻量级镜像编译平台：**页面上传制品 → 自动获取上一版本 → 基于上一版本累加构建 → 推送到 SWR**，全程可视化日志，构建记录可追溯。
 
-- 自动识别上一版本（按版本号或推送时间），自动生成新版本号（`1.0.7 → 1.0.8`、`1.0.9-arm64 → 1.0.10-arm64`）
+- 自动识别上一版本（按版本号或推送时间），自动生成新版本号：默认逢十进一（`1.0.8 → 1.0.9 → 1.1.0`、`1.9.9 → 2.0.0`、`1.0.9-arm64 → 1.1.0-arm64`），应用可改为末位递增（`1.0.9 → 1.0.10`）
 - **累加构建**：`FROM 上一版本` + `COPY 本次文件`，只新增 1 层，推送快、节省存储
 - **全量构建**：基于基础镜像 + 应用模板（可一键导入现有 Dockerfile）
 - 层数保护：上一版本层数达到上限（默认 100，Docker 硬上限 127）时自动改为全量构建
@@ -266,16 +266,16 @@ curl -H "Authorization: Bearer $BUILDER_API_TOKEN" -F app_id=1 -F mode=increment
 
 - 发布流程：在“集群与命名空间”纳管集群和命名空间并分配给项目 → 在环境中维护环境档案与环境层配置 → 新建服务（托管：按模板生成全部对象；纳管：关联已有 Deployment）→ 在“发布中心”或服务详情选择成功构建发布 → 按命名空间策略审批 → worker 下发并等待滚动完成。
 - 托管服务：提交发布时记录所用配置的版本快照，审批人批准的就是将要下发的内容；worker 先对全部对象做服务端 dry-run，再用 Server-Side Apply（`fieldManager=swr-builder`）下发，只管理平台声明的字段。配置变化通过 Pod 模板注解 `swr-builder/config-hash` 触发滚动。回滚与重新发布按目标发布的快照原样下发。
-- 已有服务可以在环境中“导入已有服务”：上传 `kubectl get deploy,svc,ing,cm,secret,hpa,pod -o yaml` 的导出或直接读取集群，平台推断环境档案和环境层配置并列出不一致，确认后写入平台；之后用“接管发布”（沿用线上镜像 digest）由平台接管。
+- 已有服务可以在环境中“导入已有服务”：上传 `kubectl get deploy,svc,ing,cm,secret,hpa,pod -o yaml` 的导出或直接读取集群，平台推断环境档案和环境层配置并列出不一致，确认后写入平台；之后用“接管发布”（沿用 Deployment 当前的镜像）由平台接管。
 - 旧部署目标（**Webhook** 或 **CCE / Kubernetes**，v1.2 起不再执行发布）只保留 `/api/deploy/targets` 接口供迁移核对与连接测试，控制台不再提供入口。SSH / Compose 仅为注册表占位，不可执行。
 - Webhook 固定 POST JSON：`event`、`deployment_id`、`image`、`app`、`job_id`、`tag`、`digest`、`operator`。可配置请求头、TLS 校验及 HMAC-SHA256 签名；`X-SWR-Signature: sha256=<十六进制签名>` 对原始 UTF-8 请求体计算。接收方应按 `deployment_id` 去重，建立自身的防重放/鉴权机制。
 - Webhook 测试会发送 `event=ping`，请确保接收端不会误触发部署。HTTP 2xx 仅表示网关接受请求，不代表应用已就绪；异步回调确认尚未实现。
 - 集群凭据以密文保存，支持标准 kubeconfig Config 中的静态 Token 或内嵌客户端证书/私钥；也可在“集群与命名空间”中直接上传 PEM 客户端证书、私钥和可选 CA。可纳管已有 namespace、执行 SSAR 权限检查和生成供集群管理员审核的 RBAC 模板。kubeconfig `exec`、`auth-provider` 和外部文件凭据不受支持且不会执行/读取。生产发布只有平台管理员可批准；非生产环境由全局发布审批员角色批准。
-- 服务配置支持不可变 revision 与 CAS 更新。纳管服务（`image_only`）只更新固定 digest 的镜像；托管服务（`managed`）下发完整清单。
+- 服务配置支持不可变 revision 与 CAS 更新。纳管服务（`image_only`）只更新镜像；托管服务（`managed`）下发完整清单。
 - 服务发布写入数据库队列，使用幂等键、租约和 fencing token。工作进程重启时，执行中的 Kubernetes 写操作标记 `unknown`，须先核对集群状态；不会盲目重放。
 - 生产 namespace 始终要求平台管理员审批；审批人与发起人分离。非生产 namespace 可要求普通审批或额外启用管理员审批。回滚、重启、扩缩容请求已有状态与权限入口，仍需扩展测试集群覆盖和操作体验。
 - Namespace 可配置冻结截止时间及部署窗口；窗口使用 IANA 时区和 ISO 星期编号（周一 1 至周日 7），跨午夜窗口归属开始日。API 入队和 worker 执行前都会检查当前策略。
-- v1.2 服务发布只能引用所属应用的成功构建，并固定到 digest。旧 `/api/deployments` 手工发布接口返回 HTTP 410；旧自动部署事件不执行，以免绕过 namespace 审批。
+- 服务发布只能引用所属应用的成功构建。Deployment 中写入构建的版本号（`仓库:版本号`），不写 digest；构建时的 digest 记在发布单上，worker 写入集群前核对该版本号仍指向它（版本号在平台之外被覆盖或删除时停止发布）。旧 `/api/deployments` 手工发布接口返回 HTTP 410；旧自动部署事件不执行，以免绕过 namespace 审批。
 - Webhook / Kubernetes 旧目标保留为迁移查看和管理员连接测试用途。发布请创建服务并使用 namespace 授权与审批队列。
 - 当前不提供灰度发布、自动回滚、CCE 证书轮换、配置变更的批量发布或生产 SLA 保证。真实 CCE/SWR/Kubernetes 联调、灾备演练和审批业务验收尚未完成。
 

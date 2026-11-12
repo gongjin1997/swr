@@ -100,22 +100,38 @@ def resolve_revision(store: Store, service: Dict[str, Any], revision_id: Optiona
     return revision
 
 
+def _tagged(image: str) -> bool:
+    """镜像引用是否带版本号（仓库:标签），且没有 @digest。"""
+    return "@" not in image and ":" in image.rsplit("/", 1)[-1]
+
+
 def artifact_from_job(job: Dict[str, Any]) -> Dict[str, Any]:
-    """成功构建 → 按 digest 固定的镜像。"""
+    """成功构建 → 按版本号引用的镜像（仓库:版本号），下发到 Deployment 的就是这个地址。
+
+    构建时的 digest 记在发布单上：worker 写入集群前核对该版本号仍指向它（见 deploy/worker.py），
+    平台不覆盖已有版本，这里防止版本号在平台之外被覆盖。"""
     digest = job.get("digest")
     if not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest):
         raise Unprocessable("成功构建记录缺少有效的 SHA-256 摘要")
-    image_ref = parse_image_ref(job.get("image") or "")
-    if not image_ref:
-        raise Unprocessable("成功构建记录的镜像引用无效")
-    return {"job_id": job["id"], "image": image_ref.host + "/" + image_ref.repo + "@" + digest, "digest": digest,
-            "app_name": job.get("app_name") or ""}
+    image = (job.get("image") or "").strip()
+    if not parse_image_ref(image) or not _tagged(image):
+        raise Unprocessable("成功构建记录的镜像引用无效（缺少版本号）")
+    return {"job_id": job["id"], "image": image, "digest": digest, "app_name": job.get("app_name") or ""}
 
 
-def artifact_from_deployment(previous: Dict[str, Any]) -> Dict[str, Any]:
-    """回滚、重新发布沿用历史发布的镜像（发布记录里已按 digest 固定）。"""
+def artifact_from_deployment(store: Store, previous: Dict[str, Any]) -> Dict[str, Any]:
+    """回滚、重新发布沿用历史发布的镜像。
+
+    来自构建的发布按构建的版本号引用（v2.0.0-dev.1 之前的发布记录是 digest 引用，这里同样换成版本号，
+    digest 不变）；构建记录不在了，或接管发布（没有构建），沿用发布记录里的镜像地址。"""
     if not DIGEST_RE.fullmatch(previous.get("digest") or "") or not parse_image_ref(previous.get("image") or ""):
         raise Conflict("历史发布的镜像记录无效")
+    job = store.get_job(previous["job_id"]) if previous.get("job_id") else None
+    if job and job.get("digest") == previous["digest"]:
+        try:
+            return artifact_from_job(job)
+        except Unprocessable:
+            pass
     return {"job_id": previous.get("job_id"), "image": previous["image"], "digest": previous["digest"],
             "app_name": previous.get("app_name") or ""}
 
@@ -189,7 +205,9 @@ def _bool(data: Dict[str, Any], key: str) -> bool:
 def submit(store: Store, me: Principal, service_id: int, kind: str, data: Any, idempotency_key: str,
            live_image: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """发布（deploy）、回滚（rollback）、以最近一次成功发布重新发布（restart），
-    或接管发布（adopt：导入的托管服务第一次下发，镜像沿用集群中正在运行的 digest）。
+    或接管发布（adopt：导入的托管服务第一次下发，镜像沿用集群中正在运行的镜像地址）。
+
+    发布、回滚、重新发布按构建的版本号下发（仓库:版本号），不用 digest；digest 记在发布单上供 worker 核对。
 
     托管服务的配置版本：
     - deploy 勾选 use_latest_config：当前修订 + 各层配置的最新版本；不勾选：沿用上次成功发布的修订与配置快照，只换镜像；
@@ -249,7 +267,7 @@ def submit(store: Store, me: Principal, service_id: int, kind: str, data: Any, i
             previous = rows[0] if rows else None
             if not previous:
                 raise Conflict("服务还没有成功的发布记录")
-        artifact = artifact_from_deployment(previous)
+        artifact = artifact_from_deployment(store, previous)
         revision = store.get_revision(service_id, previous["revision_id"])
         if not revision:
             raise Conflict("历史发布引用的配置修订已不可用")

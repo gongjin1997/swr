@@ -38,6 +38,8 @@ class FakeKube:
         self.fail: Dict[Tuple[str, str, str], Tuple[int, str]] = {}
         # 每个请求处理前调用（测试用来在发布进行中改变平台状态）
         self.hook: Optional[Callable[[httpx.Request], None]] = None
+        # 版本号镜像 → 拉取时解析到的 digest（模拟 kubelet 按标签拉取）；没有登记的标签解析为 sha256:eee…
+        self.image_digests: Dict[str, str] = {}
         self.ready = True
         self.version = 1
         self.owners: Dict[Tuple[str, str, str], Dict[str, set]] = {}
@@ -58,6 +60,14 @@ class FakeKube:
             meta.setdefault("generation", 1)
             self._rollout(namespace, obj)
         return obj
+
+    def _image_id(self, image: str) -> str:
+        """Pod 状态中的 imageID：按 digest 引用时就是该 digest；按版本号引用时为拉取时解析到的 digest。"""
+        if "@sha256:" in image:
+            return image
+        head, _, last = image.rpartition("/")
+        name = (head + "/" if head else "") + last.split(":", 1)[0]
+        return name + "@" + self.image_digests.get(image, "sha256:" + "e" * 64)
 
     def get(self, plural: str, name: str, namespace: Optional[str] = None) -> Optional[Dict[str, Any]]:
         return self.objects.get((plural, namespace or sorted(self.namespaces)[0], name))
@@ -103,9 +113,7 @@ class FakeKube:
                            "qosClass": "Burstable", "conditions": [{"type": "Ready", "status": "True"}],
                            "containerStatuses": [{"name": c["name"], "image": c.get("image", ""), "ready": True,
                                                   "started": True, "restartCount": 0,
-                                                  "imageID": c.get("image", "").split("@")[0] + "@sha256:" + ("e" * 64
-                                                             if "@sha256:" not in c.get("image", "")
-                                                             else c["image"].rsplit("@sha256:", 1)[1]),
+                                                  "imageID": self._image_id(c.get("image", "")),
                                                   "state": {"running": {"startedAt": NOW}}} for c in containers]}}
         generation = meta.get("generation", 1)
         deployment["status"] = {"observedGeneration": generation, "replicas": replicas,

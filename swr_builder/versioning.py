@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Iterable, List, Optional, Pattern
+from typing import Iterable, List, Optional, Pattern, Tuple
 
 TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 _NUM_RE = re.compile(r"\d+")
@@ -90,18 +90,63 @@ def _increment_span(tag: str):
     return chosen[-1] if chosen else None
 
 
-def increment_tag(tag: str) -> str:
+def _dotted_spans(tag: str, start: int, end: int) -> List[Tuple[int, int]]:
+    """包含末位数字 tag[start:end] 的点分数字的各段位置，例如 v1.0.9-arm64 中的 1、0、9。
+    向左只合并用“.”连接、前面不是字母的数字（开头的 v 除外），build20.1 中的 20 不算版本号的一位。"""
+    spans = [(start, end)]
+    pos = start
+    while pos >= 2 and tag[pos - 1] == "." and tag[pos - 2].isdigit():
+        seg_end = pos - 1
+        seg_start = seg_end
+        while seg_start > 0 and tag[seg_start - 1].isdigit():
+            seg_start -= 1
+        before = tag[seg_start - 1] if seg_start > 0 else ""
+        if before.isalpha() and not (seg_start == 1 and before in "vV"):
+            break
+        spans.insert(0, (seg_start, seg_end))
+        pos = seg_start
+    return spans
+
+
+def _width(digits: str) -> int:
+    """补零的位（如 07）保持原来的位数，其余按实际数字输出。"""
+    return len(digits) if len(digits) > 1 and digits.startswith("0") else 1
+
+
+def increment_tag(tag: str, carry: bool = True) -> str:
+    """版本号加 1。
+
+    carry=True（逢十进一，默认）：除第一位外，每一位只用 0–9，加 1 后满 10 向前一位进 1：
+    1.0.8 → 1.0.9 → 1.1.0，1.9.9 → 2.0.0，9.9.9 → 10.0.0，1.0.9-arm64 → 1.1.0-arm64，v12 → v13。
+    已经大于 9 的位（按旧规则产生的版本号）在下一次进位：1.0.15 → 1.1.0。补零的位保持位数：1.0.08 → 1.0.09 → 1.1.00。
+
+    carry=False（末位递增）：只把最后一位加 1：1.0.9 → 1.0.10。需要两位数的小版本号时用这种方式。"""
     span = _increment_span(tag)
     if span is None:
         return f"{tag}.1"
     start, end = span
-    digits = tag[start:end]
-    return tag[:start] + str(int(digits) + 1).zfill(len(digits)) + tag[end:]
+    if not carry:
+        digits = tag[start:end]
+        return tag[:start] + str(int(digits) + 1).zfill(len(digits)) + tag[end:]
+    spans = _dotted_spans(tag, start, end)
+    values = [tag[s:e] for s, e in spans]
+    numbers = [int(v) for v in values]
+    index = len(numbers) - 1
+    numbers[index] += 1
+    while index > 0 and numbers[index] > 9:
+        numbers[index] = 0
+        numbers[index - 1] += 1
+        index -= 1
+    parts = [tag[:spans[0][0]]]
+    for i, (_, e) in enumerate(spans):
+        parts.append(str(numbers[i]).zfill(_width(values[i])))
+        parts.append(tag[e:spans[i + 1][0]] if i + 1 < len(spans) else tag[e:])
+    return "".join(parts)
 
 
 def next_tag(existing: Iterable[str], latest: Optional[str], initial_tag: str = "1.0.0",
-             tag_template: str = "", now: Optional[datetime] = None) -> str:
-    """计算新版本号，并保证不与仓库已有标签冲突。"""
+             tag_template: str = "", now: Optional[datetime] = None, carry: bool = True) -> str:
+    """计算新版本号，并保证不与仓库已有标签冲突。carry 见 increment_tag。"""
     existing_set = set(existing)
     if tag_template:
         today = (now or datetime.now()).strftime("%Y%m%d")
@@ -117,11 +162,11 @@ def next_tag(existing: Iterable[str], latest: Optional[str], initial_tag: str = 
             seq += 1
             candidate = render_tag_template(tag_template, today, seq)
         return candidate
-    candidate = increment_tag(latest) if latest else (initial_tag or "1.0.0")
+    candidate = increment_tag(latest, carry) if latest else (initial_tag or "1.0.0")
     for _ in range(10000):
         if candidate not in existing_set:
             break
-        candidate = increment_tag(candidate)
+        candidate = increment_tag(candidate, carry)
     return candidate
 
 
