@@ -8,6 +8,9 @@
 - 层数保护：上一版本层数达到上限（默认 100，Docker 硬上限 127）时自动改为全量构建
 - 架构保护：构建结果与目标架构（如 arm64）不一致时停止推送
 - 不覆盖已有版本、同一仓库构建串行、实时日志、取消任务、平台账号登录
+- **托管服务**：按模板生成并下发 Deployment、Service、Ingress、HPA 与配置对象；配置按平台 → 项目 → 环境 → 服务分层维护，
+  证书集中管理；发布前服务端校验，配置版本随发布单固定，回滚恢复当时的配置
+- **导入已有服务**：分析命名空间的 kubectl 导出，把各服务共有的参数上提到环境层，确认后由平台接管
 
 ## 1. 环境要求
 
@@ -15,6 +18,7 @@
 | --- | --- |
 | 构建机 | Linux，已安装 Docker（建议 20.10+），能访问 SWR 地址 |
 | Python | 3.11+（使用容器部署时不需要） |
+| 数据库 | PostgreSQL 14+（推荐用 Docker 安装独立实例），或以 `DBCOMPATIBILITY 'PG'` 创建的 GaussDB / openGauss 数据库 |
 | 架构 | 镜像是 arm64：构建机最好是 arm64；x86 构建机需在应用中设置“构建平台 linux/arm64” |
 
 ## 2. 快速开始（源码方式）
@@ -27,12 +31,22 @@ pip install -r requirements.txt
 # 构建前端（Vue 3，需要 Node 18.18+；产物输出到 swr_builder/webui/）
 (cd web && npm install && npm run build)   # 有 package-lock.json 时用 npm ci
 
-cp config.example.yaml config.yaml        # 修改仓库地址、组织、用户名、平台登录账号
+# 数据库：用 Docker 启动一个独立的 PostgreSQL（也可以使用已有的 PostgreSQL / GaussDB）
+docker run -d --name swr-postgres --restart unless-stopped -p 127.0.0.1:5432:5432 \
+  -e POSTGRES_DB=swr -e POSTGRES_USER=swr -e POSTGRES_PASSWORD='<数据库口令>' \
+  -v /opt/swr-builder/pgdata:/var/lib/postgresql/data postgres:16
+
+cp config.example.yaml config.yaml        # 修改仓库地址、组织、用户名、平台登录账号、database.url
+export BUILDER_DATABASE_PASSWORD='<数据库口令>'
 export SWR_USERNAME='ndc302-region-1_his_beta@<AK>'
 export SWR_PASSWORD='<长期有效登录密钥>'    # 不要写进代码仓库
 
-python -m swr_builder -c config.yaml
+python -m swr_builder -c config.yaml       # 启动时自动执行数据库迁移
 ```
+
+数据库维护命令：`python -m swr_builder db check`（连接、数据库类型与迁移版本）、`db upgrade`（只执行迁移）、
+`db import-sqlite --from data/builder.db`（导入 v1.x 的 SQLite 数据，见第 14 节）。GaussDB 的连接与认证方式见
+[v2 设计](docs/v2-服务创建与环境配置设计.md) §8。
 
 浏览器打开 `http://<构建机IP>:8080`，进入独立登录页。未构建前端时页面会提示构建命令，API 不受影响。
 
@@ -44,7 +58,7 @@ python -m swr_builder -c config.yaml
 - 生产务必使用 HTTPS，配置 `server.secure_cookie: true`，限制访问来源；平台没有“免登录”运行模式。
 - 管理员在“平台 › 访问控制”创建账号，并授予项目或命名空间角色（**新账号默认没有任何权限**）；“我的账号”支持资料、密码、我的权限、登录设备和 API 令牌。
 
-> 构建 worker 与旧版部署目标仍限定单进程运行。v1.2 服务发布队列使用 SQLite 持久化与租约；跨主机高可用尚未实现。
+> 构建 worker 与旧版部署目标仍限定单进程运行。服务发布队列保存在数据库中，使用租约与 fencing token；跨主机高可用尚未实现。
 
 ### 前端工作台
 
@@ -54,11 +68,13 @@ python -m swr_builder -c config.yaml
 | --- | --- | --- |
 | 概览 | 工作台 | 可见范围内的项目、应用、服务、构建汇总，待我审批的发布，最近构建 |
 | 交付 | 构建镜像 / 构建记录 / 发布中心 | 上传制品构建并查看实时日志；按项目、应用、状态筛选构建；选择成功构建发布到命名空间并审批 |
-| 资源 | 项目 / 应用 / 服务 | 项目详情是项目工作台：概览（SWR 授权、命名空间）、应用、服务、构建记录、发布记录、成员 |
-| 平台 | 集群与命名空间 / 访问控制 / 操作审计 / 系统设置 | 纳管集群与命名空间并设置发布策略；账号、角色、授权；审计记录；仓库、构建、安全等设置 |
+| 资源 | 项目 / 应用 / 服务 | 项目工作台；服务列表显示托管/纳管、运行状态与未发布的配置；新建服务向导；服务详情（运行状态、配置、对象清单、发布记录、修订历史） |
+| 环境 | 环境 / 配置中心 / 证书 | 环境档案（命名、入口、调度、日志目录、默认资源）、环境层配置、环境对比、导入已有服务；平台层与项目层配置；证书库 |
+| 平台 | 集群与命名空间 / 负载均衡入口 / 访问控制 / 操作审计 / 系统设置 | 纳管集群与命名空间并设置发布策略；ELB 入口；账号、角色、授权；审计记录；仓库、构建、安全等设置 |
 
 - Kubernetes 集群支持 kubeconfig `kind: Config` 的静态 Token/内嵌证书，不依赖 HCS 配置。
 - 侧栏可折叠；手机使用抽屉导航；外观支持浅色、深色与跟随系统，偏好保存在当前浏览器。
+- 列表页面都支持分页；构建记录、发布记录、审计按页从服务端读取。
 
 登录后的默认入口为 `/dashboard`。v1.3.0-dev.1 及之前的页面地址（如 `/deploy`、`/resources/services/3`、`/admin/users`、`/settings`）会自动跳转到新位置。前端生产产物仍输出到 `swr_builder/webui/`，由 FastAPI 托管，无需更换部署方式。
 
@@ -83,17 +99,20 @@ journalctl -u swr-builder -f
 ### 3.2 容器
 
 ```bash
-docker build -t swr-builder:1.3.0-dev.1 .     # 多阶段构建：先用 Node 构建前端，运行时镜像不含 Node
+docker build -t swr-builder:2.0.0-dev.1 .     # 多阶段构建：先用 Node 构建前端，运行时镜像不含 Node
 # 内网环境可指定镜像源：--build-arg NPM_REGISTRY=... --build-arg PIP_INDEX_URL=...
 docker run -d --name swr-builder --restart unless-stopped -p 8080:8080 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /opt/swr-builder/config.yaml:/app/config.yaml:ro \
   -v /opt/swr-builder/data:/app/data \
+  -e BUILDER_DATABASE_URL='postgresql://swr@<数据库地址>:5432/swr' -e BUILDER_DATABASE_PASSWORD='<数据库口令>' \
   -e SWR_USERNAME='ndc302-region-1_his_beta@<AK>' -e SWR_PASSWORD='<登录密钥>' \
-  swr-builder:1.3.0-dev.1
+  swr-builder:2.0.0-dev.1
 ```
 
-也可以使用 `deploy/docker-compose.yml`。容器内只有 docker CLI，实际构建由宿主机 Docker 完成。
+也可以使用 `deploy/docker-compose.yml`（平台 + 独立的 PostgreSQL 16 容器，说明见文件头部）。容器内只有 docker CLI，
+实际构建由宿主机 Docker 完成。容器内的 `127.0.0.1` 指容器自身，`BUILDER_DATABASE_URL` 要写容器能访问到的数据库地址；
+平台与数据库都用容器运行时，推荐直接使用 docker-compose。
 
 ### 3.3 Nginx 反向代理（可选）
 
@@ -168,10 +187,11 @@ location / {
 | `SWR_AK` / `SWR_SK` / `SWR_PROJECT` | AK/SK 方式 |
 | `BUILDER_ADMIN_PASSWORD` / `BUILDER_SECRET_KEY` | 首次管理员密码 / 机密配置加密主密钥 |
 | `BUILDER_CONFIG` / `BUILDER_DATA_DIR` / `BUILDER_DOCKER_BIN` / `BUILDER_PORT` | 配置文件 / 数据目录 / docker 路径 / 端口 |
+| `BUILDER_DATABASE_URL` / `BUILDER_DATABASE_PASSWORD` / `BUILDER_DATABASE_DRIVER` | 数据库连接串 / 口令（不要写进连接串）/ 驱动（`psycopg` 或 `gaussdb`） |
 
-数据目录（默认 `./data`）：`builder.db`（SQLite）、`jobs/<任务ID>/build.log`、`docker-config/`（平台独立的 docker 登录信息）、`deployments/<ID>/deploy.log`、`secret.key`（敏感配置加密主密钥）。
+数据保存在 PostgreSQL / GaussDB 中。数据目录（默认 `./data`）：`jobs/<任务ID>/build.log`、`docker-config/`（平台独立的 docker 登录信息）、`deployments/<ID>/deploy.log`、`secret.key`（敏感配置加密主密钥）。
 
-**必须一起备份 builder.db 与 secret.key**；使用 `BUILDER_SECRET_KEY` 时需单独安全托管该环境值。密钥丢失将无法解密页面保存的仓库/Kubernetes 凭证；本版没有在线密钥轮换功能。构建机或主密钥被攻破后，加密不能提供额外隔离。备份和数据目录应限制权限；`docker-config/` 同样含敏感登录信息，不要公开。
+**必须一起备份数据库（`pg_dump -Fc`）与 secret.key**；配置集中的敏感值、证书文件与集群凭据都用 secret.key 加密，缺一不能恢复。使用 `BUILDER_SECRET_KEY` 时需单独安全托管该环境值。密钥丢失将无法解密页面保存的仓库/Kubernetes 凭证；本版没有在线密钥轮换功能。构建机或主密钥被攻破后，加密不能提供额外隔离。备份和数据目录应限制权限；`docker-config/` 同样含敏感登录信息，不要公开。
 
 ## 8. 常见问题
 
@@ -202,7 +222,12 @@ location / {
 | POST | `/api/jobs/{id}/cancel` | 取消构建 |
 | GET | `/api/overview` | 工作台：可见范围内的汇总与待我审批的发布 |
 | GET/POST | `/api/projects`；PUT/DELETE `/api/projects/{id}` | 项目；`PUT/DELETE /api/projects/{id}/namespaces/{nid}` 分配命名空间 |
-| GET/POST | `/api/services`；`/api/services/{id}/deployments`、`/rollback`、`/restart` | 服务与发布（需 `Idempotency-Key` 请求头） |
+| GET/POST | `/api/services`；`/api/services/{id}/deployments`、`/rollback`、`/restart`、`/adopt` | 服务与发布（需 `Idempotency-Key` 请求头）；`adopt` 为导入服务的接管发布 |
+| GET | `/api/service-templates`；POST `/api/services/preview`、`/api/services/{id}/render` | 服务模板；托管服务的清单预览与服务端校验（`dry_run`） |
+| GET | `/api/services/{id}/runtime`、`/manifest`、`/effective-config`；POST `/api/services/status` | 运行状态（Pod、事件、访问地址）、发布快照、生效配置；列表的运行状态 |
+| GET/PUT | `/api/environments`、`/api/environments/{id}`、`/profile`、`/effective-config`、`/compare` | 环境、环境档案、生效配置与环境对比 |
+| POST | `/api/environments/{id}/import/analyze`、`/import/apply` | 导入已有服务：分析 kubectl 导出或集群对象 / 确认写入平台 |
+| GET/POST | `/api/config-sets`、`/api/certificates`、`/api/ingress-profiles` | 分层配置集（版本、差异、查看明文）、证书库、负载均衡入口 |
 | GET | `/api/deployments`、`/api/deployments/{id}`；POST `/api/deployments/{id}/approve`、`/reject` | 发布记录与审批 |
 | GET/POST | `/api/users`；GET/PUT/DELETE `/api/users/{id}` | 账号（创建时可带 `grants` 初始授权） |
 | GET/POST | `/api/bindings`；DELETE `/api/bindings/{id}`；GET `/api/bindings/options` | 授权与可授予的范围、角色 |
@@ -239,18 +264,20 @@ curl -H "Authorization: Bearer $BUILDER_API_TOKEN" -F app_id=1 -F mode=increment
 
 ## 11. 部署模块
 
-- 发布流程：在“集群与命名空间”纳管集群和命名空间并分配给项目 → 在项目中创建服务（关联应用与 Deployment/容器）→ 在“发布中心”或服务详情选择成功构建发布 → 按命名空间策略审批 → worker 更新镜像并等待滚动完成。
+- 发布流程：在“集群与命名空间”纳管集群和命名空间并分配给项目 → 在环境中维护环境档案与环境层配置 → 新建服务（托管：按模板生成全部对象；纳管：关联已有 Deployment）→ 在“发布中心”或服务详情选择成功构建发布 → 按命名空间策略审批 → worker 下发并等待滚动完成。
+- 托管服务：提交发布时记录所用配置的版本快照，审批人批准的就是将要下发的内容；worker 先对全部对象做服务端 dry-run，再用 Server-Side Apply（`fieldManager=swr-builder`）下发，只管理平台声明的字段。配置变化通过 Pod 模板注解 `swr-builder/config-hash` 触发滚动。回滚与重新发布按目标发布的快照原样下发。
+- 已有服务可以在环境中“导入已有服务”：上传 `kubectl get deploy,svc,ing,cm,secret,hpa,pod -o yaml` 的导出或直接读取集群，平台推断环境档案和环境层配置并列出不一致，确认后写入平台；之后用“接管发布”（沿用线上镜像 digest）由平台接管。
 - 旧部署目标（**Webhook** 或 **CCE / Kubernetes**，v1.2 起不再执行发布）只保留 `/api/deploy/targets` 接口供迁移核对与连接测试，控制台不再提供入口。SSH / Compose 仅为注册表占位，不可执行。
 - Webhook 固定 POST JSON：`event`、`deployment_id`、`image`、`app`、`job_id`、`tag`、`digest`、`operator`。可配置请求头、TLS 校验及 HMAC-SHA256 签名；`X-SWR-Signature: sha256=<十六进制签名>` 对原始 UTF-8 请求体计算。接收方应按 `deployment_id` 去重，建立自身的防重放/鉴权机制。
 - Webhook 测试会发送 `event=ping`，请确保接收端不会误触发部署。HTTP 2xx 仅表示网关接受请求，不代表应用已就绪；异步回调确认尚未实现。
 - 集群凭据以密文保存，支持标准 kubeconfig Config 中的静态 Token 或内嵌客户端证书/私钥；也可在“集群与命名空间”中直接上传 PEM 客户端证书、私钥和可选 CA。可纳管已有 namespace、执行 SSAR 权限检查和生成供集群管理员审核的 RBAC 模板。kubeconfig `exec`、`auth-provider` 和外部文件凭据不受支持且不会执行/读取。生产发布只有平台管理员可批准；非生产环境由全局发布审批员角色批准。
-- 服务配置支持不可变 revision、CAS 更新和只写密钥。worker 当前可对 `image_only` 服务执行固定 digest 的 Deployment 镜像更新并等待滚动就绪；`managed` 模式的完整清单 apply 尚未启用。
-- 服务发布写入 SQLite 队列，使用幂等键、租约和 fencing token。工作进程重启时，执行中的 Kubernetes 写操作标记 `unknown`，须先核对集群状态；不会盲目重放。
+- 服务配置支持不可变 revision 与 CAS 更新。纳管服务（`image_only`）只更新固定 digest 的镜像；托管服务（`managed`）下发完整清单。
+- 服务发布写入数据库队列，使用幂等键、租约和 fencing token。工作进程重启时，执行中的 Kubernetes 写操作标记 `unknown`，须先核对集群状态；不会盲目重放。
 - 生产 namespace 始终要求平台管理员审批；审批人与发起人分离。非生产 namespace 可要求普通审批或额外启用管理员审批。回滚、重启、扩缩容请求已有状态与权限入口，仍需扩展测试集群覆盖和操作体验。
 - Namespace 可配置冻结截止时间及部署窗口；窗口使用 IANA 时区和 ISO 星期编号（周一 1 至周日 7），跨午夜窗口归属开始日。API 入队和 worker 执行前都会检查当前策略。
 - v1.2 服务发布只能引用所属应用的成功构建，并固定到 digest。旧 `/api/deployments` 手工发布接口返回 HTTP 410；旧自动部署事件不执行，以免绕过 namespace 审批。
 - Webhook / Kubernetes 旧目标保留为迁移查看和管理员连接测试用途。发布请创建服务并使用 namespace 授权与审批队列。
-- 当前不提供灰度发布、自动回滚、CCE 证书轮换、managed 资源 SSA 或生产 SLA 保证。真实 CCE/SWR/Kubernetes 联调、灾备演练和审批业务验收尚未完成。
+- 当前不提供灰度发布、自动回滚、CCE 证书轮换、配置变更的批量发布或生产 SLA 保证。真实 CCE/SWR/Kubernetes 联调、灾备演练和审批业务验收尚未完成。
 
 旧部署适配器（`deploy/base.py` 的 `Deployer`，在 `deploy/__init__.py` 注册）只服务于旧部署目标的迁移核对与连接测试，服务发布不经过适配器。通过 `events.py` 订阅构建/部署事件扩展通知、扫描等模块。
 
@@ -262,21 +289,25 @@ Kubernetes 部署直接使用“集群与命名空间”中导入的 kubeconfig�
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q        # 使用模拟 SWR + 假 docker，不需要真实仓库
+# 测试需要一个有 CREATEDB 权限的 PostgreSQL 账号，每个测试新建并删除自己的数据库
+export SWR_TEST_DATABASE_URL=postgresql://postgres:<口令>@127.0.0.1:5432/postgres
+pytest -q        # 使用模拟 SWR、假 docker 与模拟的 Kubernetes API，不需要真实仓库和集群
 (cd web && npm run typecheck && npm run build)   # 前端类型检查与构建
 ```
+
+CI 在 PostgreSQL 16 与 openGauss 5.0（PG 兼容模式，代表 GaussDB）上各运行一遍后端测试。
 
 详细设计见 `docs/系统设计.md`；v1.3 的前端与后端分层见 `docs/重构设计-Vue3与业务逻辑.md`。
 
 
 ## 14. 升级与上线检查
 
-1. 停止 v1.0 服务，备份整个 data 目录与配置文件。
-2. 使用 v1.2 代码安装依赖；保留原 `data/builder.db`，启动时通过 checksum 记录执行 SQLite 迁移，将原数据回填到默认项目并迁移角色绑定。升级前必须备份并验证数据库、构建上下文和 `secret.key`。
+1. 停止旧服务，备份整个 data 目录（含 `builder.db` 与 `secret.key`）与配置文件。
+2. 从 v1.x 升级到 v2：准备一个空的 PostgreSQL / GaussDB 数据库，执行 `python -m swr_builder db import-sqlite --from data/builder.db -c config.yaml`。命令在副本上把 SQLite 升级到 v1.3 结构后整体导入，保留原 ID 并核对每张表的行数，不修改原文件；必须使用同一个 `secret.key`。
 3. 验证登录、强制改密和权限，再分配开发者/只读账号；删除旧配置里不再需要的明文 `server.users`。已有账号不会被初始化配置反复覆盖。
 4. 在测试仓库验证真实 Docker pull/build/push，确认构建机架构和磁盘空间。
 5. 私有云认证、网络、CA、Kubernetes 权限与发布就绪状态需要现场联调；模拟测试不代替这些验收。
 6. 配置 HTTPS、强 Cookie、网络白名单及备份，保护 Docker socket。可访问 Docker 的平台进程等价于构建机 root 权限，应运行在专用构建机上。
 7. 旧构建与部署目标仍为进程内调度，重启后中断并标失败；服务发布 worker 使用持久化队列，处理中断标记为 `unknown`，人工核对 Kubernetes 实际状态后再操作。
 
-真实云端验收、managed apply、用户组/SSO、CCE 证书轮换、审计外送、监控告警、备份恢复演练及业务签署仍是生产上线前的工作。
+真实云端验收（含托管服务在 CCE 上的接管与下发）、用户组/SSO、CCE 证书轮换、审计外送、监控告警、备份恢复演练及业务签署仍是生产上线前的工作。

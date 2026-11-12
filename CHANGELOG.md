@@ -1,3 +1,67 @@
+# v2.0.0-dev.1
+
+在 v1.3 的基础上补上“新增服务”：数据库换成 PostgreSQL / GaussDB，环境配置分层维护，平台按模板生成并下发服务的全部对象，已有服务可以导入后由平台接管。设计与取舍见 [docs/v2-服务创建与环境配置设计.md](docs/v2-服务创建与环境配置设计.md)。
+
+**升级须知（不兼容）**
+- 运行数据库改为 PostgreSQL 14+，或以 `DBCOMPATIBILITY 'PG'` 创建的 GaussDB / openGauss。需要配置 `database.url`（或 `BUILDER_DATABASE_URL`）与 `BUILDER_DATABASE_PASSWORD`。
+- v1.x 的 SQLite 数据用 `python -m swr_builder db import-sqlite --from data/builder.db` 导入空库，必须使用原来的 `secret.key`。
+- 离线安装包还没有改为 PostgreSQL，v2 暂时只能用源码或容器方式部署。
+- 命名空间的 RBAC 模板增加了 Secret、ReplicaSet、事件的规则，策略开启 Ingress / HPA 时还有对应规则。已纳管的命名空间要按新模板重新授权后才能使用托管服务。
+- `GET /api/services/{id}/runtime` 的响应改为新结构（Pod、ReplicaSet、HPA、事件、访问地址）。
+
+**数据层**
+- `store/db.py`：连接池、事务与保存点；SQL 只用 PostgreSQL 与 GaussDB / openGauss 共有的语法。去掉进程锁：修订号在服务行锁内生成；发布单用条件更新领取，并由唯一索引保证同一服务只有一个执行中的发布。
+- 版本化迁移：1 基线（等价于 v1.3 的结构）、2 环境与配置、3 发布快照。新增命令 `db check`、`db upgrade`、`db import-sqlite`。
+- GaussDB：启动时检查是否为 PG 兼容模式；驱动可选 psycopg 或华为的 gaussdb。
+
+**环境与配置**
+- 环境档案：对象命名、主机名、节点池调度、拉取密钥、日志目录、默认资源。负载均衡入口：支持 CCE 路径匹配方式。
+- 平台 → 项目 → 环境 → 服务四层配置集：
+  - 环境变量与敏感变量逐层覆盖，上层可以锁定；配置文件按名称替换。
+  - 每次修改生成不可变版本，可以查看差异；敏感值逐项加密，有权限的人可以查看明文，每次查看记审计。
+  - 生效配置注明每个键的来源层；任意两个环境可以对比。
+- 证书库：解析有效期与指纹，按版本轮换；被引用的证书不能删除。
+
+**托管服务**
+- 内置模板 web 生成 ConfigMap、Secret、properties、Service、Deployment、Ingress 与 HPA，对象结构与现有 CCE 服务一致。
+- 提交发布时记录配置版本快照，与发布单在同一事务中写入；审批、下发、回滚和重新发布都按快照渲染。发布时可以只换镜像，也可以发布最新配置。
+- worker 先对全部对象做服务端 dry-run，任何对象失败都不写入；再用 Server-Side Apply（`fieldManager=swr-builder`）下发。下发规则：
+  - 共享配置只升级不降级；
+  - 开启 HPA 时先移交副本数；
+  - 关闭的 Ingress、HPA 等对象在核对平台标签后删除；
+  - 配置变化通过 Pod 模板注解触发滚动。
+- 集群中已有、不由平台管理的同名对象：普通发布拒绝且不写入集群，只有“接管发布”会接管。属于平台中其他服务的对象不会被覆盖。
+- 预览与服务端校验（含新建前的预览）：显示平台声明的字段与线上值的差异。
+
+**导入已有服务**
+- 上传 `kubectl get … -o yaml` 的导出，或直接读取集群。平台推断环境档案和负载均衡入口，把所有服务值相同的键上提到环境层，公共配置文件和证书目录作为环境层配置，并列出不一致的地方和接管后的差异。
+- 确认后写入平台（应用、服务、各层配置、证书），再用接管发布交给平台管理；接管发布的镜像沿用线上 digest。
+
+**页面**
+- 服务详情改为标签页：
+  - 运行状态：Pod 状态（按 kubectl 的规则）、重启次数与最近重启、运行时长、节点与 IP、容器状态；Deployment 条件与滚动进度、ReplicaSet 历史、HPA、Service / Ingress 与访问地址、相关事件；
+  - 配置、对象清单、发布记录、修订历史。
+- 新页面：新建服务向导，环境中的“导入已有服务”，环境、配置中心、证书、负载均衡入口。
+- 服务列表增加服务方式、运行状态、就绪副本与未发布配置几列；运行状态只读取当前页。
+- 所有列表都有分页；构建记录、发布记录、审计按页从服务端读取。
+
+**接口与权限**
+- 新接口：
+  - 环境、配置与证书：`/api/environments/*`、`/api/config-sets/*`、`/api/certificates/*`、`/api/ingress-profiles/*`；
+  - 模板与校验：`GET /api/service-templates`、`POST /api/services/preview`、`POST /api/services/{id}/render`；
+  - 服务状态与快照：`POST /api/services/status`、`GET /api/services/{id}/manifest`、`GET /api/services/{id}/effective-config`；
+  - 接管与导入：`POST /api/services/{id}/adopt`、`POST /api/environments/{id}/import/analyze`、`POST /api/environments/{id}/import/apply`。
+- `POST /api/services` 接受 `mode: managed` 和服务层 `config`。
+- 新权限：`service.create`、`environment.config`、`config.manage`、`secret.view`、`certificate.view`、`certificate.manage`。新增内置角色“配置管理员”；命名空间管理员与项目管理员获得本范围的配置权限。
+
+**工程**
+- CI 在 PostgreSQL 16 与 openGauss 5.0 上各运行一遍后端测试。`tests/fake_kube.py` 模拟 Kubernetes API，支持 Server-Side Apply。
+
+**尚未实现**
+- 配置变更后对受影响服务的批量发布（目前需要在每个服务上“沿用当前镜像发布最新配置”）。
+- 服务矩阵、线上字段的自动漂移检查、HCS ELB 证书到期查询。
+- 离线包的 PostgreSQL 支持。
+
 # v1.3.0-dev.2
 
 整体重构：账号权限只有一套模型，业务规则集中在服务层，界面以项目为中心组织。权限模型详见 [docs/账号与权限设计.md](docs/账号与权限设计.md)。
