@@ -26,6 +26,7 @@ import json
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -330,6 +331,8 @@ class Deployment:
         self.remove_app()
         host_network = self.state["network"] == "host"
         port = int(self.state["port"]) if host_network else APP_PORT
+        # host 网络下平台直接监听宿主机地址：只监听某个地址时，健康检查也要访问该地址
+        probe = self.state["bind"] if host_network and self.state["bind"] not in ("0.0.0.0", "::", "") else "127.0.0.1"
         options = ["--platform", "linux/arm64", "--restart", "unless-stopped", "--network", self.state["network"],
                    "--label", f"swr.deployment-root={self.root}", "--label", "swr.role=app",
                    "--label", f"swr.release={self.state['current']}"]
@@ -343,7 +346,7 @@ class Deployment:
             "--env-file", str(self.root / "config/swr-builder.env"),
             "--env", f"BUILDER_DATA_DIR={APP_DATA}", "--env", f"BUILDER_CONFIG={APP_CONFIG}/config.yaml",
             "--health-cmd", "python -c \"import urllib.request; "
-                            f"urllib.request.urlopen('http://127.0.0.1:{port}/healthz', timeout=3)\"",
+                            f"urllib.request.urlopen('http://{probe}:{port}/healthz', timeout=3)\"",
             "--health-interval", "5s", "--health-timeout", "5s", "--health-start-period", "30s",
             "--health-retries", "6", "--log-opt", "max-size=20m", "--log-opt", "max-file=5"]
         listen = ["--host", self.state["bind"] if host_network else "0.0.0.0", "--port", str(port)]
@@ -529,7 +532,12 @@ class Deployment:
         print("[2/5] 停止应用", flush=True)
         self.stop_app()
         print("[3/5] 备份", flush=True)
-        backup = self.backup(f"{action} {version} 之前")
+        try:
+            backup = self.backup(f"{action} {version} 之前")
+        except BaseException:
+            # 还没有改动任何东西：用原版本重新启动，再报告备份失败（例如磁盘空间不足）
+            self.start_app()
+            raise
         previous = copy.deepcopy(self.state)
         try:
             print("[4/5] 切换代码并更新数据库", flush=True)
@@ -635,8 +643,14 @@ class Deployment:
         image = self.runtime_for(self.contract_of(self.release_dir(target["current"])))
         if not self.bundled:
             print("外部数据库不在备份中：请 DBA 把数据库恢复到同一时间点，否则代码、文件与数据库可能不一致", file=sys.stderr)
+        running = self.running(self.app_info())
         self.stop_app()
-        safety = None if skip_safety_backup else self.backup("restore 之前的安全备份")
+        try:
+            safety = None if skip_safety_backup else self.backup("restore 之前的安全备份")
+        except BaseException:
+            if running:
+                self.start_app()
+            raise
         previous = copy.deepcopy(self.state)
         try:
             self.remove_app()
@@ -1155,14 +1169,29 @@ def run(argv: Optional[List[str]] = None, *, docker: Optional[Docker] = None, co
             print(f"补丁包：{deployment.build_patch(args)}")
 
 
+class Terminated(BaseException):
+    """收到 SIGTERM：按 Ctrl+C 处理，正在进行的更新会自动恢复。"""
+
+
+def _terminate(_signum, _frame):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)  # 恢复过程中不再被打断
+    raise Terminated("收到终止信号")
+
+
 def main() -> None:
     import os
     os.umask(0o077)
+    # SSH 断开（SIGHUP）不中断正在执行的操作：重新登录后用 swrctl status / history 查看结果
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, _terminate)
     try:
         run()
     except (OSError, ValueError, RuntimeError, KeyError, tarfile.TarError, subprocess.CalledProcessError) as exc:
         print(f"操作失败：{exc}", file=sys.stderr)
         sys.exit(1)
+    except (KeyboardInterrupt, Terminated):
+        print("操作已中止；用 swrctl status 与 swrctl history 查看当前状态", file=sys.stderr)
+        sys.exit(130)
 
 
 if __name__ == "__main__":

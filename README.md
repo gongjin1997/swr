@@ -45,7 +45,8 @@ python -m swr_builder -c config.yaml       # 启动时自动执行数据库迁�
 ```
 
 数据库维护命令：`python -m swr_builder db check`（连接、数据库类型与迁移版本）、`db upgrade`（只执行迁移）、
-`db import-sqlite --from data/builder.db`（导入 v1.x 的 SQLite 数据，见第 14 节）。GaussDB 的连接与认证方式见
+`db import-sqlite --from data/builder.db`（导入 v1.x 的 SQLite 数据，见第 14 节）、`db status`（不执行迁移，查看迁移与未结束的任务）、
+`db apply-sql --dir <目录> --patch <补丁名>`（执行补丁或铺底 SQL，每个脚本只执行一次；`--check` 只校验）。GaussDB 的连接与认证方式见
 [v2 设计](docs/v2-服务创建与环境配置设计.md) §8。
 
 浏览器打开 `http://<构建机IP>:8080`，进入独立登录页。未构建前端时页面会提示构建命令，API 不受影响。
@@ -80,7 +81,11 @@ python -m swr_builder -c config.yaml       # 启动时自动执行数据库迁�
 
 ## 3. 部署方式
 
-ARM64 / aarch64 内网环境推荐使用完整离线交付包，默认部署到 `/data/swr`、端口 `8082`。包内包含完整镜像、锁定的 Python wheel、ARM64 前端构建工具、源码、安装与代码更新工具；日常改代码无需重建镜像。详见 [ARM64 离线部署与更新](docs/ARM64离线部署与更新.md)。
+ARM64 / aarch64 内网环境推荐使用离线交付，默认部署到 `/data/swr`、端口 `8082`，详见 [ARM64 离线部署与更新](docs/ARM64离线部署与更新.md)：
+
+- 首次部署用全量离线包 `swr-builder-arm64-<版本>.tar.gz`：平台运行镜像、PostgreSQL 16 镜像（也可改用外部 PostgreSQL / GaussDB）、代码、安装与管理脚本、铺底资源（SQL、业务基础镜像、证书）、锁定的 Python wheel 与源码。`sudo sh install.sh /data/swr 8082` 一次完成。
+- 日常更新用补丁包 `swr-patch-<版本>.tar.gz`：不含镜像，可带完整代码、DDL、DML；`swrctl apply` 先预检，再停机、备份（含数据库导出）、切换代码、执行迁移与 SQL，失败时自动恢复。
+- 运行依赖变化时用新的全量包 `upgrade.sh` 升级；从 v1（SQLite）迁移时安装到新目录并导入旧数据。
 
 ### 3.1 systemd（推荐，直接使用构建机的 Docker）
 
@@ -307,6 +312,7 @@ CI 在 PostgreSQL 16 与 openGauss 5.0（PG 兼容模式，代表 GaussDB）上�
 | [DESIGN.md](DESIGN.md) | 前端设计规范：布局、组件、状态、文案、响应式与深色模式 |
 | [docs/账号与权限设计.md](docs/账号与权限设计.md) | 权限模型与授予规则 |
 | [docs/v2-服务创建与环境配置设计.md](docs/v2-服务创建与环境配置设计.md) | v2 的方案比较与决定记录 |
+| [docs/ARM64离线部署与更新.md](docs/ARM64离线部署与更新.md) | ARM64 全量离线包、补丁包（代码 / DDL / DML）、升级、备份恢复、v1 迁移 |
 | [AGENTS.md](AGENTS.md) / [CLAUDE.md](CLAUDE.md) | 编码代理（Codex / Claude Code）的协作规则 |
 
 v1.3 的前端与后端分层重构记录见 `docs/重构设计-Vue3与业务逻辑.md`。
@@ -315,7 +321,7 @@ v1.3 的前端与后端分层重构记录见 `docs/重构设计-Vue3与业务逻
 ## 14. 升级与上线检查
 
 1. 停止旧服务，备份整个 data 目录（含 `builder.db` 与 `secret.key`）与配置文件。
-2. 从 v1.x 升级到 v2：准备一个空的 PostgreSQL / GaussDB 数据库，执行 `python -m swr_builder db import-sqlite --from data/builder.db -c config.yaml`。命令在副本上把 SQLite 升级到 v1.3 结构后整体导入，保留原 ID 并核对每张表的行数，不修改原文件；必须使用同一个 `secret.key`。
+2. 从 v1.x 升级到 v2：准备一个空的 PostgreSQL / GaussDB 数据库，执行 `python -m swr_builder db import-sqlite --from data/builder.db -c config.yaml`。命令在副本上把 SQLite 升级到 v1.3 结构后整体导入，保留原 ID 并核对每张表的行数，不修改原文件；必须使用同一个 `secret.key`。用离线包部署的 v1，按[部署文档第 9 节](docs/ARM64离线部署与更新.md#9-从-v1sqlite迁移)安装到新目录并用 `SWR_IMPORT_V1` 导入。
 3. 验证登录、强制改密和权限，再分配开发者/只读账号；删除旧配置里不再需要的明文 `server.users`。已有账号不会被初始化配置反复覆盖。
 4. 在测试仓库验证真实 Docker pull/build/push，确认构建机架构和磁盘空间。
 5. 私有云认证、网络、CA、Kubernetes 权限与发布就绪状态需要现场联调；模拟测试不代替这些验收。

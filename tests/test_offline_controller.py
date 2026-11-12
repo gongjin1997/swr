@@ -64,6 +64,7 @@ class FakeDocker:
         self.calls = []
         self.loaded = []
         self.app_fails = False
+        self.dump_fails = False
 
     def add_image(self, image, major=None):
         self.images[image] = {"Id": image, "Architecture": "arm64",
@@ -152,6 +153,9 @@ class FakeDocker:
         assert self.containers[name]["running"], f"{name} 未运行"
         self.calls.append(("exec", command[0]))
         if command[0] == "pg_dump":
+            if self.dump_fails:
+                stdout_path.write_text("partial")
+                raise RuntimeError("pg_dump 失败：No space left on device")
             stdout_path.write_text(json.dumps(self.db))
         elif command[0] == "psql":
             if command[-1].startswith("DROP DATABASE"):
@@ -374,6 +378,16 @@ def test_new_code_failing_health_check_is_rolled_back(site):
     assert site.state()["current"] == "2.0.0" and site.app()["health"] == "healthy"
 
 
+def test_failed_backup_restarts_the_original_version(site):
+    site.install()
+    site.docker.dump_fails = True
+    with pytest.raises(RuntimeError, match="No space left"):
+        site.ctl("apply", site.patch("2.0.1", migrations=(1, 2, 3, 4, 5)))
+    assert site.app()["running"] and site.app()["health"] == "healthy"
+    assert site.state()["current"] == "2.0.0" and site.docker.db["migrations"] == [1, 2, 3, 4]
+    assert not list((site.root / "backups").iterdir())  # 不完整的备份已删除
+
+
 def test_bad_patches_are_rejected_before_any_downtime(site):
     site.install()
     site.docker.calls.clear()
@@ -476,6 +490,13 @@ def test_external_database_requires_backup_confirmation(site):
         site.ctl("apply", archive)
     site.ctl("apply", archive, "--db-backup-confirmed")
     assert site.state()["current"] == "2.0.2" and ("exec", "pg_dump") not in site.docker.calls
+    # 外部数据库可以用 host 网络：不映射端口，平台直接监听安装时的地址与端口，健康检查访问同一地址
+    hosted = Site(site.base / "hosted")
+    hosted.install(None, "--database", "external", "--env-file", settings, "--network", "host",
+                   "--bind", "10.0.0.5", "--port", "18082")
+    app = hosted.app()
+    assert "--publish" not in app["options"] and app["command"][-4:] == ["--host", "10.0.0.5", "--port", "18082"]
+    assert "http://10.0.0.5:18082/healthz" in option_values(app["options"], "--health-cmd")[0]
     # 内置数据库模式下，环境文件不能自带数据库连接
     other = Site(site.base / "other")
     with pytest.raises(ValueError, match="不要在环境文件中设置"):

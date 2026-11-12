@@ -5,13 +5,18 @@
 **升级须知（不兼容）**
 - 运行数据库改为 PostgreSQL 14+，或以 `DBCOMPATIBILITY 'PG'` 创建的 GaussDB / openGauss。需要配置 `database.url`（或 `BUILDER_DATABASE_URL`）与 `BUILDER_DATABASE_PASSWORD`。
 - v1.x 的 SQLite 数据用 `python -m swr_builder db import-sqlite --from data/builder.db` 导入空库，必须使用原来的 `secret.key`。
-- 离线安装包还没有改为 PostgreSQL，v2 暂时只能用源码或容器方式部署。
+- 离线包改为内置 PostgreSQL。v1 的离线部署不能原地升级：把 v2 安装到新目录，用 `SWR_IMPORT_V1=<v1 目录>` 导入旧数据（见部署文档第 9 节）。
+- 离线包的 `deploy/offline/requirements.lock` 还是 v1 的（没有 psycopg）。第一次在联网构建机制作 v2 完整包时会自动重新解析，
+  之后把新的 `requirements.lock` 与 `runtime-lock.json` 提交回仓库，补丁包才能与现场的运行镜像匹配。
 - 命名空间的 RBAC 模板增加了 Secret、ReplicaSet、事件的规则，策略开启 Ingress / HPA 时还有对应规则。已纳管的命名空间要按新模板重新授权后才能使用托管服务。
 - `GET /api/services/{id}/runtime` 的响应改为新结构（Pod、ReplicaSet、HPA、事件、访问地址）。
 
 **数据层**
 - `store/db.py`：连接池、事务与保存点；SQL 只用 PostgreSQL 与 GaussDB / openGauss 共有的语法。去掉进程锁：修订号在服务行锁内生成；发布单用条件更新领取，并由唯一索引保证同一服务只有一个执行中的发布。
-- 版本化迁移：1 基线（等价于 v1.3 的结构）、2 环境与配置、3 发布快照。新增命令 `db check`、`db upgrade`、`db import-sqlite`。
+- 版本化迁移：1 基线（等价于 v1.3 的结构）、2 环境与配置、3 发布快照、4 补丁脚本记录（`patch_scripts`）。
+  新增命令 `db check`、`db upgrade`、`db import-sqlite`、`db status`、`db apply-sql`。
+- `db apply-sql`：执行补丁包与铺底数据中的 SQL，顺序为 `ddl/` → `dml/` → 根目录；每个脚本一个事务并与执行记录一起提交，
+  第一行写 `-- swr:no-transaction` 时在事务外执行；同一补丁同一路径只执行一次，已执行的脚本内容变化时报错；`--check` 只校验。
 - GaussDB：启动时检查是否为 PG 兼容模式；驱动可选 psycopg 或华为的 gaussdb。
 
 **环境与配置**
@@ -75,6 +80,20 @@
   下发的发布；接管发布原样沿用 Deployment 当前的镜像地址。构建时的 digest 仍记在发布单上，worker 写入集群前向镜像仓库核对
   该版本号仍指向它：版本号在平台之外被覆盖或已删除时发布失败，不写入集群（镜像不在当前配置的镜像仓库中时跳过核对）。
 
+**ARM64 离线交付**（[部署文档](docs/ARM64离线部署与更新.md)）
+- 全量离线包增加 PostgreSQL 16.15 镜像（按摘要固定）与铺底资源 `seed/`（`sql/`、`images/`、`certs/`）。`install.sh` 一次完成：
+  导入镜像、生成数据库口令、启动数据库、迁移、导入 v1 数据（可选）、铺底 SQL、启动平台；失败时清理容器，生成的文件移到
+  `failed-install-<时间>/`，可以直接重试。`SWR_DATABASE=external` 改用外部 PostgreSQL / GaussDB。
+- 补丁包 `swr-patch-<版本>.tar.gz` 不含镜像：可带完整代码、`sql/ddl`、`sql/dml`，也可以只有 SQL（代码版本不变）；
+  `base` 限定适用的版本。开发机用 `scripts/build-arm64-patch.py` 制作，目标机用 `swrctl build-patch` 离线制作。
+- `swrctl apply`：应用仍在运行时预检（包与逐文件 SHA256、版本与运行依赖、未结束的任务、新代码是否认识数据库迁移、SQL 与执行记录），
+  再停机、`pg_dump` 与文件备份、切换代码、迁移、执行 SQL、健康检查。任一步失败（包括 Ctrl+C）都恢复数据库、文件和原版本；
+  备份失败时直接用原版本重新启动。使用外部数据库时，会修改数据库的更新需要 `--db-backup-confirmed`。
+- `swrctl rollback` 遇到目标版本不认识的迁移时拒绝，并提示用备份恢复；`backup` / `restore` 包含数据库导出；
+  新增 `backups`、`history`、`stop --with-db`、`logs --db`。`upgrade.sh` 支持 PostgreSQL 小版本升级，主版本变化时拒绝。
+- 构建：依赖锁跟不上 `requirements.in` / `requirements.txt` 时自动重新解析；组包与审核脚本检查两个镜像与铺底资源；
+  验收脚本改用 PostgreSQL，覆盖补丁、失败恢复与运行依赖升级。`deploy/offline/config.yaml` 之前被 `.gitignore` 忽略，现已纳入版本库。
+
 **工程与文档**
 - CI 在 PostgreSQL 16 与 openGauss 5.0 上各运行一遍后端测试。`tests/fake_kube.py` 模拟 Kubernetes API，支持 Server-Side Apply。
 - 新增 `DESIGN.md`（前端设计规范）、`docs/系统架构.md`、`AGENTS.md`（Codex）与 `CLAUDE.md`（Claude Code，导入 AGENTS.md）；
@@ -83,7 +102,7 @@
 **尚未实现**
 - 配置变更后对受影响服务的批量发布（目前需要在每个服务上“沿用当前镜像发布最新配置”）。
 - 服务矩阵、线上字段的自动漂移检查、HCS ELB 证书到期查询。
-- 离线包的 PostgreSQL 支持。
+- PostgreSQL 主版本升级工具；离线包在真实 ARM64 主机与 Docker 上的验收（验收脚本已提供）。
 
 # v1.3.0-dev.2
 

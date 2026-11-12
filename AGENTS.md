@@ -24,7 +24,7 @@ SWR 镜像构建平台 v2（swr-builder）：上传构建产物 → 累加 / 全
 | `web/` | Vue 3 + TypeScript + Vite + Element Plus 控制台；构建产物输出到 `swr_builder/webui/`（不提交） |
 | `tests/` | pytest；`fake_kube.py`（模拟 Kubernetes API）、`mock_registry.py`、`fake_docker.py` |
 | `docs/` | 系统架构、系统设计、开发文档、权限设计、v2 设计、测试报告 |
-| `deploy/`、`scripts/` | 部署文件、systemd、compose、ARM64 离线包（离线包尚未支持 PostgreSQL） |
+| `deploy/`、`scripts/` | 部署文件、systemd、compose；ARM64 离线包：控制器 `deploy/offline/manage.py`、包格式 `deploy/offline/release.py`、组包与验收脚本 `scripts/*arm64*` |
 
 ## 命令
 
@@ -37,6 +37,9 @@ export SWR_TEST_DATABASE_URL=postgresql://postgres:<口令>@127.0.0.1:5432/postg
 pytest -q                                          # 全量
 pytest -q tests/test_managed_services.py -k adopt  # 只跑相关测试
 python -m compileall -q swr_builder
+# 离线工具：控制器与包格式测试（假 Docker，不需要 Docker 环境）、脚本语法
+pytest -q tests/test_offline_controller.py tests/test_offline_bundle.py tests/test_sql_scripts.py
+sh -n deploy/offline/install.sh deploy/offline/upgrade.sh deploy/offline/swrctl
 ```
 
 运行：
@@ -45,7 +48,7 @@ python -m compileall -q swr_builder
 cp config.example.yaml config.yaml   # 设置 registry、database.url 等
 export BUILDER_DATABASE_PASSWORD=<数据库口令>
 python -m swr_builder -c config.yaml           # 启动时自动执行迁移，默认端口 8080
-python -m swr_builder db check -c config.yaml  # 也有 db upgrade、db import-sqlite --from data/builder.db
+python -m swr_builder db check -c config.yaml  # 也有 db upgrade、db import-sqlite、db status、db apply-sql
 ```
 
 前端（Node 18.18+，CI 用 22）：
@@ -84,6 +87,10 @@ CI（`.github/workflows/ci.yml`）在 PR 上运行三个任务：后端测试（
 - **集群**：写入只发生在 `deploy/worker.py`；接口里只能读取或做 `dryRun=All` 的服务端校验。渲染（`delivery/render.py`）
   是纯函数，预览、校验和 worker 共用，不要另写一份对象拼装逻辑。
 - **敏感值**：用 `SecretBox` 加密保存；接口响应、日志、渲染快照中不出现明文；查看明文需要 `secret.view` 并写审计。
+- **离线交付**：`deploy/offline/manage.py`、`release.py` 在运行镜像中执行，只用标准库；操作 Docker 只通过 `Docker` 类，
+  测试用 `tests/test_offline_controller.py` 中的假实现。数据库命令都经 `python -m swr_builder db …`（参数定义在
+  `__main__.db_parser`）。改了 Python / 前端依赖或 `base-images.json` 后，运行依赖标识会变，现场需要新的完整包，
+  补丁会被拒绝。`store/sqlscripts.py` 顶层只能导入标准库（打包工具按文件路径加载它）。
 - **风格**：类型注解；模块和关键函数写中文 docstring，说明规则和原因；不加没有用到的抽象和配置项。
 
 ## 前端约定
@@ -125,10 +132,13 @@ CI（`.github/workflows/ci.yml`）在 PR 上运行三个任务：后端测试（
 | `docs/开发文档.md` | 开发约定、模块职责、测试方法 |
 | `docs/账号与权限设计.md` | 权限模型与授予规则 |
 | `docs/v2-服务创建与环境配置设计.md` | v2 的方案比较与决定记录 |
+| `docs/ARM64离线部署与更新.md` | 离线全量包、补丁包、升级、备份恢复、v1 迁移（随完整包交付为 `部署文档.md`） |
 
 ## 完成前检查
 
 - [ ] `pytest -q` 通过；改了 SQL 时确认只用了 GaussDB 也支持的语法
+- [ ] 改了表结构：新增迁移（不改已发布的迁移），`docs/系统架构.md` §6.1 的迁移列表同步；改了离线工具：`sh -n` 检查脚本，
+      部署文档同步
 - [ ] 改了前端：`npm run typecheck && npm run build` 通过，并按 `DESIGN.md` 检查了页面
 - [ ] 新路由声明了权限（部署类路由加了 `@deploy_module`）；新权限已在 `access/catalog.py` 登记
 - [ ] 没有提交真实环境数据或凭据
