@@ -454,6 +454,8 @@ export interface KubeDeployment {
   conditions: DeploymentCondition[]
   labels: Record<string, string>
   annotations: Record<string, string>
+  /** 由平台托管时为所属服务的 ID，否则为空字符串 */
+  platform_service: string
   containers: KubeContainer[]
 }
 
@@ -733,6 +735,8 @@ export interface ApplyResult {
   action: 'create' | 'update' | 'unchanged' | 'skip' | 'delete' | 'error'
   message: string
   diff: { path: string; live: unknown; desired: unknown }[]
+  /** 线上同名对象的归属：self 本服务或平台共享配置，other 平台中的其他服务，foreign 不由平台管理 */
+  owner: '' | 'self' | 'other' | 'foreign'
 }
 
 export interface RenderResult {

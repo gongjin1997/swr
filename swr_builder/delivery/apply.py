@@ -2,6 +2,9 @@
 
 - 平台只声明自己管理的字段；CCE 或其他工具写入、平台没有声明的字段保持不变。
 - 字段被其他管理者占用时强制接管（force=true）：平台创建的对象与用户确认导入的对象都由平台负责。
+- 先按标签确认对象归属：属于平台中其他服务的对象一律不覆盖；集群中已有、不由平台管理的同名服务对象
+  只在接管发布（takeover=True）时接管，普通发布报错，预览（takeover=None）只注明。共享配置按名称定义在环境层，
+  已有的同名对象直接接管。
 - 下发前对全部对象执行一次 dryRun=All，任何对象校验失败都不写入集群。
 - 共享配置（多个服务挂载的公共配置、证书目录）只升级不降级：线上已是同一配置集的更高版本时跳过。
 - 开启 HPA 后平台不再声明 replicas；此前由平台管理的 replicas 先移交给单独的字段管理者，避免副本数被重置为 1。
@@ -116,17 +119,51 @@ def _live_config_version(live: Optional[Dict[str, Any]], desired: Dict[str, Any]
     return int(value) if value.isdigit() else None
 
 
+def ownership(live: Optional[Dict[str, Any]], desired: Dict[str, Any]) -> str:
+    """线上同名对象的归属：""（不存在）、self（本服务的对象，或平台的共享配置）、
+    other（平台中其他服务的对象，或与对象类型不符的平台对象）、foreign（不由平台管理）。"""
+    if not live:
+        return ""
+    labels = (live.get("metadata") or {}).get("labels") or {}
+    if labels.get(MANAGED_BY_LABEL) != MANAGED_BY:
+        return "foreign"
+    wanted = ((desired.get("metadata") or {}).get("labels") or {}).get(SERVICE_LABEL)
+    return "self" if labels.get(SERVICE_LABEL) == wanted else "other"
+
+
+def _owner_message(owner: str, live: Dict[str, Any], shared: bool, takeover: Optional[bool]) -> Tuple[str, bool]:
+    """归属说明，以及是否拒绝下发。"""
+    if owner == "other":
+        service = ((live.get("metadata") or {}).get("labels") or {}).get(SERVICE_LABEL)
+        return ((f"集群中的同名对象属于平台中的另一个服务（ID {service}），不能覆盖" if service
+                 else "集群中的同名对象是平台的共享配置，不能作为本服务的对象"), True)
+    if owner != "foreign":
+        return "", False
+    if shared:
+        return "集群中已有同名的共享配置，由平台接管", False
+    if takeover:
+        return "接管集群中已有的对象", False
+    if takeover is None:
+        return "集群中已有同名对象且不由平台管理：接管发布时由平台接管，普通发布会被拒绝", False
+    return ("集群中已有同名对象且不由平台管理；导入的服务第一次下发请使用“接管发布”，"
+            "新服务请换一个服务名或对象名"), True
+
+
 async def apply_objects(kube: KubeClient, namespace: str, objects: List[Dict[str, Any]], *, dry_run: bool,
                         previous: Iterable[Tuple[str, str]] = (), service_id: Optional[int] = None,
-                        log: Any = None, secret_values: bool = True) -> List[Dict[str, Any]]:
-    """逐个下发（或 dry-run）对象，返回每个对象的结果：action 为 create / update / unchanged / skip / delete / error。
+                        log: Any = None, secret_values: bool = True,
+                        takeover: Optional[bool] = None) -> List[Dict[str, Any]]:
+    """逐个下发（或 dry-run）对象，返回每个对象的结果：action 为 create / update / unchanged / skip / delete / error，
+    owner 为线上同名对象的归属（见 ownership）。
 
-    secret_values=False 表示 Secret 中是占位内容（预览），差异只比较键。"""
+    secret_values=False 表示 Secret 中是占位内容（预览），差异只比较键。
+    takeover：True 为接管发布，接管不由平台管理的同名对象；False 为普通发布，遇到这类对象报错；
+    None 为预览，只在 message 中注明。"""
     results: List[Dict[str, Any]] = []
     for obj in objects:
         kind, name = obj["kind"], obj["metadata"]["name"]
         path = object_path(namespace, kind, name)
-        row: Dict[str, Any] = {"kind": kind, "name": name, "action": "", "message": "", "diff": []}
+        row: Dict[str, Any] = {"kind": kind, "name": name, "action": "", "message": "", "diff": [], "owner": ""}
         results.append(row)
         try:
             live = await kube.get_json(path)
@@ -134,6 +171,14 @@ async def apply_objects(kube: KubeClient, namespace: str, objects: List[Dict[str
             row.update(action="error", message=str(exc))
             _log(log, dry_run, row)
             continue
+        row["owner"] = ownership(live, obj)
+        shared = SERVICE_LABEL not in ((obj["metadata"].get("labels") or {}))
+        note, refused = _owner_message(row["owner"], live or {}, shared, takeover)
+        if refused:
+            row.update(action="error", message=note)
+            _log(log, dry_run, row)
+            continue
+        row["message"] = note
         shared_version = _live_config_version(live, obj)
         desired_version = ((obj["metadata"].get("annotations") or {}).get(CONFIG_VERSION_ANNOTATION) or "")
         if shared_version is not None and desired_version.isdigit() and shared_version > int(desired_version):
@@ -143,7 +188,7 @@ async def apply_objects(kube: KubeClient, namespace: str, objects: List[Dict[str
         mode = ("values" if secret_values else "keys") if kind == "Secret" else ""
         row["diff"] = field_diff(obj, live, secret=mode) if live else []
         if kind == "Deployment" and live and "replicas" not in obj["spec"] and _owns_replicas(live):
-            row["message"] = "副本数交由 HPA 管理"
+            row["message"] = "；".join(filter(None, (row["message"], "副本数交由 HPA 管理")))
             if not dry_run:
                 handover = {"apiVersion": obj["apiVersion"], "kind": kind, "metadata": {"name": name, "namespace": namespace},
                             "spec": {"replicas": (live.get("spec") or {}).get("replicas", 1)}}
@@ -180,7 +225,7 @@ async def apply_objects(kube: KubeClient, namespace: str, objects: List[Dict[str
         if (kind, name) in current or kind not in PRUNABLE:
             continue
         path = object_path(namespace, kind, name)
-        row = {"kind": kind, "name": name, "action": "delete", "message": "", "diff": []}
+        row = {"kind": kind, "name": name, "action": "delete", "message": "", "diff": [], "owner": "self"}
         try:
             live = await kube.get_json(path)
         except DomainError as exc:

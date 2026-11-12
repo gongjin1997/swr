@@ -265,9 +265,11 @@ class ServiceDeploymentWorker:
         path = deployment_path(namespace["name"], target["name"])
         async with KubeClient(cluster["server"], credential, self.transport, timeout=30) as kube:
             self._check_lease(deployment_id, token, "before Kubernetes access")
+            # 只有接管发布可以接管集群中已有、不由平台管理的同名对象
+            takeover = deployment.get("kind") == "adopt"
             log.info(f"服务端校验 {len(objects)} 个对象（dryRun=All）")
             checks = await apply_objects(kube, namespace["name"], objects, dry_run=True, previous=previous_keys,
-                                         service_id=service["id"], log=log)
+                                         service_id=service["id"], log=log, takeover=takeover)
             problems = failures(checks)
             if problems:
                 raise ValueError("服务端校验未通过，未写入集群：" + "；".join(problems)[:900])
@@ -278,7 +280,7 @@ class ServiceDeploymentWorker:
             self._check_lease(deployment_id, token, "before Kubernetes write")
             progress["write_started"] = True
             results = await apply_objects(kube, namespace["name"], objects, dry_run=False, previous=previous_keys,
-                                          service_id=service["id"], log=log)
+                                          service_id=service["id"], log=log, takeover=takeover)
             problems = failures(results)
             if problems:
                 raise ValueError("部分对象下发失败，请核对集群：" + "；".join(problems)[:900])

@@ -229,7 +229,7 @@ def test_spec_validation_against_namespace_policy():
 
 # ------------------------------------------------------------------ 新建、预览、发布
 def test_create_preview_deploy_and_snapshot_without_secret_values(env):
-    client, kube, store = env["client"], env["kube"], env["store"]
+    client, kube = env["client"], env["kube"]
     draft = client.post("/api/services/preview", json={
         "name": "order-api", "project_id": env["project"]["id"], "namespace_id": env["namespace"]["id"],
         "app_id": env["app_row"]["id"], "spec": managed_spec(), "dry_run": True,
@@ -271,6 +271,8 @@ def test_create_preview_deploy_and_snapshot_without_secret_values(env):
     assert runtime["summary"]["state"] == "healthy" and runtime["summary"]["ready"] == 2
     assert runtime["pods"][0]["start_time"] and runtime["pods"][0]["restarts"] == 0 and runtime["pods"][0]["current"]
     assert runtime["replicasets"][0]["current"] and runtime["hpa"] is None
+    assert runtime["deployment"]["platform_service"] == str(service["id"])
+    assert {r["owner"] for r in rendered.json()["dry_run"]} == {""}  # 下发前集群中没有同名对象
     assert any(a["address"].startswith("https://order-api-app.orders-sit") for a in runtime["access"])
     assert "cluster-token" not in str(runtime) and "token-value-1" not in str(runtime)
     status = client.post("/api/services/status", json={"ids": [service["id"], 999]}).json()["items"]
@@ -314,7 +316,7 @@ def test_config_versions_are_pinned_and_rollback_restores_them(env):
 
 
 def test_hpa_handover_prune_and_shared_config_never_downgrades(env):
-    client, kube, store = env["client"], env["kube"], env["store"]
+    client, kube = env["client"], env["kube"]
     service = create_service(env, spec=managed_spec(replicas=3))
     assert deploy(env, service["id"])["status"] == "success"
     assert kube.get("deployments", "order-api-app", "orders-sit")["spec"]["replicas"] == 3
@@ -349,12 +351,39 @@ def test_hpa_handover_prune_and_shared_config_never_downgrades(env):
 
 
 def test_server_validation_failure_writes_nothing(env):
-    client, kube = env["client"], env["kube"]
+    kube = env["kube"]
     service = create_service(env)
     kube.fail[("PATCH", "ingresses", "order-api-ingress")] = (422, "spec.rules[0].host: Invalid value")
     record = deploy(env, service["id"])
     assert record["status"] == "failed" and "服务端校验未通过" in record["error"] and "Invalid value" in record["error"]
     assert not [r for r in kube.requests if r[0] == "PATCH" and not r[2].get("dryRun")]
+
+
+def test_existing_objects_are_not_overwritten_without_takeover(env):
+    """集群中已有、不由平台管理的同名对象：预览提示，普通发布拒绝且不写入；属于平台其他服务的对象不能覆盖。"""
+    client, kube = env["client"], env["kube"]
+    kube.put({"kind": "Deployment", "metadata": {"name": "order-api-app", "namespace": "orders-sit",
+                                                 "labels": {"app": "order-api-app"}},
+              "spec": {"replicas": 1, "selector": {"matchLabels": {"app": "order-api-app"}},
+                       "template": {"metadata": {"labels": {"app": "order-api-app"}},
+                                    "spec": {"containers": [{"name": "main", "image": "swr.example/team/legacy:1"}]}}}})
+    kube.put({"kind": "Service", "metadata": {"name": "order-api-service", "namespace": "orders-sit", "labels": {
+        "app.kubernetes.io/managed-by": "swr-builder", "swr-builder/service": "999"}},
+        "spec": {"selector": {"app": "other"}, "ports": [{"port": 80}]}})
+    service = create_service(env)
+    runtime = client.get(f"/api/services/{service['id']}/runtime").json()
+    assert runtime["found"] and runtime["deployment"]["platform_service"] == ""
+    preview = client.post(f"/api/services/{service['id']}/render", json={"dry_run": True}).json()
+    rows = {(r["kind"], r["name"]): r for r in preview["dry_run"]}
+    assert rows[("Deployment", "order-api-app")]["owner"] == "foreign"
+    assert rows[("Service", "order-api-service")]["owner"] == "other"
+    assert rows[("Service", "order-api-service")]["action"] == "error"
+    assert any("接管发布" in w for w in preview["warnings"])
+    record = deploy(env, service["id"])
+    assert record["status"] == "failed" and "接管发布" in record["error"] and "另一个服务" in record["error"]
+    assert not [r for r in kube.requests if r[0] == "PATCH" and not r[2].get("dryRun")]
+    live = kube.get("deployments", "order-api-app", "orders-sit")
+    assert live["spec"]["template"]["spec"]["containers"][0]["image"] == "swr.example/team/legacy:1"
 
 
 def test_permissions_for_managed_services(env):

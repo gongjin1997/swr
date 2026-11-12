@@ -70,8 +70,10 @@ const pendingRevision = computed(() => !!service.value?.deployed_revision_id
   && service.value.deployed_revision_id !== service.value.current_revision_id)
 const configStatus = computed(() => service.value?.config_status)
 const summary = computed(() => runtime.value?.summary)
-const neverDeployed = computed(() => !service.value?.deployed_revision_id)
-const canAdopt = computed(() => managed.value && neverDeployed.value && !!runtime.value?.found && can('service.deploy'))
+/** 托管服务还没有成功的托管发布，而集群中的同名 Deployment 不归平台管理（导入的服务、由纳管转为托管的服务）。 */
+const needsAdopt = computed(() => managed.value && configStatus.value?.deployed === false && !!runtime.value?.found
+  && runtime.value.deployment?.platform_service !== String(service.value?.id))
+const canAdopt = computed(() => needsAdopt.value && session.deployEnabled && can('service.deploy'))
 const restartsTone = computed(() => ((summary.value?.restarts ?? 0) > 0 ? 'warning' : ''))
 const changeText = (change: string) => CONFIG_CHANGE_TEXT[change] ?? change
 /** 镜像名（组织/仓库:标签），按 digest 固定的镜像不显示 digest。 */
@@ -299,9 +301,9 @@ onMounted(load)
         </div>
       </div>
 
-      <el-alert v-if="managed && neverDeployed && runtime?.found" type="warning" :closable="false" show-icon class="section-gap"
+      <el-alert v-if="needsAdopt" type="warning" :closable="false" show-icon class="section-gap"
         title="集群中已有同名对象，尚未由平台接管">
-        <template #default>导入的服务第一次下发请使用“接管发布”：镜像沿用正在运行的版本，平台按配置接管 Deployment、Service、Ingress 等对象。可以先在“对象清单”中做服务端校验，查看与线上的差异。</template>
+        <template #default>第一次下发请使用“接管发布”：镜像沿用正在运行的版本，平台按配置接管 Deployment、Service、Ingress 等对象；普通发布会被拒绝。可以先在“对象清单”中做服务端校验，查看与线上的差异。</template>
       </el-alert>
       <el-alert v-if="pendingRevision || configStatus?.pending" type="info" :closable="false" show-icon class="section-gap"
         title="有尚未发布的配置变更">

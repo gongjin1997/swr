@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote
 
+from ..delivery.render import MANAGED_BY, MANAGED_BY_LABEL, SERVICE_LABEL
 from ..deploy.k8s_client import KubeClient
 from ..errors import DomainError
 from ..store import utcnow
@@ -259,6 +260,9 @@ def summarize_deployment(item: Dict[str, Any]) -> Dict[str, Any]:
         "labels": (template.get("metadata") or {}).get("labels") or {},
         "selector": spec.get("selector") or {},
         "annotations": {k: v for k, v in annotations.items() if k in PLATFORM_ANNOTATIONS},
+        # 由平台托管时为所属服务的 ID（标签 swr-builder/service），否则为空：用于判断是否需要接管发布
+        "platform_service": (metadata.get("labels") or {}).get(SERVICE_LABEL, "")
+        if (metadata.get("labels") or {}).get(MANAGED_BY_LABEL) == MANAGED_BY else "",
         "containers": [{"name": c.get("name", ""), "image": c.get("image", ""),
                         "resources": {"requests": (c.get("resources") or {}).get("requests") or {},
                                       "limits": (c.get("resources") or {}).get("limits") or {}},

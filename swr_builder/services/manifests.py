@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from ..access import Principal
 from ..delivery.apply import apply_objects
-from ..delivery.render import mask, object_key, render, to_yaml
+from ..delivery.render import SERVICE_LABEL, mask, object_key, render, to_yaml
 from ..delivery.resolve import check_render, resolve
 from ..deploy.k8s_client import KubeClient, deployment_path
 from ..errors import Forbidden, NotFound, Unprocessable
@@ -67,6 +67,14 @@ async def _render_preview(ctx, service: Dict[str, Any], spec: Dict[str, Any], *,
         async with KubeClient(cluster["server"], credential, ctx.deploy_transport, timeout=30) as kube:
             result["dry_run"] = await apply_objects(kube, namespace["name"], objects, dry_run=True, previous=keys,
                                                     service_id=service.get("id"), secret_values=False)
+        own = {(o["kind"], o["metadata"]["name"]) for o in objects if SERVICE_LABEL in (o["metadata"].get("labels") or {})}
+        foreign = [f"{r['kind']}/{r['name']}" for r in result["dry_run"]
+                   if r["owner"] == "foreign" and (r["kind"], r["name"]) in own]
+        if foreign:
+            result["warnings"] = [*result["warnings"],
+                                  f"集群中已有 {len(foreign)} 个同名对象不由平台管理（{'、'.join(foreign[:6])}"
+                                  f"{' 等' if len(foreign) > 6 else ''}）：普通发布会被拒绝；"
+                                  "要由平台接管已有服务，请使用“接管发布”或在环境中“导入已有服务”"]
     return result
 
 
