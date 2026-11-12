@@ -17,6 +17,7 @@ from ..validation import (DNS_LABEL_RE, DNS_SUBDOMAIN_RE, LABEL_KEY_RE, LABEL_VA
                           text_field)
 from . import configsets
 from .access import namespace_or_404
+from .namespaces import effective_policy
 
 NAMING_KEYS = ("deployment", "service", "ingress", "configmap", "secret", "properties")
 DEFAULT_PROFILE: Dict[str, Any] = {
@@ -233,7 +234,7 @@ def get_environment(store: Store, me: Principal, namespace_id: int) -> Dict[str,
     summary = _summary(store, me, namespace, row, {ingress["id"]: ingress["name"]} if ingress else {},
                        {namespace_id: len(services)})
     summary.update(
-        policy=namespace["policy"], profile=merged_profile(row["profile"] if row else None),
+        policy=effective_policy(namespace["policy"]), profile=merged_profile(row["profile"] if row else None),
         profile_saved=bool(row), ingress_profile=ingress,
         config_sets=[configsets.public_config_set(store, me, item)
                      for item in store.list_config_sets([("environment", namespace_id)])],

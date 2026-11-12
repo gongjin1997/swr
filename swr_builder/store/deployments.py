@@ -298,6 +298,14 @@ class DeploymentsMixin:
                               f"lease_owner = NULL, lease_until = NULL WHERE service_id IS NOT NULL AND status IN {ACTIVE}",
                               (reason, utcnow())).rowcount
 
+    def cancel_queued_service_deployments(self, reason: str) -> List[int]:
+        """取消排队中（已批准、尚未被 worker 领取）的服务发布，返回被取消的发布 ID。"""
+        with self._db() as db:
+            rows = db.execute("UPDATE deployments SET status = 'cancelled', error = %s, finished_at = %s "
+                              "WHERE service_id IS NOT NULL AND status = 'queued' RETURNING id",
+                              (reason, utcnow())).fetchall()
+        return sorted(row["id"] for row in rows)
+
     def mark_service_deployment_pending_approval(self, deployment_id: int, worker_id: str, fencing_token: int) -> bool:
         with self._db() as db:
             changed = db.execute("UPDATE deployments SET status = 'pending_approval', lease_owner = NULL, "

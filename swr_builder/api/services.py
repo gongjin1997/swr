@@ -10,7 +10,7 @@ from ..errors import NotFound, NotImplementedYet
 from ..services import catalog, manifests, releases
 from ..services.access import service_or_404
 from ..services.discovery import service_runtime, services_status
-from ..web.deps import Ctx, Me, audit, authenticated
+from ..web.deps import Ctx, Me, audit, authenticated, deploy_module
 
 router = APIRouter()
 
@@ -152,7 +152,7 @@ async def update_secret(id: int, key: str, request: Request, ctx: Ctx, me: Me, d
     return result
 
 
-# ------------------------------------------------------------------ 发布
+# ------------------------------------------------------------------ 发布（部署模块：关闭“启用部署中心”时拒绝）
 async def _submit(kind: str, id: int, request: Request, ctx, me, data: dict, idempotency_key: str):
     deployment = releases.submit(ctx.store, me, id, kind, data, idempotency_key)
     audit(request, "deploy.submit", deployment["id"],
@@ -162,6 +162,7 @@ async def _submit(kind: str, id: int, request: Request, ctx, me, data: dict, ide
 
 @router.post("/api/services/{id}/deployments", status_code=202)
 @authenticated
+@deploy_module
 async def submit_deployment(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(...),
                             idempotency_key: str = Header(..., alias="Idempotency-Key")):
     return await _submit("deploy", id, request, ctx, me, data, idempotency_key)
@@ -169,6 +170,7 @@ async def submit_deployment(id: int, request: Request, ctx: Ctx, me: Me, data: d
 
 @router.post("/api/services/{id}/rollback", status_code=202)
 @authenticated
+@deploy_module
 async def rollback_service(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(...),
                            idempotency_key: str = Header(..., alias="Idempotency-Key")):
     return await _submit("rollback", id, request, ctx, me, data, idempotency_key)
@@ -176,6 +178,7 @@ async def rollback_service(id: int, request: Request, ctx: Ctx, me: Me, data: di
 
 @router.post("/api/services/{id}/restart", status_code=202)
 @authenticated
+@deploy_module
 async def restart_service(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(...),
                           idempotency_key: str = Header(..., alias="Idempotency-Key")):
     """以最近一次成功发布的构建和修订重新发布。"""
@@ -184,6 +187,7 @@ async def restart_service(id: int, request: Request, ctx: Ctx, me: Me, data: dic
 
 @router.post("/api/services/{id}/adopt", status_code=202)
 @authenticated
+@deploy_module
 async def adopt_service(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(...),
                         idempotency_key: str = Header(..., alias="Idempotency-Key")):
     """接管发布：导入（或由纳管转为托管）的服务第一次由平台下发，镜像沿用集群中正在运行的 digest。"""
@@ -198,6 +202,7 @@ async def adopt_service(id: int, request: Request, ctx: Ctx, me: Me, data: dict 
 
 @router.post("/api/services/{id}/scale", status_code=202)
 @authenticated
+@deploy_module
 async def scale_service(id: int, ctx: Ctx, me: Me, data: dict = Body(...),
                         idempotency_key: str = Header(..., alias="Idempotency-Key")):
     catalog.writable_service(ctx.store, me, id, "service.operate", "没有服务运维权限")

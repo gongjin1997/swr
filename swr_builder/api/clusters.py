@@ -80,7 +80,8 @@ async def revoke_credential(id: int, ctx: Ctx, data: dict = Body(default={})):
 async def list_namespaces(ctx: Ctx, me: Me, cluster_id: Optional[int] = None, tier: Optional[str] = None):
     if tier is not None:
         tier = namespace_service.normalize_tier(tier)
-    items = ctx.store.list_namespaces(me.namespace_ids("namespace.view"), cluster_id, tier)
+    items = [namespace_service.namespace_view(n)
+             for n in ctx.store.list_namespaces(me.namespace_ids("namespace.view"), cluster_id, tier)]
     return {"items": items, "total": len(items)}
 
 
@@ -97,7 +98,7 @@ async def adopt_namespace(request: Request, ctx: Ctx, me: Me, data: dict = Body(
 @router.get("/api/namespaces/{id}")
 @requires("namespace.view")
 async def get_namespace(id: int, ctx: Ctx, me: Me):
-    return namespace_or_404(ctx.store, me, id)
+    return namespace_service.namespace_view(namespace_or_404(ctx.store, me, id))
 
 
 @router.put("/api/namespaces/{id}")

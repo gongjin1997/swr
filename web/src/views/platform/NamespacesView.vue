@@ -138,7 +138,7 @@ function openMembers(namespace: Namespace) {
 
 function approvalText(n: Namespace): string {
   if (n.policy.require_admin_approval || n.tier === 'prod') return '平台管理员确认'
-  if (n.policy.require_approval || n.tier === 'staging') return `需 ${n.policy.min_approvals} 人审批`
+  if (n.policy.require_approval || n.tier === 'staging') return `需 ${n.policy.min_approvals ?? 1} 人审批`
   return '无需审批'
 }
 

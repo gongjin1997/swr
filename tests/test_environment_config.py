@@ -47,6 +47,17 @@ def create_set(client, scope_type, scope_id, kind, entries, name=None):
 
 
 # ------------------------------------------------------------------ 环境档案与负载均衡入口
+def test_partial_namespace_policy_is_returned_with_defaults(env):
+    """早期保存的策略缺少字段时，接口按默认值补齐（与发布流程使用的策略一致），页面不再显示“需 undefined 人审批”。"""
+    c, sit, uat, store = env["client"], env["sit"], env["uat"], env["store"]
+    detail = c.get(f"/api/environments/{uat}").json()
+    assert detail["policy"]["require_approval"] is True and detail["policy"]["min_approvals"] == 1
+    assert c.get(f"/api/namespaces/{sit}").json()["policy"]["min_approvals"] == 1
+    listed = {n["id"]: n for n in c.get("/api/namespaces").json()["items"]}
+    assert listed[sit]["policy"]["freeze"]["enabled"] is False
+    assert store.get_namespace(sit)["policy"] == {}  # 只补齐接口返回的值，不改写保存的策略
+
+
 def test_environment_profile_defaults_validation_and_edit_conflicts(env):
     c, sit = env["client"], env["sit"]
     listed = c.get("/api/environments").json()

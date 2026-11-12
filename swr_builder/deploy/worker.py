@@ -9,6 +9,9 @@
 - 每次读写 Kubernetes 前确认租约仍有效；状态更新都带 fencing token，过期的 worker 无法覆盖结果
 - 租约过期仍处于 applying/verifying 的任务被判定为 unknown（无法确认集群状态，需人工核对），释放服务的发布槽
 - 主循环捕获异常并退避，单次数据库或代码错误不会让 worker 退出
+
+部署中心开关（系统设置 › 启用部署中心）关闭时：不领取新任务，排队中的任务取消；已领取的任务在写入集群前
+停止并取消，已开始写入的任务照常完成（中途停止会让集群处于不确定状态）。
 """
 from __future__ import annotations
 
@@ -43,11 +46,17 @@ IDLE_POLL_SECONDS = 0.5
 ERROR_BACKOFF_SECONDS = 5
 APPROVAL_EXPIRY_HOURS = 24
 MAX_ROLLOUT_SECONDS = 3600
+DISABLED_POLL_SECONDS = 2
 FINAL_STATUSES = {"success", "failed", "cancelled", "unknown", "expired"}
+DEPLOY_DISABLED = "部署中心已关闭，发布已取消，未写入集群；开启后请重新提交"
 
 
 class ReturnedToApproval(Exception):
     """发布策略变化后审批人数不足，任务已退回审批队列。"""
+
+
+class DeployDisabled(Exception):
+    """系统设置关闭了“启用部署中心”：写入集群前停止，任务标记为已取消。"""
 
 
 class ServiceDeploymentWorker:
@@ -76,6 +85,11 @@ class ServiceDeploymentWorker:
                 if now - last_maintenance >= 30:
                     self._maintenance()
                     last_maintenance = now
+                if not self.settings.general.deploy_enabled:
+                    # 部署中心关闭：不领取新的发布；排队中的发布直接取消，避免重新开启后旧的发布突然执行
+                    self._cancel_queued()
+                    await asyncio.sleep(DISABLED_POLL_SECONDS)
+                    continue
                 deployment = self.store.claim_next_service_deployment(self.worker_id, lease_seconds=LEASE_SECONDS)
                 if deployment is None:
                     await asyncio.sleep(IDLE_POLL_SECONDS)
@@ -94,6 +108,16 @@ class ServiceDeploymentWorker:
             "deployment lease expired; worker stopped responding, verify cluster state before resubmitting")
         if stale:
             logger.warning("%s 个发布任务的租约已过期，已标记为结果待确认", stale)
+
+    def _cancel_queued(self) -> None:
+        cancelled = self.store.cancel_queued_service_deployments(DEPLOY_DISABLED)
+        if cancelled:
+            logger.warning("部署中心已关闭，取消了 %s 个排队中的发布", len(cancelled))
+        for deployment_id in cancelled:
+            self.store.add_audit("service-worker", "deploy.cancelled", str(deployment_id), "deploy center disabled")
+            record = self.store.get_deployment(deployment_id)
+            if record:
+                self.events.emit("deploy.failed", {"deployment": record})
 
     def log_path(self, deployment_id: int):
         return self.settings.data_path / "deployments" / str(deployment_id) / "deploy.log"
@@ -139,6 +163,14 @@ class ServiceDeploymentWorker:
                 self._fail(deployment_id, token, progress, RuntimeError("deployment lease lost while returning to approval"), log)
             else:
                 log.info("发布策略已变化，任务退回审批队列")
+        except DeployDisabled as exc:
+            if progress["write_started"]:  # 不会发生：只在写入集群前检查
+                self._fail(deployment_id, token, progress, RuntimeError(str(exc)), log)
+            else:
+                log.info(str(exc))
+                self.store.update_service_deployment(deployment_id, self.worker_id, token, status="cancelled",
+                                                     error=str(exc), finished_at=utcnow(), lease_owner=None,
+                                                     lease_until=None)
         except asyncio.CancelledError:
             if self.store.service_deployment_lease_valid(deployment_id, self.worker_id, token):
                 written = progress["write_started"]
@@ -184,7 +216,9 @@ class ServiceDeploymentWorker:
                 logger.exception("发布任务 #%s 续租出错", deployment_id)
 
     def _precheck(self, deployment: Dict[str, Any], namespace: Dict[str, Any]) -> None:
-        """发起人仍有权限、策略未阻止、审批人数满足、镜像组织在允许范围内。领取后与写入前各检查一次。"""
+        """部署中心开启、发起人仍有权限、策略未阻止、审批人数满足、镜像组织在允许范围内。领取后与写入前各检查一次。"""
+        if not self.settings.general.deploy_enabled:
+            raise DeployDisabled(DEPLOY_DISABLED)
         actor = self.store.get_user(int(deployment["created_by"])) if deployment.get("created_by") else None
         if (not actor or not actor["enabled"] or actor["must_change_password"]
                 or not load_principal(self.store, actor).can_namespace(namespace["id"], "service.deploy")):

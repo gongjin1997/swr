@@ -11,7 +11,7 @@ from swr_builder.security import hash_password
 from swr_builder.services import releases
 from swr_builder.store import IntegrityViolation
 from swr_builder.web.guard import requires
-from swr_builder.web.permissions import collect_route_permissions
+from swr_builder.web.permissions import DEPLOY_MODULE_ROUTES, ROUTE_TABLE, collect_route_permissions, match_route
 from tests.dbutil import new_store
 from tests.test_accounts_settings import HEAD, login
 
@@ -76,6 +76,28 @@ def test_routes_must_declare_known_permissions():
 
     with pytest.raises(RuntimeError, match='未登记的权限'):
         collect_route_permissions([router])
+
+
+def test_deploy_module_routes_are_declared():
+    """部署中心开关覆盖的路由：发布记录、审批与日志，旧部署目标，以及服务的发布、回滚、重新发布、接管与扩缩容。
+    服务、配置、运行状态和清单预览不受开关影响。"""
+    legacy = {(m, p) for m, p, _ in ROUTE_TABLE if p.startswith(('/api/deploy/', '/api/deployments'))}
+    releases_routes = {('POST', f'/api/services/{{id}}/{name}')
+                       for name in ('deployments', 'rollback', 'restart', 'adopt', 'scale')}
+    assert legacy and DEPLOY_MODULE_ROUTES == legacy | releases_routes
+    assert ('GET', '/api/services/{id}/runtime') not in DEPLOY_MODULE_ROUTES
+    assert match_route('/api/services/7/rollback', 'POST') == (AUTHENTICATED_ROUTE, True)
+    assert match_route('/api/services/7', 'GET') == (AUTHENTICATED_ROUTE, False)
+
+
+def test_deploy_switch_closes_release_routes_but_not_services(platform):
+    app, client = platform
+    app.state.settings.general.deploy_enabled = False
+    response = client.post('/api/services/1/rollback', json={}, headers={'Idempotency-Key': 'switch-off-1'})
+    assert response.status_code == 403 and response.json()['code'] == 'MODULE_DISABLED'
+    assert client.post('/api/deployments/1/approve', json={}).json()['code'] == 'MODULE_DISABLED'
+    assert client.get('/api/services').status_code == 200
+    assert client.get('/api/overview').json()['approvals'] == []
 
 
 # ------------------------------------------------------------------ 请求主体

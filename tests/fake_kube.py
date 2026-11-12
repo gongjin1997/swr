@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -36,6 +36,8 @@ class FakeKube:
         self.objects: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
         self.requests: List[Tuple[str, str, Dict[str, str]]] = []
         self.fail: Dict[Tuple[str, str, str], Tuple[int, str]] = {}
+        # 每个请求处理前调用（测试用来在发布进行中改变平台状态）
+        self.hook: Optional[Callable[[httpx.Request], None]] = None
         self.ready = True
         self.version = 1
         self.owners: Dict[Tuple[str, str, str], Dict[str, set]] = {}
@@ -138,6 +140,8 @@ class FakeKube:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path, method = request.url.path, request.method
         params = dict(request.url.params)
+        if self.hook:
+            self.hook(request)
         self.requests.append((method, path, params))
         if path == "/version":
             return httpx.Response(200, json={"gitVersion": "v1.31.1"})

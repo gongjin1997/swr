@@ -41,7 +41,7 @@ const tab = computed<Tab>({
 
 function approvalText(e: EnvironmentDetail): string {
   if (e.policy.require_admin_approval || e.tier === 'prod') return '平台管理员确认'
-  if (e.policy.require_approval || e.tier === 'staging') return `需 ${e.policy.min_approvals} 人审批`
+  if (e.policy.require_approval || e.tier === 'staging') return `需 ${e.policy.min_approvals ?? 1} 人审批`
   return '无需审批'
 }
 

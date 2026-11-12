@@ -53,6 +53,11 @@
   - 接管与导入：`POST /api/services/{id}/adopt`、`POST /api/environments/{id}/import/analyze`、`POST /api/environments/{id}/import/apply`。
 - `POST /api/services` 接受 `mode: managed` 和服务层 `config`。
 - 新权限：`service.create`、`environment.config`、`config.manage`、`secret.view`、`certificate.view`、`certificate.manage`。新增内置角色“配置管理员”；命名空间管理员与项目管理员获得本范围的配置权限。
+- 修复：系统设置关闭“启用部署中心”后，服务的发布、回滚、重新发布、接管与扩缩容接口仍能提交，不需要审批的发布照常执行（此前只拦截 `/api/deploy/` 与 `/api/deployments`）。现在：
+  - 这些接口返回 403 `MODULE_DISABLED`；部署模块的路由在定义处用 `@deploy_module` 标记，不再按路径前缀判断；
+  - worker 不再领取发布，排队中的发布取消，已领取的发布在写入集群前停止；已开始写入的发布照常完成；
+  - 工作台不列“待我审批”，服务详情与导入页面隐藏发布、回滚、接管与审批操作。
+- 修复：早期保存、缺少字段的命名空间策略显示为“需 undefined 人审批”。命名空间与环境接口现在返回按默认值补齐的策略，与发布流程实际使用的一致。
 
 **工程**
 - CI 在 PostgreSQL 16 与 openGauss 5.0 上各运行一遍后端测试。`tests/fake_kube.py` 模拟 Kubernetes API，支持 Server-Side Apply。

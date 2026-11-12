@@ -7,11 +7,13 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+from swr_builder.access import load_principal
 from swr_builder.config import Settings
 from swr_builder.delivery.render import ConfigObject, RenderInputs, render
 from swr_builder.delivery.spec import default_spec, normalize_managed_spec
 from swr_builder.main import create_app
 from swr_builder.security import hash_password
+from swr_builder.services import releases
 from swr_builder.services.environments import merged_profile
 from tests.fake_kube import FakeKube
 from tests.test_accounts_settings import HEAD, login
@@ -384,6 +386,62 @@ def test_existing_objects_are_not_overwritten_without_takeover(env):
     assert not [r for r in kube.requests if r[0] == "PATCH" and not r[2].get("dryRun")]
     live = kube.get("deployments", "order-api-app", "orders-sit")
     assert live["spec"]["template"]["spec"]["containers"][0]["image"] == "swr.example/team/legacy:1"
+
+
+def wait_store(store, deployment_id):
+    """部署中心关闭时发布记录接口不可用，直接读数据库等待结果。"""
+    for _ in range(400):
+        record = store.get_deployment(deployment_id)
+        if record["status"] in FINAL:
+            return record
+        time.sleep(0.03)
+    raise AssertionError("发布超时")
+
+
+def test_deploy_center_switch_blocks_submission_and_execution(env):
+    """关闭“启用部署中心”：发布、回滚、重新发布、接管接口返回 MODULE_DISABLED；排队中的发布被取消；
+    已领取的发布在写入集群前停止。服务、运行状态和清单预览仍可用。"""
+    app, client, kube, store = env["app"], env["client"], env["kube"], env["store"]
+    general = app.state.settings.general
+    service = create_service(env)
+    sid = service["id"]
+    general.deploy_enabled = False
+    try:
+        for path, body in (("deployments", {"job_id": env["jobs"][0]}), ("rollback", {"target_deployment_id": 1}),
+                           ("restart", {}), ("adopt", {})):
+            response = client.post(f"/api/services/{sid}/{path}", json=body,
+                                   headers={"Idempotency-Key": f"disabled-{path}-{time.time_ns()}"})
+            assert response.status_code == 403 and response.json()["code"] == "MODULE_DISABLED", (path, response.text)
+        assert client.get("/api/deployments").json()["code"] == "MODULE_DISABLED"
+        assert client.get(f"/api/services/{sid}").status_code == 200
+        assert client.get(f"/api/services/{sid}/runtime").status_code == 200
+        assert client.post(f"/api/services/{sid}/render", json={"dry_run": True}).status_code == 200
+        assert client.get("/api/overview").json()["approvals"] == []
+        # 关闭前已排队、尚未领取的发布（这里直接经服务层提交）：worker 取消，不写入集群
+        admin = load_principal(store, store.get_user_by_name("admin"))
+        queued = releases.submit(store, admin, sid, "deploy", {"job_id": env["jobs"][0]}, f"queued-{time.time_ns()}")
+        record = wait_store(store, queued["id"])
+        assert record["status"] == "cancelled" and "部署中心已关闭" in record["error"]
+        assert not [r for r in kube.requests if r[0] == "PATCH" and not r[2].get("dryRun")]  # 预览只做 dry-run
+    finally:
+        general.deploy_enabled = True
+
+    # 已领取的发布：服务端校验期间关闭开关，写入前停止
+    def switch_off(request):
+        if request.method == "PATCH" and request.url.params.get("dryRun"):
+            general.deploy_enabled = False
+    kube.hook = switch_off
+    try:
+        response = client.post(f"/api/services/{sid}/deployments", json={"job_id": env["jobs"][0]},
+                               headers={"Idempotency-Key": f"claimed-{time.time_ns()}"})
+        assert response.status_code == 202, response.text
+        record = wait_store(store, response.json()["id"])
+        assert record["status"] == "cancelled" and "未写入集群" in record["error"]
+        assert not [r for r in kube.requests if r[0] == "PATCH" and not r[2].get("dryRun")]
+    finally:
+        kube.hook = None
+        general.deploy_enabled = True
+    assert deploy(env, sid)["status"] == "success"
 
 
 def test_permissions_for_managed_services(env):

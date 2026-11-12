@@ -16,6 +16,7 @@ import { notifyError, notifySuccess, useAction } from '@/composables/useAction'
 import { usePagination } from '@/composables/usePagination'
 import { CONFIG_KIND_TEXT, CONFIG_SCOPE_TEXT, IMPORT_ACTION_TAG, IMPORT_ACTION_TEXT, TIER_TEXT } from '@/constants'
 import { usePlatform } from '@/stores/platform'
+import { useSession } from '@/stores/session'
 import { copyText } from '@/utils/format'
 
 interface Choice {
@@ -28,8 +29,11 @@ const props = defineProps<{ id: number }>()
 const route = useRoute()
 const router = useRouter()
 const platform = usePlatform()
+const session = useSession()
 const { busy, run } = useAction()
 const env = ref<EnvironmentDetail | null>(null)
+/** 接管发布需要部署中心开启，并且有该环境的服务发布权限。 */
+const canAdopt = computed(() => session.deployEnabled && session.canNamespace(props.id, 'service.deploy'))
 const projects = ref<Project[]>([])
 const step = ref(0)
 const report = ref<ImportReport | null>(null)
@@ -382,12 +386,15 @@ onMounted(load)
             <template #default="{ row }">
               <template v-if="row.service_id && (row.status === 'created' || row.status === 'converted')">
                 <span v-if="adopted[row.service_id]" class="hint">{{ adopted[row.service_id] }}</span>
-                <el-button v-else link type="primary" :disabled="busy" @click="adopt(row.service_id, row.name)">接管发布</el-button>
+                <el-button v-else-if="canAdopt" link type="primary" :disabled="busy" @click="adopt(row.service_id, row.name)">接管发布</el-button>
+                <span v-else class="hint">{{ session.deployEnabled ? '没有发布权限' : '部署中心已关闭' }}</span>
               </template>
             </template>
           </el-table-column>
         </el-table>
-        <el-alert v-if="created.length" type="info" :closable="false" show-icon class="section-gap"
+        <el-alert v-if="created.length && !session.deployEnabled" type="warning" :closable="false" show-icon class="section-gap"
+          title="部署中心已关闭，暂时不能接管发布；开启后在服务详情中点“接管发布”。在此之前平台不会修改集群中的这些对象。" />
+        <el-alert v-else-if="created.length" type="info" :closable="false" show-icon class="section-gap"
           title="建议先在服务的“对象清单”中做服务端校验，确认与线上的差异后再接管发布；接管发布按环境的审批策略执行。" />
         <div class="actions">
           <el-button @click="step = 0">继续导入</el-button>

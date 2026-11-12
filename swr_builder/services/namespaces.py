@@ -57,6 +57,11 @@ def effective_policy(policy: Any) -> Dict[str, Any]:
     return result
 
 
+def namespace_view(namespace: Dict[str, Any]) -> Dict[str, Any]:
+    """接口返回的命名空间：策略按默认值补齐，与发布流程实际使用的策略一致（早期保存的策略可能缺少后来新增的键）。"""
+    return {**namespace, "policy": effective_policy(namespace.get("policy"))}
+
+
 def required_approvals(policy: Dict[str, Any], tier: str) -> int:
     """UAT/预生产与生产发布始终至少需要一名独立审批人。"""
     if policy.get("require_approval", True) or policy.get("require_admin_approval", False) or tier in {"staging", "uat", "prod"}:

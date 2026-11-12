@@ -56,7 +56,8 @@ type Tab = (typeof TABS)[number]
 const tab = computed<Tab>({
   get: () => {
     const value = String(route.query.tab ?? 'overview') as Tab
-    return TABS.includes(value) && (value !== 'manifest' || managed.value) ? value : 'overview'
+    return TABS.includes(value) && (value !== 'manifest' || managed.value) && (value !== 'deployments' || session.deployEnabled)
+      ? value : 'overview'
   },
   set: (value) => { void router.replace({ query: { ...route.query, tab: value } }) },
 })
@@ -105,6 +106,11 @@ const { run: pollRuntime } = usePolling(async (isCurrent) => {
 }, 5000)
 
 async function loadDeployments() {
+  if (!session.deployEnabled) {  // 部署中心关闭时发布记录接口不可用
+    deployments.value = []
+    lastSuccess.value = null
+    return
+  }
   try {
     const [page, success] = await Promise.all([
       deploymentApi.list({ service_id: props.id, limit: deploymentPage.pageSize.value, offset: deploymentPage.offset.value }),
@@ -296,12 +302,17 @@ onMounted(load)
         </div>
         <div class="card">
           <span class="label">最近一次成功发布</span>
-          <b>{{ lastSuccess ? `#${lastSuccess.id} ${DEPLOYMENT_KIND_TEXT[lastSuccess.kind] ?? lastSuccess.kind}` : '尚未发布' }}</b>
-          <span class="hint">{{ lastSuccess ? `${fmtAgo(lastSuccess.finished_at || lastSuccess.created_at)} · ${lastSuccess.operator}` : '' }}</span>
+          <template v-if="session.deployEnabled">
+            <b>{{ lastSuccess ? `#${lastSuccess.id} ${DEPLOYMENT_KIND_TEXT[lastSuccess.kind] ?? lastSuccess.kind}` : '尚未发布' }}</b>
+            <span class="hint">{{ lastSuccess ? `${fmtAgo(lastSuccess.finished_at || lastSuccess.created_at)} · ${lastSuccess.operator}` : '' }}</span>
+          </template>
+          <template v-else><b>—</b><span class="hint">部署中心已关闭</span></template>
         </div>
       </div>
 
-      <el-alert v-if="needsAdopt" type="warning" :closable="false" show-icon class="section-gap"
+      <el-alert v-if="!session.deployEnabled" type="info" :closable="false" show-icon class="section-gap"
+        title="部署中心已关闭（系统设置 › 启用部署中心）：不能发布、回滚、接管或审批；运行状态、配置与对象清单仍可查看。" />
+      <el-alert v-if="needsAdopt && session.deployEnabled" type="warning" :closable="false" show-icon class="section-gap"
         title="集群中已有同名对象，尚未由平台接管">
         <template #default>第一次下发请使用“接管发布”：镜像沿用正在运行的版本，平台按配置接管 Deployment、Service、Ingress 等对象；普通发布会被拒绝。可以先在“对象清单”中做服务端校验，查看与线上的差异。</template>
       </el-alert>
@@ -356,7 +367,7 @@ onMounted(load)
             <ManifestPanel :service="service" />
           </el-tab-pane>
 
-          <el-tab-pane :label="`发布记录（${deploymentPage.total.value}）`" name="deployments">
+          <el-tab-pane v-if="session.deployEnabled" :label="`发布记录（${deploymentPage.total.value}）`" name="deployments">
             <el-table :data="deployments" empty-text="暂无发布">
               <el-table-column label="#" width="80"><template #default="{ row }"><span class="mono">#{{ row.id }}</span></template></el-table-column>
               <el-table-column label="类型" width="90"><template #default="{ row }">{{ DEPLOYMENT_KIND_TEXT[row.kind] ?? row.kind }}</template></el-table-column>
@@ -375,7 +386,7 @@ onMounted(load)
                   <el-button v-if="row.can_approve" link type="primary" :disabled="busy" @click="decide(row, true)">批准</el-button>
                   <el-button v-if="row.can_reject" link type="danger" :disabled="busy" @click="decide(row, false)">拒绝</el-button>
                   <el-button link @click="logId = row.id">详情</el-button>
-                  <el-button v-if="row.status === 'success' && can('service.rollback')" link type="warning" @click="rollback(row)">回滚到此</el-button>
+                  <el-button v-if="session.deployEnabled && row.status === 'success' && can('service.rollback')" link type="warning" @click="rollback(row)">回滚到此</el-button>
                 </template>
               </el-table-column>
             </el-table>

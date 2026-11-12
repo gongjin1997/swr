@@ -56,7 +56,7 @@ async def info(ctx: Ctx, user: User):
 @authenticated
 async def overview(ctx: Ctx, me: Me):
     """工作台概览：可见范围内的项目、应用、服务、构建统计与待我审批的发布。"""
-    return build_overview(ctx.store, me)
+    return build_overview(ctx.store, me, ctx.settings.general.deploy_enabled)
 
 
 async def _ping(client: RegistryClient, message: str):
