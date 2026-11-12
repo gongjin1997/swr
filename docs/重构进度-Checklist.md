@@ -513,22 +513,26 @@ platform < project < environment < 资源绑定导出 < service
 
 ## 进度跟踪
 
-**当前阶段**：后端实施中（阶段 1-4 部分完成）
+**当前阶段**：后端基本完成，准备编写集成测试
 **已完成**：
 - [x] 设计决策文档
 - [x] 完整实施 checklist
-- [x] 阶段 1：权限与 Schema（migration 5）
-- [x] 阶段 2：资源类型注册与纯函数（delivery/resources.py）
-- [x] 阶段 3：资源与预置的 store 层（store/resources.py, store/presets.py）
-- [x] 阶段 4：资源与预置的 services 层（services/resources.py, services/presets.py）— 基础版本
+- [x] 阶段 1：权限与 Schema（migration 5）— commit 7002e0b
+- [x] 阶段 2：资源类型注册与纯函数（delivery/resources.py）— commit 7002e0b
+- [x] 阶段 3：资源与预置的 store 层 — commit 7002e0b
+- [x] 阶段 4：资源与预置的 services 层 — commit f9b9ba0
+- [x] 阶段 5：配置解析层集成（delivery/resolve.py）— commit 918c485
+- [x] 阶段 8：API 路由（api/resources.py, api/presets.py）— commit 76cd788
 
 **验证结果**：
-- commit 7002e0b：阶段 1-3 完成，211 passed
-- 阶段 4：模块导入成功，基础功能测试通过
+- 所有阶段：211 passed（现有测试无破坏）
+- API 路由：应用正常启动，18 个新路由加载成功
+
+**已跳过阶段**：
+- 阶段 6：导入推断（delivery/importer.py）— 非关键路径，可后续补充
+- 阶段 7：服务与环境 API 修改 — catalog.create_service 等需接受 bindings 参数
 
 **下一步**：
-- 阶段 5：配置解析层集成（delivery/resolve.py 增加绑定层）
-- 阶段 6：导入推断（delivery/importer.py）
-- 阶段 7：服务与环境 API 修改
-- 阶段 8：API 路由（api/resources.py, api/presets.py）
-- 阶段 9：完整测试（tests/test_resources.py）
+- 阶段 9：编写 tests/test_resources.py（基础集成测试）
+- 修复阶段 7：services/catalog.py 接受 bindings
+- 前端实施（约 11k 行，17 个页面/组件）

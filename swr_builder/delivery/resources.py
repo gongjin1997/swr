@@ -206,14 +206,12 @@ def validate_attributes(type_name: str, attrs: Dict[str, Any], box: Optional[Sec
         value = attrs.get(name)
         required = definition.get("required", False)
 
-        # 必填检查
-        if required and (value is None or value == ""):
-            raise ValueError(f"属性 {definition['label']} ({name}) 为必填项")
-
         # 可选属性未提供时使用默认值或跳过
         if value is None or value == "":
             if "default" in definition:
                 value = definition["default"]
+            elif required:
+                raise ValueError(f"属性 {definition['label']} ({name}) 为必填项")
             else:
                 continue
 
