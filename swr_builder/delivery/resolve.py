@@ -1,6 +1,6 @@
-"""收集渲染输入：环境档案、负载均衡入口、四层配置集（平台 → 项目 → 环境 → 服务）的版本与值。
+"""收集渲染输入：环境档案、负载均衡入口、四层配置集（平台 → 项目 → 环境 → 资源绑定 → 服务）的版本与值。
 
-提交发布时记录"快照"（用到的每个配置集版本、环境档案与负载均衡入口的内容），审批人批准的就是这份快照；
+提交发布时记录"快照"（用到的每个配置集版本、环境档案与负载均衡入口的内容、资源版本），审批人批准的就是这份快照；
 worker 下发、回滚、重新发布都按快照重新渲染，期间别人修改配置不会改变已提交的发布。
 快照不含敏感值：敏感值在下发时才按快照中的版本解密。
 """
@@ -17,7 +17,7 @@ from ..store import Store
 from .render import ConfigObject, RenderInputs
 from .spec import SERVICE_FILES, check_resources, effective_resources, ingress_host, object_names
 
-SCOPE_ORDER = {"platform": 0, "project": 1, "environment": 2, "service": 3}
+SCOPE_ORDER = {"platform": 0, "project": 1, "environment": 2, "binding": 2.5, "service": 3}
 MAX_OBJECT_BYTES = 1000 * 1024
 FILE_KINDS = ("files", "secret_files")
 
