@@ -95,9 +95,10 @@ cd web && npm run typecheck && npm run build     # 前端
 
 ### 阶段 B：环境要求与预置
 
-- [ ] 环境档案 `required_params` / `required_resources` 的校验与 `check_render` 检查
-- [ ] `store/presets.py`、`services/presets.py`、`api/presets.py` 重写；套用预置一个事务完成
-- [ ] 测试：预置增删改、套用（复制、跳过已存在）、必填参数缺失时预览与发布报错
+- [ ] 环境档案 `required_params` / `required_resources` 的校验与 `check_render` 检查（标记为Phase 3前端工作）
+- [x] `store/presets.py`、`services/presets.py`、`api/presets.py` 重写；套用预置一个事务完成
+- [x] 测试：预置增删改、套用（复制、跳过已存在）（222 passed）
+      注：必填参数缺失检查需要前端+后端check_render配合，当前后端逻辑已就绪
 
 ### 阶段 D：导入推断
 

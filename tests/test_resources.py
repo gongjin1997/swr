@@ -313,3 +313,46 @@ def test_apply_preset_to_environment():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_infer_resources():
+    """测试资源推断"""
+    from swr_builder.delivery.importer import infer_resources
+
+    # 数据库
+    assert "gauss_db" in infer_resources(["DB_HOST", "DB_PORT", "DB_USER"])
+    assert "gauss_db" in infer_resources(["DATABASE_HOST", "DATABASE_PORT"])
+    assert "gauss_db" in infer_resources(["POSTGRES_HOST"])
+
+    # Redis
+    assert "redis" in infer_resources(["REDIS_HOST", "REDIS_PORT"])
+    assert "redis" in infer_resources(["REDIS_URL"])
+
+    # Kafka
+    assert "kafka" in infer_resources(["KAFKA_BROKERS"])
+    assert "kafka" in infer_resources(["KAFKA_BOOTSTRAP_SERVERS"])
+
+    # RabbitMQ
+    assert "rabbitmq" in infer_resources(["RABBITMQ_HOST"])
+    assert "rabbitmq" in infer_resources(["RABBITMQ_URL"])
+
+    # OBS
+    assert "obs" in infer_resources(["S3_ENDPOINT", "S3_ACCESS_KEY"])
+    assert "obs" in infer_resources(["OBS_ENDPOINT"])
+
+    # MongoDB
+    assert "mongodb" in infer_resources(["MONGO_HOST"])
+    assert "mongodb" in infer_resources(["MONGODB_HOST"])
+    assert "mongodb" in infer_resources(["MONGO_URL"])
+
+    # 组合
+    result = infer_resources(["DB_HOST", "REDIS_HOST", "KAFKA_BROKERS"])
+    assert "gauss_db" in result
+    assert "redis" in result
+    assert "kafka" in result
+
+    # 空列表
+    assert infer_resources([]) == []
+
+    # 无关键字
+    assert infer_resources(["FOO", "BAR", "BAZ"]) == []

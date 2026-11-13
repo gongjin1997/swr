@@ -463,10 +463,20 @@ def analyze(objects: List[Dict[str, Any]], namespace: str) -> Dict[str, Any]:
             continue
         services.append(_service_spec(draft, index, profile, ingress_profile, entries, common_env, common_secret,
                                       env_maps, secret_maps, source_namespace))
+
+    # 推断资源：收集所有服务的环境变量 key
+    all_env_keys = set()
+    for service in services:
+        if service.get("supported") and "live_env" in service:
+            all_env_keys.update(service["live_env"].keys())
+        if service.get("supported") and "live_secret_env" in service:
+            all_env_keys.update(service["live_secret_env"].keys())
+    inferred_resources = infer_resources(list(all_env_keys))
+
     return {"source_namespace": source_namespace, "counts": {k: len(v) for k, v in index.by_kind.items()},
             "ignored": dict(index.ignored), "profile": profile, "ingress": ingress_profile,
             "env": common_env, "secret_env": common_secret, "files": files, "services": services,
-            "warnings": warnings, "unused": unused}
+            "warnings": warnings, "unused": unused, "inferred_resources": inferred_resources}
 
 
 def _service_spec(draft: Dict[str, Any], index: _Index, profile: Dict[str, Any], ingress_profile: Optional[Dict[str, Any]],
@@ -594,3 +604,44 @@ def _service_spec(draft: Dict[str, Any], index: _Index, profile: Dict[str, Any],
         "live_env": env_data, "live_secret_env": secret_data,
         "objects": objects, "warnings": warnings,
     }
+
+
+def infer_resources(env_keys: List[str]) -> List[str]:
+    """根据环境变量名推断服务可能需要的资源类型（只给类型，不给值）。
+
+    推断规则：
+    - DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME → gauss_db 系列
+    - REDIS_HOST/REDIS_PORT/REDIS_PASSWORD → redis
+    - KAFKA_BROKERS/KAFKA_BOOTSTRAP_SERVERS → kafka
+    - RABBITMQ_HOST/RABBITMQ_PORT → rabbitmq
+    - S3_ENDPOINT/S3_ACCESS_KEY/S3_SECRET_KEY → obs
+    - MONGO_HOST/MONGO_PORT → mongodb
+    """
+    keys_set = set(k.upper() for k in env_keys)
+    inferred = []
+
+    # 数据库相关（GaussDB 系列）
+    if any(k in keys_set for k in ["DB_HOST", "DATABASE_HOST", "POSTGRES_HOST", "POSTGRESQL_HOST"]):
+        inferred.append("gauss_db")
+
+    # Redis
+    if "REDIS_HOST" in keys_set or "REDIS_URL" in keys_set:
+        inferred.append("redis")
+
+    # Kafka
+    if any(k in keys_set for k in ["KAFKA_BROKERS", "KAFKA_BOOTSTRAP_SERVERS", "KAFKA_HOST"]):
+        inferred.append("kafka")
+
+    # RabbitMQ
+    if "RABBITMQ_HOST" in keys_set or "RABBITMQ_URL" in keys_set:
+        inferred.append("rabbitmq")
+
+    # OBS (S3)
+    if any(k in keys_set for k in ["S3_ENDPOINT", "S3_ACCESS_KEY", "OBS_ENDPOINT", "OBS_ACCESS_KEY"]):
+        inferred.append("obs")
+
+    # MongoDB
+    if "MONGO_HOST" in keys_set or "MONGODB_HOST" in keys_set or "MONGO_URL" in keys_set:
+        inferred.append("mongodb")
+
+    return sorted(set(inferred))
