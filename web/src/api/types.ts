@@ -722,6 +722,15 @@ export interface Service {
   updated_at: string
 }
 
+export interface ServiceCreate {
+  name: string
+  namespace_id: number
+  app_id?: number
+  mode: ServiceMode
+  spec: ImageOnlySpec | ManagedSpec
+  bindings?: { resource_id: number; alias: string }[]
+}
+
 export interface ConfigPin {
   set_id: number
   scope_type: ConfigScope
@@ -1243,15 +1252,11 @@ export interface Preset {
     name: string
     entries: ConfigEntryInput[]
   }[]
-  required_resource_types: ResourceType[]
-  required_params: {
-    key: string
-    label: string
-    required?: boolean
-  }[]
+  version: number
   created_at: string
   updated_at: string
   created_by: number
+  updated_by: number | null
 }
 
 export interface CreatePresetRequest {
@@ -1263,12 +1268,7 @@ export interface CreatePresetRequest {
     name: string
     entries: ConfigEntryInput[]
   }[]
-  required_resource_types: ResourceType[]
-  required_params: {
-    key: string
-    label: string
-    required?: boolean
-  }[]
+  base_version?: number
 }
 
 export interface ApplyPresetRequest {

@@ -15,7 +15,7 @@ const router = useRouter()
 const presets = ref<Preset[]>([])
 const loading = ref(false)
 
-const canManage = session.hasPermission('resource.manage')
+const canManage = session.can('resource.manage')
 
 async function load() {
   loading.value = true
@@ -30,19 +30,20 @@ async function load() {
   }
 }
 
-const [doDelete, deleting] = useAction(
-  async (preset: Preset) => {
+const deleteAction = useAction()
+
+async function handleDelete(preset: Preset) {
+  await deleteAction.run(async () => {
     await ElMessageBox.confirm(`确定要删除预置 "${preset.name}" 吗？`, '确认删除', {
       type: 'warning',
       confirmButtonText: '删除',
       cancelButtonText: '取消',
     })
-    await presetApi.delete(preset.id)
+    await presetApi.remove(preset.id)
     ElMessage.success('预置已删除')
     await load()
-  },
-  { confirm: false }
-)
+  })
+}
 
 onMounted(load)
 </script>
@@ -114,8 +115,8 @@ onMounted(load)
             size="small"
             type="danger"
             :icon="Delete"
-            @click="doDelete(row)"
-            :loading="deleting"
+            @click="handleDelete(row)"
+            :loading="deleteAction.busy.value"
           >
             删除
           </el-button>

@@ -1,7 +1,7 @@
 /** 各领域的接口函数。后端所有列表接口返回 { items, total }，删除接口返回 204。 */
 import { http, upload } from './http'
 import type {
-  Account, AccountDetail, ApiToken, App, AppFields, AuditEntry, BindableUser, Binding, BindingRow, Certificate,
+  Account, AccountDetail, ApiToken, App, AppFields, ApplyPresetRequest, AuditEntry, BindableUser, Binding, BindingRow, Certificate,
   CertificateDetail, CertificateOption, CertificateUpload, Cluster, ClusterDiscovery, ConfigChange, ConfigEntry,
   ConfigEntryInput, ConfigKind, ConfigScope, ConfigSet, ConfigVersion, Deployment, DeploymentTicket, DockerfileImport,
   EffectiveConfig, EnvironmentCompare, EnvironmentDetail, EnvironmentProfile, EnvironmentSummary, GrantInput,
@@ -149,6 +149,7 @@ export const environmentApi = {
     http.get<EnvironmentCompare>('/api/environments/compare', { left, right, project_id: projectId ?? undefined }),
   analyzeImport: (id: number, data: ImportSource) => http.post<ImportReport>(`/api/environments/${id}/import/analyze`, data),
   applyImport: (id: number, data: ImportApply) => http.post<ImportResult>(`/api/environments/${id}/import/apply`, data),
+  applyPreset: (id: number, data: ApplyPresetRequest) => http.post(`/api/environments/${id}/apply-preset`, data),
 }
 
 export const ingressProfileApi = {

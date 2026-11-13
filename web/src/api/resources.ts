@@ -6,16 +6,16 @@ import type {
 } from './types'
 
 export const resourceApi = {
-  list: (params?: { scope_type?: string; scope_id?: number; type?: string }) =>
-    http.get<Page<Resource>>('/api/resources', { params }),
+  list: (params?: { scope_type?: string; scope_id?: number; type?: string; limit?: number; offset?: number }) =>
+    http.get<Page<Resource>>('/api/resources', params),
   create: (data: CreateResourceRequest) =>
     http.post<Resource>('/api/resources', data),
   get: (id: number) =>
     http.get<Resource>(`/api/resources/${id}`),
   update: (id: number, data: UpdateResourceRequest) =>
     http.put<Resource>(`/api/resources/${id}`, data),
-  delete: (id: number) =>
-    http.delete(`/api/resources/${id}`),
+  remove: (id: number) =>
+    http.del(`/api/resources/${id}`),
   versions: (id: number) =>
     http.get<Page<ResourceVersion>>(`/api/resources/${id}/versions`),
   getVersion: (id: number, version: number) =>
@@ -30,9 +30,9 @@ export const serviceResourceApi = {
   listBindings: (serviceId: number) =>
     http.get<Page<ResourceBinding>>(`/api/services/${serviceId}/bindings`),
   bind: (serviceId: number, data: BindResourceRequest) =>
-    http.post<{ alias: string; resource_id: number }>(`/api/services/${serviceId}/bindings`, data),
-  unbind: (serviceId: number, alias: string) =>
-    http.delete(`/api/services/${serviceId}/bindings/${alias}`),
+    http.post<{ resource_id: number; alias: string }>(`/api/services/${serviceId}/bindings`, data),
+  unbind: (serviceId: number, resourceId: number) =>
+    http.del(`/api/services/${serviceId}/bindings/${resourceId}`),
   previewExports: (serviceId: number, reveal?: boolean) =>
-    http.get<{ exports: Record<string, ResourceExport> }>(`/api/services/${serviceId}/exports`, { params: { reveal } }),
+    http.get<{ exports: Record<string, ResourceExport> }>(`/api/services/${serviceId}/exports`, { reveal }),
 }

@@ -55,8 +55,10 @@ function openBindDialog() {
   bindDialogVisible.value = true
 }
 
-const [doBind, binding] = useAction(
-  async () => {
+const bindAction = useAction()
+
+async function handleBind() {
+  await bindAction.run(async () => {
     if (!bindForm.value.resource_id || !bindForm.value.alias) {
       ElMessage.error('请填写完整信息')
       return
@@ -68,23 +70,23 @@ const [doBind, binding] = useAction(
     ElMessage.success('资源已绑定')
     bindDialogVisible.value = false
     await loadBindings()
-  },
-  { confirm: false }
-)
+  })
+}
 
-const [doUnbind, unbinding] = useAction(
-  async (alias: string, resourceName: string) => {
+const unbindAction = useAction()
+
+async function handleUnbind(resourceId: number, resourceName: string, alias: string) {
+  await unbindAction.run(async () => {
     await ElMessageBox.confirm(`确定要解绑资源 "${resourceName}" (别名: ${alias}) 吗？`, '确认解绑', {
       type: 'warning',
       confirmButtonText: '解绑',
       cancelButtonText: '取消',
     })
-    await serviceResourceApi.unbind(props.serviceId, alias)
+    await serviceResourceApi.unbind(props.serviceId, resourceId)
     ElMessage.success('资源已解绑')
     await loadBindings()
-  },
-  { confirm: false }
-)
+  })
+}
 
 function getScopeTag(binding: ResourceBinding) {
   return binding.resource.scope_type === 'platform'
@@ -140,8 +142,8 @@ onMounted(loadBindings)
             size="small"
             type="danger"
             :icon="Delete"
-            @click="doUnbind(row.alias, row.resource.name)"
-            :loading="unbinding"
+            @click="handleUnbind(row.resource.id, row.resource.name, row.alias)"
+            :loading="unbindAction.busy.value"
           >
             解绑
           </el-button>
@@ -178,7 +180,7 @@ onMounted(loadBindings)
 
       <template #footer>
         <el-button @click="bindDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="doBind" :loading="binding">确定</el-button>
+        <el-button type="primary" @click="handleBind" :loading="bindAction.busy.value">确定</el-button>
       </template>
     </el-dialog>
   </div>

@@ -32,7 +32,6 @@ const { busy, run } = useAction()
 const applyPresetDialog = ref(false)
 const presets = ref<Preset[]>([])
 const selectedPresetId = ref<number | null>(null)
-const presetParams = ref<Record<string, any>>({})
 
 const TABS = ['overview', 'config', 'profile', 'compare', 'policy', 'members'] as const
 type Tab = (typeof TABS)[number]
@@ -99,7 +98,6 @@ async function showApplyPresetDialog() {
     const result = await presetApi.list()
     presets.value = result.items
     selectedPresetId.value = null
-    presetParams.value = {}
     applyPresetDialog.value = true
   } catch (e) {
     notifyError(e)
@@ -111,25 +109,12 @@ async function applyPreset() {
   await run(async () => {
     await environmentApi.applyPreset(env.value!.id, {
       preset_id: selectedPresetId.value!,
-      params: presetParams.value,
     })
     applyPresetDialog.value = false
     await load()
     refreshEffective()
   }, '预置已应用')
 }
-
-watch(() => selectedPresetId.value, (presetId) => {
-  if (presetId) {
-    const preset = presets.value.find(p => p.id === presetId)
-    if (preset) {
-      presetParams.value = {}
-      preset.required_params.forEach((param: any) => {
-        presetParams.value[param.key] = param.default || ''
-      })
-    }
-  }
-})
 
 watch(() => props.id, load)
 onMounted(load)
@@ -227,21 +212,6 @@ onMounted(load)
             </el-option>
           </el-select>
         </el-form-item>
-
-        <template v-if="selectedPresetId">
-          <el-divider content-position="left">必需参数</el-divider>
-          <el-form-item
-            v-for="param in presets.find(p => p.id === selectedPresetId)?.required_params || []"
-            :key="param.key"
-            :label="param.label"
-            :required="param.required"
-          >
-            <el-input
-              v-model="presetParams[param.key]"
-              :placeholder="param.description"
-            />
-          </el-form-item>
-        </template>
       </el-form>
 
       <template #footer>

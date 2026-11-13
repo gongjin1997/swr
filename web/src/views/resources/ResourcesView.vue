@@ -17,7 +17,7 @@ const resources = ref<Resource[]>([])
 const loading = ref(false)
 const activeTab = ref<ResourceScopeType>('platform')
 
-const canManage = computed(() => session.hasPermission('resource.manage'))
+const canManage = computed(() => session.can('resource.manage'))
 
 async function load() {
   loading.value = true
@@ -32,19 +32,20 @@ async function load() {
   }
 }
 
-const [doDelete, deleting] = useAction(
-  async (resource: Resource) => {
+const deleteAction = useAction()
+
+async function handleDelete(resource: Resource) {
+  await deleteAction.run(async () => {
     await ElMessageBox.confirm(`确定要删除资源 "${resource.name}" 吗？`, '确认删除', {
       type: 'warning',
       confirmButtonText: '删除',
       cancelButtonText: '取消',
     })
-    await resourceApi.delete(resource.id)
+    await resourceApi.remove(resource.id)
     ElMessage.success('资源已删除')
     await load()
-  },
-  { confirm: false }
-)
+  })
+}
 
 function handleTabChange(tab: ResourceScopeType) {
   activeTab.value = tab
@@ -123,8 +124,8 @@ onMounted(load)
             size="small"
             type="danger"
             :icon="Delete"
-            @click="doDelete(row)"
-            :loading="deleting"
+            @click="handleDelete(row)"
+            :loading="deleteAction.busy.value"
           >
             删除
           </el-button>

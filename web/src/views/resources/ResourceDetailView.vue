@@ -38,23 +38,26 @@ async function load() {
   }
 }
 
-const [doDelete, deleting] = useAction(
-  async () => {
+const deleteAction = useAction()
+
+async function handleDelete() {
+  await deleteAction.run(async () => {
     if (!resource.value) return
     await ElMessageBox.confirm(`确定要删除资源 "${resource.value.name}" 吗？`, '确认删除', {
       type: 'warning',
       confirmButtonText: '删除',
       cancelButtonText: '取消',
     })
-    await resourceApi.delete(resourceId.value)
+    await resourceApi.remove(resourceId.value)
     ElMessage.success('资源已删除')
     router.push('/resources')
-  },
-  { confirm: false }
-)
+  })
+}
 
-const [doReveal, revealing] = useAction(
-  async () => {
+const revealAction = useAction()
+
+async function handleReveal() {
+  await revealAction.run(async () => {
     if (revealed.value) {
       revealed.value = false
       revealedData.value = null
@@ -65,9 +68,8 @@ const [doReveal, revealing] = useAction(
       revealed.value = true
       ElMessage.success('敏感信息已解密')
     }
-  },
-  { confirm: false }
-)
+  })
+}
 
 const displayAttributes = computed(() => {
   if (!resource.value) return {}
@@ -98,8 +100,8 @@ onMounted(load)
       <el-button
         v-if="resource.can_reveal"
         :icon="View"
-        @click="doReveal"
-        :loading="revealing"
+        @click="handleReveal"
+        :loading="revealAction.busy.value"
       >
         {{ revealed ? '隐藏' : '显示' }}敏感信息
       </el-button>
@@ -115,8 +117,8 @@ onMounted(load)
         v-if="resource.can_edit"
         type="danger"
         :icon="Delete"
-        @click="doDelete"
-        :loading="deleting"
+        @click="handleDelete"
+        :loading="deleteAction.busy.value"
       >
         删除
       </el-button>

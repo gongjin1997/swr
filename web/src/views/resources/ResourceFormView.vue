@@ -57,43 +57,47 @@ async function loadResource() {
   }
 }
 
-const [doSave, saving] = useAction(async () => {
-  // 提取属性值
-  const attributes: Record<string, any> = {}
-  Object.entries(attributeDefs.value).forEach(([key, def]) => {
-    const value = form.attributes[key]
-    if (value !== undefined && value !== '') {
-      attributes[key] = value
-    } else if (def.default !== undefined) {
-      attributes[key] = def.default
+const saveAction = useAction()
+
+async function handleSave() {
+  await saveAction.run(async () => {
+    // 提取属性值
+    const attributes: Record<string, any> = {}
+    Object.entries(attributeDefs.value).forEach(([key, def]) => {
+      const value = form.attributes[key]
+      if (value !== undefined && value !== '') {
+        attributes[key] = value
+      } else if (def.default !== undefined) {
+        attributes[key] = def.default
+      }
+    })
+
+    if (isEdit.value && resourceId.value && resource.value) {
+      const data: UpdateResourceRequest = {
+        base_version: resource.value.version,
+        attributes,
+        note: form.note || '更新资源属性',
+        description: form.description,
+      }
+      await resourceApi.update(resourceId.value, data)
+      ElMessage.success('资源已更新')
+      router.push(`/resources/${resourceId.value}`)
+    } else {
+      const data: CreateResourceRequest = {
+        scope_type: form.scope_type,
+        scope_id: form.scope_type === 'environment' ? form.scope_id : undefined,
+        type: form.type as ResourceType,
+        name: form.name,
+        description: form.description,
+        attributes,
+        note: form.note || '创建资源',
+      }
+      const created = await resourceApi.create(data)
+      ElMessage.success('资源已创建')
+      router.push(`/resources/${created.id}`)
     }
   })
-
-  if (isEdit.value && resourceId.value && resource.value) {
-    const data: UpdateResourceRequest = {
-      base_version: resource.value.version,
-      attributes,
-      note: form.note || '更新资源属性',
-      description: form.description,
-    }
-    await resourceApi.update(resourceId.value, data)
-    ElMessage.success('资源已更新')
-    router.push(`/resources/${resourceId.value}`)
-  } else {
-    const data: CreateResourceRequest = {
-      scope_type: form.scope_type,
-      scope_id: form.scope_type === 'environment' ? form.scope_id : undefined,
-      type: form.type as ResourceType,
-      name: form.name,
-      description: form.description,
-      attributes,
-      note: form.note || '创建资源',
-    }
-    const created = await resourceApi.create(data)
-    ElMessage.success('资源已创建')
-    router.push(`/resources/${created.id}`)
-  }
-}, { confirm: false })
+}
 
 function validateName(_rule: any, value: string, callback: any) {
   if (!value) {
@@ -204,7 +208,7 @@ onMounted(loadResource)
       </el-form-item>
 
       <el-form-item>
-        <el-button type="primary" @click="doSave" :loading="saving">
+        <el-button type="primary" @click="handleSave" :loading="saveAction.busy.value">
           {{ isEdit ? '保存' : '创建' }}
         </el-button>
         <el-button @click="router.back()">取消</el-button>

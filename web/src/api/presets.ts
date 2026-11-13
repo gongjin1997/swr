@@ -11,8 +11,8 @@ export const presetApi = {
     http.get<Preset>(`/api/presets/${id}`),
   update: (id: number, data: CreatePresetRequest) =>
     http.put<Preset>(`/api/presets/${id}`, data),
-  delete: (id: number) =>
-    http.delete(`/api/presets/${id}`),
+  remove: (id: number) =>
+    http.del(`/api/presets/${id}`),
   apply: (environmentId: number, data: ApplyPresetRequest) =>
     http.post(`/api/environments/${environmentId}/apply-preset`, data),
 }

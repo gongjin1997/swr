@@ -4,10 +4,9 @@ import { ElMessage } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { presetApi } from '@/api'
-import type { ConfigKind, CreatePresetRequest, Preset } from '@/api/types'
+import type { CreatePresetRequest, Preset } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
 import { useAction } from '@/composables/useAction'
-import { getResourceTypeOptions } from '@/utils/resourceTypes'
 
 const route = useRoute()
 const router = useRouter()
@@ -22,8 +21,6 @@ const form = reactive<CreatePresetRequest>({
   description: '',
   profile_template: {},
   default_config_sets: [],
-  required_resource_types: [],
-  required_params: [],
 })
 
 const profileTemplateJson = ref('')
@@ -37,8 +34,7 @@ async function loadPreset() {
     form.description = preset.value.description
     form.profile_template = preset.value.profile_template
     form.default_config_sets = [...preset.value.default_config_sets]
-    form.required_resource_types = [...preset.value.required_resource_types]
-    form.required_params = [...preset.value.required_params]
+    form.base_version = preset.value.version
     profileTemplateJson.value = JSON.stringify(preset.value.profile_template, null, 2)
   } catch (e) {
     ElMessage.error('加载预置失败')
@@ -48,8 +44,10 @@ async function loadPreset() {
   }
 }
 
-const [doSave, saving] = useAction(
-  async () => {
+const saveAction = useAction()
+
+async function handleSave() {
+  await saveAction.run(async () => {
     // 解析 profile_template JSON
     try {
       form.profile_template = profileTemplateJson.value ? JSON.parse(profileTemplateJson.value) : {}
@@ -67,9 +65,8 @@ const [doSave, saving] = useAction(
       ElMessage.success('预置已创建')
       router.push('/presets')
     }
-  },
-  { confirm: false }
-)
+  })
+}
 
 function addConfigSet() {
   form.default_config_sets.push({
@@ -92,18 +89,6 @@ function addConfigEntry(setIndex: number) {
 
 function removeConfigEntry(setIndex: number, entryIndex: number) {
   form.default_config_sets[setIndex].entries.splice(entryIndex, 1)
-}
-
-function addRequiredParam() {
-  form.required_params.push({
-    key: '',
-    label: '',
-    required: false,
-  })
-}
-
-function removeRequiredParam(index: number) {
-  form.required_params.splice(index, 1)
 }
 
 const rules = {
@@ -188,13 +173,6 @@ onMounted(loadPreset)
                   placeholder="VALUE"
                   style="width: 300px"
                 />
-                <el-input-number
-                  v-if="configSet.kind === 'file'"
-                  v-model="entry.size"
-                  placeholder="文件大小"
-                  :min="0"
-                  style="width: 150px"
-                />
                 <el-button size="small" type="danger" :icon="Delete" @click="removeConfigEntry(setIndex, entryIndex)">
                   删除
                 </el-button>
@@ -204,39 +182,8 @@ onMounted(loadPreset)
         </el-form-item>
       </el-card>
 
-      <el-divider content-position="left">必需资源类型</el-divider>
-      <el-form-item label="资源类型">
-        <el-select
-          v-model="form.required_resource_types"
-          multiple
-          placeholder="选择环境必需的资源类型"
-          style="max-width: 600px"
-        >
-          <el-option
-            v-for="option in getResourceTypeOptions()"
-            :key="option.value"
-            :label="option.label"
-            :value="option.value"
-          />
-        </el-select>
-      </el-form-item>
-
-      <el-divider content-position="left">必需参数</el-divider>
-      <el-form-item label=" ">
-        <el-button :icon="Plus" @click="addRequiredParam">添加参数</el-button>
-      </el-form-item>
-
-      <div v-for="(param, index) in form.required_params" :key="index" style="margin-bottom: 12px">
-        <el-space>
-          <el-input v-model="param.key" placeholder="参数 Key" style="width: 200px" />
-          <el-input v-model="param.label" placeholder="参数标签" style="width: 200px" />
-          <el-checkbox v-model="param.required">必填</el-checkbox>
-          <el-button size="small" type="danger" :icon="Delete" @click="removeRequiredParam(index)">删除</el-button>
-        </el-space>
-      </div>
-
       <el-form-item style="margin-top: 24px">
-        <el-button type="primary" @click="doSave" :loading="saving">
+        <el-button type="primary" @click="handleSave" :loading="saveAction.busy.value">
           {{ isEdit ? '保存' : '创建' }}
         </el-button>
         <el-button @click="router.back()">取消</el-button>

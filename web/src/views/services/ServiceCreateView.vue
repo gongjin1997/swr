@@ -20,7 +20,6 @@ import { notifyError, useAction } from '@/composables/useAction'
 import { APPLY_ACTION_TAG, APPLY_ACTION_TEXT, CONFIG_SCOPE_TEXT, TIER_TEXT } from '@/constants'
 import { usePlatform } from '@/stores/platform'
 import { useSession } from '@/stores/session'
-import { getResourceTypeLabel } from '@/utils/resourceTypes'
 
 type Mode = 'managed' | 'image_only'
 const route = useRoute()
@@ -85,8 +84,7 @@ function payload(): ServiceCreate {
   return {
     ...base,
     spec: spec.value,
-    config: { env: entries(config.env), secret_env: entries(config.secret), files: entries(config.files, true) },
-    bindings: bindings.value.length > 0 ? bindings.value : undefined
+    config: { env: entries(config.env), secret_env: entries(config.secret), files: entries(config.files, true) }
   }
 }
 
