@@ -146,7 +146,8 @@ async function next() {
   if (form.mode === 'managed' && step.value === 2) {
     attachProperties()
     step.value = 3
-    await renderPreview(false)
+    // 预览失败不留在空白页：停在当前步骤并提示，用户可以直接点“重新预览”
+    if (!(await renderPreview(false))) step.value = 2
     return
   }
   step.value += 1
@@ -161,8 +162,8 @@ function attachProperties() {
   if (!mount) current.mounts.push({ config: 'properties', path: '/app/config', items: files, volume: '' })
 }
 
-async function renderPreview(dryRun: boolean) {
-  await run(async () => {
+async function renderPreview(dryRun: boolean): Promise<boolean> {
+  return run(async () => {
     preview.value = await serviceApi.previewNew({ ...payload(), dry_run: dryRun })
   }, dryRun ? '服务端校验完成' : undefined)
 }

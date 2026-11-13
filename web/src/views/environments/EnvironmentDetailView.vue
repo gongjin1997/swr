@@ -62,12 +62,14 @@ async function load() {
     env.value = detail
     resetDraft(detail)
     const canListIngress = session.canGlobal('certificate.view') || session.can('environment.config')
+    // 对比下拉框只在第一次进入时读取环境列表，之后复用；切换环境只重新保存环境档案与生效配置
     const [list, profiles] = await Promise.all([
-      environmentApi.list().catch(() => ({ items: [] as EnvironmentSummary[], total: 0 })),
+      environments.value.length ? Promise.resolve(null)
+        : environmentApi.list().catch(() => ({ items: [] as EnvironmentSummary[], total: 0 })),
       canListIngress ? ingressProfileApi.list().catch(() => ({ items: [] as IngressProfile[], total: 0 }))
         : Promise.resolve({ items: [] as IngressProfile[], total: 0 }),
     ])
-    environments.value = list.items
+    if (list) environments.value = list.items
     ingressProfiles.value = profiles.items
   } catch (e) {
     notifyError(e)

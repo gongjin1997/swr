@@ -113,6 +113,12 @@ const rowStatus = (service: Service) => status.value[service.id]
 
 watch(() => pager.rows.value.map((s) => s.id).join(','), () => { void loadStatus() })
 watch(() => [filters.projectId, filters.appId, filters.namespaceId], () => {
+  // 筛选条件变了，先清掉旧结果与旧状态：列表请求还没回来时不应该继续显示上一次的筛选结果
+  status.value = {}
+  void (async () => {
+    await load()
+    await loadStatus()
+  })()
   if (!props.embedded) {
     void router.replace({ query: { project: filters.projectId ? String(filters.projectId) : undefined,
       app: filters.appId ? String(filters.appId) : undefined, namespace: filters.namespaceId ? String(filters.namespaceId) : undefined } })
