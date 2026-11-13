@@ -74,8 +74,9 @@ const pendingRevision = computed(() => !!service.value?.deployed_revision_id
 const configStatus = computed(() => service.value?.config_status)
 const summary = computed(() => runtime.value?.summary)
 /** 托管服务还没有成功的托管发布，而集群中的同名 Deployment 不归平台管理（导入的服务、由纳管转为托管的服务）。 */
-const needsAdopt = computed(() => managed.value && configStatus.value?.deployed === false && !!runtime.value?.found
-  && runtime.value.deployment?.platform_service !== String(service.value?.id))
+// 运行时读取失败时不能拿上一次的旧结果判断：集群里对象可能已经由平台接管
+const needsAdopt = computed(() => managed.value && !runtimeError.value && configStatus.value?.deployed === false
+  && !!runtime.value?.found && runtime.value.deployment?.platform_service !== String(service.value?.id))
 const canAdopt = computed(() => needsAdopt.value && session.deployEnabled && can('service.deploy'))
 /** 不常用或有风险的操作放进“更多”，标题区只保留发布与修改配置。 */
 const moreActions = computed(() => [
