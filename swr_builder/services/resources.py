@@ -157,7 +157,11 @@ def delete_resource(store: Store, me: Principal, resource_id: int) -> None:
     if resource.get("child_count", 0) > 0:
         raise Conflict("该资源有子资源，不能删除")
     if resource.get("binding_count", 0) > 0:
-        raise Conflict(f"资源被 {resource['binding_count']} 个服务使用，不能删除")
+        # 和 XAC 一样，删除被拒时直接告诉用户是谁在用，省得自己去翻
+        users = store.list_resource_bindings_by_resource(resource_id)
+        names = "、".join(f"{u['namespace_name']}/{u['service_name']}" for u in users[:5])
+        more = f" 等 {len(users)} 个服务" if len(users) > 5 else ""
+        raise Conflict(f"资源被 {names}{more} 绑定，不能删除；请先在这些服务中解绑")
     store.delete_resource(resource_id)
 
 

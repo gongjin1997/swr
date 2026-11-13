@@ -214,6 +214,17 @@ class ResourcesMixin:
                 (service_id, resource_id, alias, actor_id, utcnow())
             )
 
+    def list_resource_bindings_by_resource(self: Database, resource_id: int) -> List[Dict[str, Any]]:
+        """哪些服务绑定了这个资源（删除前的引用清单）。"""
+        with self._db() as db:
+            rows = db.execute(
+                "SELECT b.service_id, b.alias, s.name AS service_name, n.name AS namespace_name "
+                "FROM service_resource_bindings b JOIN services s ON s.id = b.service_id "
+                "JOIN namespaces n ON n.id = s.namespace_id "
+                "WHERE b.resource_id = %s AND s.deleted_at IS NULL ORDER BY n.name, s.name",
+                (resource_id,)).fetchall()
+        return [dict(row) for row in rows]
+
     def delete_service_resource_binding(self: Database, service_id: int, resource_id: int) -> bool:
         with self._db() as db:
             return db.execute("DELETE FROM service_resource_bindings WHERE service_id = %s AND resource_id = %s",
