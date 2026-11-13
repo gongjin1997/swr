@@ -107,29 +107,31 @@ cd web && npm run typecheck && npm run build     # 前端
 
 ## 4. 前端
 
-- [ ] 修复 typecheck / build（当前 30 个错误）
-- [ ] `api/resources.ts`、`api/presets.ts`、`api/types.ts` 与后端字段一致
+- [x] 修复 typecheck / build（原来的 30 个错误已清零；`typecheck`、`build` 退出码 0）
+- [x] `api/resources.ts`、`api/presets.ts`、`api/types.ts` 与后端字段一致
 - [ ] 资源：列表（作用域 / 类型筛选、分页、使用数）、新建 / 编辑、详情（版本、谁在用、查看明文）
-- [ ] 服务详情"资源绑定"页签：绑定、解绑、导出变量预览
-- [ ] 新建服务：选择要绑定的资源，预览里能看到导出的变量
+      注：列表与详情尚未接分页与使用数，筛选目前只有作用域页签
+- [x] 服务详情"资源绑定"页签：绑定、解绑、导出变量预览
+- [x] 新建服务：选择要绑定的资源，预览里能看到导出的变量
 - [ ] 环境详情：环境要求（必填参数、应登记的资源类型）、套用预置
-- [ ] 预置：列表、新建 / 编辑
-- [ ] 生效配置面板显示"资源绑定"来源；"配置待生效"显示资源变化
+      注：套用预置已完成；环境要求并入档案，需要在档案编辑器里编辑 `required_params`
+- [x] 预置：列表、新建 / 编辑
+- [x] 生效配置面板显示"资源绑定"来源；"配置待生效"显示资源变化
 - [ ] 菜单、路由、权限显示
 - [ ] 按 `DESIGN.md` §13 检查 1440 / 1280 / 1024 / 390 宽度与深色模式
 
 原有页面的业务问题（逐项核对后再改，核对结果写在这里）：
 
-- [ ] `ServicesView`：筛选变化时没有清空 `statusMap`
-- [ ] `ServiceDetailView`：`needsAdopt` 依赖可能加载失败的运行时数据
-- [ ] `ServiceCreateView`：`attachProperties` 失败后仍继续 `renderPreview`
-- [ ] `EnvironmentDetailView`：为了对比下拉框多调一次 `environmentApi.list`
-- [ ] `DeployDialog`：提示没有区分纳管服务
-- [ ] `BuildView`：切换应用时没有清空 `form.baseTag`
-- [ ] `UsersView`：启用 / 停用会用旧值覆盖 `display_name` / `email`
-- [ ] `JobListView`：关闭抽屉后没有清掉 `?detail=`
-- [ ] 空值显示不统一（`-`、`—`、`未设置`），统一为 `—`
-- [ ] 1280 宽度下列宽溢出：`AppListView`、`ProjectsView`、`UsersView`
+- [x] `ServicesView`：筛选变化时没有清空 `statusMap`（commit `3c6d6a9`）
+- [x] `ServiceDetailView`：`needsAdopt` 依赖可能加载失败的运行时数据（commit `5037a00`）
+- [x] `ServiceCreateView`：`attachProperties` 失败后仍继续 `renderPreview`（commit `3c6d6a9`，预览失败停在配置步骤）
+- [x] `EnvironmentDetailView`：为了对比下拉框多调一次 `environmentApi.list`（commit `3c6d6a9`）
+- [x] `DeployDialog`：提示没有区分纳管服务（commit `ffe2a55` 后的 `9412851` 之前那批）
+- [x] `BuildView`：切换应用时没有清空 `form.baseTag`（已核对：`reset()` 会清空，无需修改）
+- [x] `UsersView`：启用 / 停用会用旧值覆盖 `display_name` / `email`（commit `ffe2a55`）
+- [x] `JobListView`：关闭抽屉后没有清掉 `?detail=`（已核对：`watch(detail)` 会同步查询参数，无需修改）
+- [x] 空值显示不统一（`-`、`—`、`未设置`），统一为 `—`（commit `9412851`）
+- [x] 1280 宽度下列宽溢出：`AppListView`、`ProjectsView`、`UsersView`（commit `2ffc86d`；未在浏览器里目测）
 
 ## 5. 文档
 
