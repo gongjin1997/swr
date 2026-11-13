@@ -50,7 +50,7 @@ const approver = (a: Approval) => a.approver_display_name || a.approver_username
         <span class="hint gap">{{ record.cluster_name }} / {{ record.namespace_name }}</span>
       </el-descriptions-item>
       <el-descriptions-item label="发起人">{{ record.operator }}<span class="hint gap">{{ fmtTime(record.created_at) }}</span></el-descriptions-item>
-      <el-descriptions-item label="构建 / 修订">{{ record.job_id ? `#${record.job_id}` : '线上镜像（接管发布）' }} / {{ record.revision_id ?? '-' }}</el-descriptions-item>
+      <el-descriptions-item label="构建 / 修订">{{ record.job_id ? `#${record.job_id}` : '线上镜像（接管发布）' }} / {{ record.revision_id ?? '—' }}</el-descriptions-item>
       <el-descriptions-item label="申请备注">{{ record.remark || '无' }}</el-descriptions-item>
       <el-descriptions-item label="镜像" :span="2"><span class="mono break-word">{{ record.image }}</span></el-descriptions-item>
     </el-descriptions>
@@ -61,7 +61,7 @@ const approver = (a: Approval) => a.approver_display_name || a.approver_username
           <el-tag size="small" :type="row.decision === 'approved' ? 'success' : 'danger'">{{ row.decision === 'approved' ? '批准' : '拒绝' }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="审批备注" min-width="180"><template #default="{ row }">{{ row.comment || '-' }}</template></el-table-column>
+      <el-table-column label="审批备注" min-width="180"><template #default="{ row }">{{ row.comment || '—' }}</template></el-table-column>
       <el-table-column label="时间" width="170"><template #default="{ row }">{{ fmtTime(row.created_at) }}</template></el-table-column>
     </el-table>
     <div class="status">

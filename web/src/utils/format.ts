@@ -1,5 +1,5 @@
 export function fmtSize(n: number | null | undefined): string {
-  if (n === null || n === undefined) return '-'
+  if (n === null || n === undefined) return '—'
   const units = ['B', 'KB', 'MB', 'GB']
   let value = Number(n)
   let i = 0
@@ -11,7 +11,7 @@ export function fmtSize(n: number | null | undefined): string {
 }
 
 export function fmtTime(iso: string | null | undefined): string {
-  if (!iso) return '-'
+  if (!iso) return '—'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   const p = (x: number) => String(x).padStart(2, '0')
@@ -19,7 +19,7 @@ export function fmtTime(iso: string | null | undefined): string {
 }
 
 export function fmtDuration(start: string | null | undefined, end: string | null | undefined): string {
-  if (!start) return '-'
+  if (!start) return '—'
   const finish = end ? new Date(end).getTime() : Date.now()
   const seconds = Math.max(0, Math.round((finish - new Date(start).getTime()) / 1000))
   return seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${seconds} 秒`
@@ -39,7 +39,7 @@ export function shortDigest(ref: string | null | undefined): string {
 
 /** 与 kubectl 的 AGE 一致的时长：45 秒、12 分钟、3 小时 5 分、2 天 4 小时。 */
 export function fmtAge(iso: string | null | undefined, now: number = Date.now()): string {
-  if (!iso) return '-'
+  if (!iso) return '—'
   const time = new Date(iso).getTime()
   if (Number.isNaN(time)) return '-'
   const seconds = Math.max(0, Math.floor((now - time) / 1000))

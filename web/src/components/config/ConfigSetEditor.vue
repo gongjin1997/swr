@@ -282,7 +282,7 @@ async function compareVersions() {
     <el-table :data="history.items" size="small">
       <el-table-column label="版本" width="80"><template #default="{ row }">v{{ row.number }}</template></el-table-column>
       <el-table-column prop="note" label="修改说明" min-width="180" />
-      <el-table-column label="修改人" width="120"><template #default="{ row }">{{ row.created_by_username || '-' }}</template></el-table-column>
+      <el-table-column label="修改人" width="120"><template #default="{ row }">{{ row.created_by_username || '—' }}</template></el-table-column>
       <el-table-column label="时间" width="170"><template #default="{ row }">{{ fmtTime(row.created_at) }}</template></el-table-column>
     </el-table>
     <div v-if="history.items.length > 1" class="edit-bar">

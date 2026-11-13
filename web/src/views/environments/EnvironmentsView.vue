@@ -67,7 +67,7 @@ onMounted(load)
         <el-table-column label="环境档案" width="110">
           <template #default="{ row }">
             <el-tag v-if="row.profile_version" size="small" type="success" effect="plain">v{{ row.profile_version }}</el-tag>
-            <el-tag v-else size="small" type="info" effect="plain">未设置</el-tag>
+            <el-text v-else type="info">—</el-text>
           </template>
         </el-table-column>
         <el-table-column label="负载均衡入口" min-width="160">

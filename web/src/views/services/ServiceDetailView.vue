@@ -306,11 +306,11 @@ onMounted(load)
         <div class="card">
           <span class="label">就绪副本</span>
           <b class="num">{{ summary ? `${summary.ready} / ${summary.desired}` : '-' }}</b>
-          <span class="hint">已更新 {{ summary?.updated ?? '-' }} · 可用 {{ summary?.available ?? '-' }}</span>
+          <span class="hint">已更新 {{ summary?.updated ?? '—' }} · 可用 {{ summary?.available ?? '—' }}</span>
         </div>
         <div class="card">
           <span class="label">重启次数</span>
-          <b class="num" :class="restartsTone && 'tone-warning'">{{ summary?.restarts ?? '-' }}</b>
+          <b class="num" :class="restartsTone && 'tone-warning'">{{ summary?.restarts ?? '—' }}</b>
           <span class="hint">{{ summary ? `${summary.pods} 个 Pod · ${summary.warning_events} 条警告事件` : '' }}</span>
         </div>
         <div class="card wide">
@@ -340,7 +340,7 @@ onMounted(load)
           <div v-if="pendingRevision">服务配置：当前修订 {{ service.current_revision_id }}，已部署修订 {{ service.deployed_revision_id }}。</div>
           <div v-for="c in configStatus?.changes ?? []" :key="`${c.kind}-${c.name}-${c.set_id ?? ''}`">
             {{ scopeText(c.scope_type) }}层 {{ kindText(c.kind) }} <span class="mono">{{ c.name }}</span>：{{ changeText(c.change) }}
-            <span v-if="c.version != null || c.current != null" class="hint">（已发布 v{{ c.version ?? '-' }} → 当前 v{{ c.current ?? '-' }}）</span>
+            <span v-if="c.version != null || c.current != null" class="hint">（已发布 v{{ c.version ?? '—' }} → 当前 v{{ c.current ?? '—' }}）</span>
           </div>
           <el-button v-if="session.deployEnabled && can('service.deploy') && lastSuccess" size="small" type="primary" class="section-gap"
             @click="publishLatestConfig">沿用当前镜像发布最新配置</el-button>

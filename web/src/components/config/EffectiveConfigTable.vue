@@ -27,7 +27,7 @@ const pager = usePagination(() => rows.value, { size: 20, resetOn: () => keyword
 
 const originTag = (origin: ConfigOrigin) => CONFIG_SCOPE_TAG[origin.scope_type]
 const originText = (origin: ConfigOrigin) => `${CONFIG_SCOPE_TEXT[origin.scope_type]} v${origin.version}`
-const overrideText = (row: EffectiveEntry) => row.overrides.map((o) => CONFIG_SCOPE_TEXT[o.scope_type]).join('、') || '-'
+const overrideText = (row: EffectiveEntry) => row.overrides.map((o) => CONFIG_SCOPE_TEXT[o.scope_type]).join('、') || '—'
 const kindText = (kind: ConfigKind) => CONFIG_KIND_TEXT[kind]
 
 async function load() {

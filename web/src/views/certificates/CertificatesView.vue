@@ -204,7 +204,7 @@ onMounted(load)
           <el-table-column label="文件" min-width="160"><template #default="{ row }"><span class="mono">{{ row.filename }}</span></template></el-table-column>
           <el-table-column label="到期" width="170"><template #default="{ row }">{{ row.not_after ? fmtTime(row.not_after) : '—' }}</template></el-table-column>
           <el-table-column prop="note" label="说明" min-width="140" />
-          <el-table-column label="上传" width="170"><template #default="{ row }">{{ row.created_by_username || '-' }} · {{ fmtTime(row.created_at) }}</template></el-table-column>
+          <el-table-column label="上传" width="170"><template #default="{ row }">{{ row.created_by_username || '—' }} · {{ fmtTime(row.created_at) }}</template></el-table-column>
           <el-table-column v-if="canDownload" width="80">
             <template #default="{ row }"><el-button link type="primary" @click="download(row.number)">下载</el-button></template>
           </el-table-column>

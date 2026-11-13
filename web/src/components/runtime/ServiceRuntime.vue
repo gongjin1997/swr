@@ -38,7 +38,7 @@ const ports = (items: KubeServicePort[]) => items.map((p) =>
   `${p.name ? p.name + ' ' : ''}${p.port}→${p.targetPort}${p.nodePort ? `（节点 ${p.nodePort}）` : ''}`).join('、')
 const strategy = computed(() => {
   const s = props.data?.deployment?.strategy
-  if (!s) return '-'
+  if (!s) return '—'
   return s.type === 'RollingUpdate' ? `滚动更新（最多超出 ${s.max_surge ?? '25%'}，最多不可用 ${s.max_unavailable ?? '25%'}）` : s.type
 })
 /** 镜像缩写：组织/仓库:版本号；按 digest 引用时为 组织/仓库@sha256:前 12 位…。 */
@@ -77,7 +77,7 @@ async function copy(text: string) {
             <el-tag :type="RUNTIME_STATE_TAG[data.deployment.state]" size="small">{{ RUNTIME_STATE_TEXT[data.deployment.state] }}</el-tag>
             <span class="hint gap-l">{{ data.deployment.message }}</span>
           </el-descriptions-item>
-          <el-descriptions-item label="版本（revision）">{{ data.deployment.revision || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="版本（revision）">{{ data.deployment.revision || '—' }}</el-descriptions-item>
           <el-descriptions-item label="副本">
             期望 {{ data.deployment.replicas }} · 已更新 {{ data.deployment.updated_replicas }} · 就绪 {{ data.deployment.ready_replicas }}
             · 可用 {{ data.deployment.available_replicas }}
@@ -98,8 +98,8 @@ async function copy(text: string) {
               <el-button link size="small" @click="copy(c.image)">复制</el-button>
             </div>
             <div class="hint">
-              请求 {{ c.resources.requests.cpu || '-' }} / {{ c.resources.requests.memory || '-' }} · 上限
-              {{ c.resources.limits.cpu || '-' }} / {{ c.resources.limits.memory || '-' }}
+              请求 {{ c.resources.requests.cpu || '—' }} / {{ c.resources.requests.memory || '—' }} · 上限
+              {{ c.resources.limits.cpu || '—' }} / {{ c.resources.limits.memory || '—' }}
             </div>
             <div v-for="(text, kind) in c.probes" :key="kind" class="hint">
               {{ kind === 'startup' ? '启动检查' : kind === 'readiness' ? '就绪检查' : '存活检查' }}：{{ text }}
@@ -120,7 +120,7 @@ async function copy(text: string) {
         <h3>弹性伸缩（HPA {{ data.hpa.name }}）</h3>
         <el-descriptions :column="hpaColumns" border size="small" class="workload">
           <el-descriptions-item label="副本范围">{{ data.hpa.min_replicas }} – {{ data.hpa.max_replicas }}</el-descriptions-item>
-          <el-descriptions-item label="当前 / 期望">{{ data.hpa.current_replicas ?? '-' }} / {{ data.hpa.desired_replicas ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="当前 / 期望">{{ data.hpa.current_replicas ?? '—' }} / {{ data.hpa.desired_replicas ?? '—' }}</el-descriptions-item>
           <el-descriptions-item v-for="t in data.hpa.targets" :key="t.resource" :label="`${t.resource.toUpperCase()} 目标`">
             {{ t.utilization != null ? `${t.utilization}%` : t.value }}（当前 {{ data.hpa.current[t.resource] != null ? `${data.hpa.current[t.resource]}%` : '-' }}）
           </el-descriptions-item>
@@ -145,7 +145,7 @@ async function copy(text: string) {
                 <el-table-column label="启动于" width="150"><template #default="{ row: c }">{{ fmtTime(c.started_at) }}</template></el-table-column>
                 <el-table-column label="上次退出" min-width="200">
                   <template #default="{ row: c }">
-                    <span v-if="c.last_state">{{ c.last_state.reason || '退出' }}，退出码 {{ c.last_state.exit_code ?? '-' }}，{{ fmtAgo(c.last_state.finished_at) }}</span>
+                    <span v-if="c.last_state">{{ c.last_state.reason || '退出' }}，退出码 {{ c.last_state.exit_code ?? '—' }}，{{ fmtAgo(c.last_state.finished_at) }}</span>
                     <span v-else class="hint">—</span>
                   </template>
                 </el-table-column>
@@ -188,7 +188,7 @@ async function copy(text: string) {
             </template>
           </el-table-column>
           <el-table-column label="节点 / IP" min-width="140">
-            <template #default="{ row }">{{ row.node || '未调度' }}<div class="hint mono">{{ row.pod_ip || '-' }}</div></template>
+            <template #default="{ row }">{{ row.node || '未调度' }}<div class="hint mono">{{ row.pod_ip || '—' }}</div></template>
           </el-table-column>
         </el-table>
         <TablePager v-model:page="pods.page.value" v-model:size="pods.size.value" :total="pods.total.value" compact />

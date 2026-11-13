@@ -61,7 +61,7 @@ watch(() => props.userId, (id) => {
             <el-tag :type="detail.enabled ? 'success' : 'info'">{{ detail.enabled ? '启用' : '停用' }}</el-tag>
             <el-tag v-if="detail.must_change_password" type="warning" class="gap">待改密</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="邮箱">{{ detail.email || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="邮箱">{{ detail.email || '—' }}</el-descriptions-item>
           <el-descriptions-item label="最近登录">{{ fmtTime(detail.last_login_at) }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ fmtTime(detail.created_at) }}</el-descriptions-item>
           <el-descriptions-item label="密码修改">{{ fmtTime(detail.password_changed_at) }}</el-descriptions-item>

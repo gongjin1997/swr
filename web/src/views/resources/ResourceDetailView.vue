@@ -149,7 +149,7 @@ onMounted(load)
               {{ getScopeLabel(resource) }}
             </el-descriptions-item>
             <el-descriptions-item label="描述" :span="2">
-              {{ resource.description || '-' }}
+              {{ resource.description || '—' }}
             </el-descriptions-item>
             <el-descriptions-item label="创建时间">
               {{ fmtTime(resource.created_at) }}

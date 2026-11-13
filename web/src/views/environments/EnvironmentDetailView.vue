@@ -148,7 +148,7 @@ onMounted(load)
             <el-descriptions-item label="级别">{{ TIER_TEXT[env.tier] }}</el-descriptions-item>
             <el-descriptions-item label="所属项目">{{ env.project_ids.map((id) => session.projectName(id)).join('、') || '未分配' }}</el-descriptions-item>
             <el-descriptions-item label="环境档案">{{ env.profile_saved ? `v${env.profile_version}` : '未设置（使用默认值）' }}</el-descriptions-item>
-            <el-descriptions-item label="负载均衡入口">{{ env.ingress_profile?.name || '未设置' }}</el-descriptions-item>
+            <el-descriptions-item label="负载均衡入口">{{ env.ingress_profile?.name || '—' }}</el-descriptions-item>
             <el-descriptions-item label="发布审批">{{ approvalText(env) }}</el-descriptions-item>
             <el-descriptions-item label="基础配置">{{ env.config_sets.length }} 个</el-descriptions-item>
             <el-descriptions-item label="最近修改">{{ fmtTime(env.config_sets.map((s) => s.updated_at).sort().pop()) }}</el-descriptions-item>

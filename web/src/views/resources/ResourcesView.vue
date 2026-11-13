@@ -103,7 +103,7 @@ onMounted(load)
 
     <el-table-column label="使用情况" width="100" align="center">
       <template #default="{ row }">
-        {{ row.binding_count !== undefined ? `${row.binding_count} 个` : '-' }}
+        {{ row.binding_count !== undefined ? `${row.binding_count} 个` : '—' }}
       </template>
     </el-table-column>
 
