@@ -26,6 +26,7 @@ const groups = [
   { title: '资源', items: [{ name: 'projects', icon: Files }, { name: 'apps', icon: Grid }, { name: 'services', icon: Share }] },
   { title: '环境', items: [
     { name: 'environments', icon: Collection }, { name: 'config-center', icon: Operation }, { name: 'certificates', icon: Postcard },
+    { name: 'resources', icon: Postcard }, { name: 'presets', icon: Guide },
   ] },
   { title: '平台', items: [
     { name: 'kubernetes', icon: Connection }, { name: 'ingress-profiles', icon: Guide }, { name: 'access', icon: Lock },
@@ -35,6 +36,8 @@ const groups = [
 const OWNER: Record<string, string> = {
   'project-detail': 'projects', 'service-detail': 'services', 'service-create': 'services', 'environment-detail': 'environments',
   'environment-import': 'environments', users: 'access', roles: 'access', bindings: 'access',
+  'resource-create': 'resources', 'resource-detail': 'resources', 'resource-edit': 'resources',
+  'preset-create': 'presets', 'preset-edit': 'presets',
 }
 
 const menu = computed(() => session.mustChangePassword ? [] : groups.map((group) => ({
