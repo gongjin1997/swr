@@ -7,7 +7,7 @@ from .schema import utcnow
 class RolesMixin:
     def list_custom_roles(self):
         with self._db() as db:
-            rows = db.execute("SELECT * FROM custom_roles ORDER BY name").fetchall()
+            rows = db.execute("SELECT * FROM custom_roles WHERE deleted_at IS NULL ORDER BY name").fetchall()
         return [dict(row, permissions=json.loads(row["permissions"])) for row in rows]
 
     def save_custom_role(self, code, name, scope_type, permissions, description, enabled=True):
@@ -16,10 +16,13 @@ class RolesMixin:
                   "enabled": bool(enabled), "updated_at": utcnow()}
         with self._db() as db:
             sets = ", ".join(f"{column} = %s" for column in values)
-            if db.execute(f"UPDATE custom_roles SET {sets} WHERE code = %s", (*values.values(), code)).rowcount:
+            # 已软删除的同名角色在这里复活
+            if db.execute(f"UPDATE custom_roles SET {sets}, deleted_at = NULL WHERE code = %s",
+                          (*values.values(), code)).rowcount:
                 return
             if not self.insert_ignore(db, "custom_roles", {"code": code, "scope_type": scope_type, **values}):
-                db.execute(f"UPDATE custom_roles SET {sets} WHERE code = %s", (*values.values(), code))
+                db.execute(f"UPDATE custom_roles SET {sets}, deleted_at = NULL WHERE code = %s",
+                           (*values.values(), code))
 
     def delete_custom_role(self, code):
         with self._db() as db:
@@ -27,4 +30,5 @@ class RolesMixin:
                               "AND (expires_at IS NULL OR expires_at > %s)", (code, utcnow())).fetchone()
             if used:
                 return False
-            return db.execute("DELETE FROM custom_roles WHERE code = %s", (code,)).rowcount > 0
+            return db.execute("UPDATE custom_roles SET deleted_at = %s WHERE code = %s AND deleted_at IS NULL",
+                              (utcnow(), code)).rowcount > 0

@@ -31,13 +31,15 @@ class ConfigMixin:
     def list_ingress_profiles(self) -> List[Dict[str, Any]]:
         with self._db() as db:
             rows = db.execute("SELECT p.*, (SELECT COUNT(*) FROM environment_profiles e WHERE e.ingress_profile_id = p.id) "
-                              "AS environment_count FROM ingress_profiles p ORDER BY lower(p.name), p.id").fetchall()
+                              "AS environment_count FROM ingress_profiles p WHERE p.deleted_at IS NULL "
+                              "ORDER BY lower(p.name), p.id").fetchall()
         return [self._ingress_profile(r) for r in rows]
 
     def get_ingress_profile(self, profile_id: int) -> Optional[Dict[str, Any]]:
         with self._db() as db:
             row = db.execute("SELECT p.*, (SELECT COUNT(*) FROM environment_profiles e WHERE e.ingress_profile_id = p.id) "
-                             "AS environment_count FROM ingress_profiles p WHERE p.id = %s", (profile_id,)).fetchone()
+                             "AS environment_count FROM ingress_profiles p WHERE p.id = %s AND p.deleted_at IS NULL",
+                             (profile_id,)).fetchone()
         return self._ingress_profile(row) if row else None
 
     def create_ingress_profile(self, name: str, description: str, spec: Dict[str, Any], actor_id: int) -> int:
@@ -51,7 +53,8 @@ class ConfigMixin:
     def update_ingress_profile(self, profile_id: int, base_version: int, name: str, description: str,
                                spec: Dict[str, Any], actor_id: int) -> bool:
         with self._db() as db, self._unique("负载均衡入口名称已存在"):
-            row = db.execute("SELECT version FROM ingress_profiles WHERE id = %s FOR UPDATE", (profile_id,)).fetchone()
+            row = db.execute("SELECT version FROM ingress_profiles WHERE id = %s AND deleted_at IS NULL FOR UPDATE",
+                             (profile_id,)).fetchone()
             if not row:
                 return False
             if row["version"] != base_version:
@@ -66,7 +69,8 @@ class ConfigMixin:
             if db.execute("SELECT 1 FROM environment_profiles WHERE ingress_profile_id = %s LIMIT 1",
                           (profile_id,)).fetchone():
                 raise Conflict("仍有环境使用该负载均衡入口，不能删除")
-            return db.execute("DELETE FROM ingress_profiles WHERE id = %s", (profile_id,)).rowcount > 0
+            return db.execute("UPDATE ingress_profiles SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL",
+                              (utcnow(), profile_id)).rowcount > 0
 
     # ------------------------------------------------------------------ 环境档案
     def get_environment_profile(self, namespace_id: int) -> Optional[Dict[str, Any]]:
@@ -133,6 +137,7 @@ class ConfigMixin:
         if kind:
             where.append("s.kind = %s")
             args.append(kind)
+        where.append("s.deleted_at IS NULL")
         clause = (" WHERE " + " AND ".join(where)) if where else ""
         with self._db() as db:
             rows = db.execute(self._CONFIG_SELECT + clause + " ORDER BY s.scope_type, s.scope_id, s.name", args).fetchall()
@@ -183,7 +188,8 @@ class ConfigMixin:
         now = utcnow()
         with self._db() as db:
             row = db.execute("SELECT s.id, v.number FROM config_sets s LEFT JOIN config_set_versions v "
-                             "ON v.id = s.current_version_id WHERE s.id = %s FOR UPDATE OF s", (set_id,)).fetchone()
+                             "ON v.id = s.current_version_id WHERE s.id = %s AND s.deleted_at IS NULL "
+                             "FOR UPDATE OF s", (set_id,)).fetchone()
             if not row:
                 return None
             current = row["number"] or 0
@@ -213,12 +219,13 @@ class ConfigMixin:
 
     def delete_config_set(self, set_id: int) -> bool:
         with self._db() as db:
-            return db.execute("DELETE FROM config_sets WHERE id = %s", (set_id,)).rowcount > 0
+            return db.execute("UPDATE config_sets SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL",
+                              (utcnow(), set_id)).rowcount > 0
 
     def count_config_sets(self, scope_type: str, scope_id: int) -> int:
         with self._db() as db:
-            return db.execute("SELECT COUNT(*) FROM config_sets WHERE scope_type = %s AND scope_id = %s",
-                              (scope_type, scope_id)).fetchone()[0]
+            return db.execute("SELECT COUNT(*) FROM config_sets WHERE scope_type = %s AND scope_id = %s "
+                              "AND deleted_at IS NULL", (scope_type, scope_id)).fetchone()[0]
 
     # ------------------------------------------------------------------ 证书
     _CERT_SELECT = ("SELECT c.*, v.number AS version, v.filename, v.size, v.sha256, v.metadata, v.not_after, "
@@ -235,12 +242,13 @@ class ConfigMixin:
 
     def list_certificates(self) -> List[Dict[str, Any]]:
         with self._db() as db:
-            rows = db.execute(self._CERT_SELECT + " ORDER BY lower(c.name), c.id").fetchall()
+            rows = db.execute(self._CERT_SELECT + " WHERE c.deleted_at IS NULL ORDER BY lower(c.name), c.id").fetchall()
         return [self._certificate(r) for r in rows]
 
     def get_certificate(self, certificate_id: int) -> Optional[Dict[str, Any]]:
         with self._db() as db:
-            row = db.execute(self._CERT_SELECT + " WHERE c.id = %s", (certificate_id,)).fetchone()
+            row = db.execute(self._CERT_SELECT + " WHERE c.id = %s AND c.deleted_at IS NULL",
+                             (certificate_id,)).fetchone()
         return self._certificate(row) if row else None
 
     @staticmethod
@@ -316,4 +324,5 @@ class ConfigMixin:
             if db.execute("SELECT 1 FROM config_certificate_refs WHERE certificate_id = %s LIMIT 1",
                           (certificate_id,)).fetchone():
                 raise Conflict("证书仍被配置（含历史版本）引用，不能删除")
-            return db.execute("DELETE FROM certificates WHERE id = %s", (certificate_id,)).rowcount > 0
+            return db.execute("UPDATE certificates SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL",
+                              (utcnow(), certificate_id)).rowcount > 0

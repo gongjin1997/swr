@@ -463,6 +463,38 @@ RESOURCE_BINDINGS = [
     "ALTER TABLE environment_presets ADD COLUMN IF NOT EXISTS updated_by BIGINT",
 ]
 
+# 迁移 7：软删除。内容类对象不物理删除，只记 deleted_at；查询一律过滤 deleted_at IS NULL。
+# 唯一约束换成只约束未删除行的部分索引，删除后可以重新使用同一个名字。
+SOFT_DELETE_TABLES = ("users", "projects", "apps", "clusters", "namespaces", "services", "ingress_profiles",
+                      "certificates", "config_sets", "resources", "environment_presets", "custom_roles")
+SOFT_DELETE = [f"ALTER TABLE {table} ADD COLUMN deleted_at TIMESTAMPTZ" for table in SOFT_DELETE_TABLES] + [
+    # 原来的唯一约束 / 索引改成部分唯一索引
+    "DROP INDEX uq_users_username",
+    "CREATE UNIQUE INDEX uq_users_username ON users (lower(username)) WHERE deleted_at IS NULL",
+    "DROP INDEX uq_projects_slug",
+    "CREATE UNIQUE INDEX uq_projects_slug ON projects (lower(slug)) WHERE deleted_at IS NULL",
+    "DROP INDEX uq_projects_name",
+    "CREATE UNIQUE INDEX uq_projects_name ON projects (lower(name)) WHERE deleted_at IS NULL",
+    "ALTER TABLE apps DROP CONSTRAINT uq_apps_name",
+    "CREATE UNIQUE INDEX uq_apps_name ON apps (name) WHERE deleted_at IS NULL",
+    "DROP INDEX uq_clusters_name",
+    "CREATE UNIQUE INDEX uq_clusters_name ON clusters (lower(name)) WHERE deleted_at IS NULL",
+    "ALTER TABLE namespaces DROP CONSTRAINT uq_namespaces_cluster_name",
+    "CREATE UNIQUE INDEX uq_namespaces_cluster_name ON namespaces (cluster_id, name) WHERE deleted_at IS NULL",
+    "ALTER TABLE services DROP CONSTRAINT uq_services_namespace_name",
+    "CREATE UNIQUE INDEX uq_services_namespace_name ON services (namespace_id, name) WHERE deleted_at IS NULL",
+    "ALTER TABLE ingress_profiles DROP CONSTRAINT uq_ingress_profiles_name",
+    "CREATE UNIQUE INDEX uq_ingress_profiles_name ON ingress_profiles (name) WHERE deleted_at IS NULL",
+    "ALTER TABLE certificates DROP CONSTRAINT uq_certificates_name",
+    "CREATE UNIQUE INDEX uq_certificates_name ON certificates (name) WHERE deleted_at IS NULL",
+    "ALTER TABLE config_sets DROP CONSTRAINT uq_config_sets_scope_name",
+    "CREATE UNIQUE INDEX uq_config_sets_scope_name ON config_sets (scope_type, scope_id, name) WHERE deleted_at IS NULL",
+    "ALTER TABLE resources DROP CONSTRAINT uq_resources_scope_name",
+    "CREATE UNIQUE INDEX uq_resources_scope_name ON resources (scope_type, scope_id, name) WHERE deleted_at IS NULL",
+    "ALTER TABLE environment_presets DROP CONSTRAINT uq_environment_presets_name",
+    "CREATE UNIQUE INDEX uq_environment_presets_name ON environment_presets (name) WHERE deleted_at IS NULL",
+]
+
 # 有自增主键的表：导入旧数据后要重置序列
 SERIAL_TABLES = ("projects", "users", "api_tokens", "audit_logs", "apps", "jobs", "role_bindings", "clusters",
                  "namespaces", "services", "service_revisions", "service_secrets", "deploy_targets", "deployments",

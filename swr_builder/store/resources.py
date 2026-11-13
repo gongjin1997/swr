@@ -50,7 +50,7 @@ class ResourcesMixin:
                       ) -> Tuple[List[Dict[str, Any]], int]:
         limit = min(max(limit, 1), 100)
         offset = max(offset, 0)
-        where: List[str] = []
+        where: List[str] = ["r.deleted_at IS NULL"]
         params: List[Any] = []
         if scope_type:
             where.append("r.scope_type = %s")
@@ -82,8 +82,8 @@ class ResourcesMixin:
                 "v.created_by AS version_created_by, v.note AS version_note, "
                 "(SELECT COUNT(*) FROM service_resource_bindings b WHERE b.resource_id = r.id) AS binding_count, "
                 "(SELECT COUNT(*) FROM resources c WHERE c.parent_id = r.id) AS child_count "
-                "FROM resources r LEFT JOIN resource_versions v ON v.id = r.current_version_id WHERE r.id = %s",
-                (resource_id,)
+                "FROM resources r LEFT JOIN resource_versions v ON v.id = r.current_version_id "
+                "WHERE r.id = %s AND r.deleted_at IS NULL", (resource_id,)
             ).fetchone()
         return self._resource(row) if row else None
 
@@ -92,7 +92,7 @@ class ResourcesMixin:
             row = db.execute(
                 "SELECT r.*, v.number AS version, v.attributes, v.checksum "
                 "FROM resources r LEFT JOIN resource_versions v ON v.id = r.current_version_id "
-                "WHERE r.scope_type = %s AND r.scope_id = %s AND r.name = %s",
+                "WHERE r.scope_type = %s AND r.scope_id = %s AND r.name = %s AND r.deleted_at IS NULL",
                 (scope_type, scope_id, name)
             ).fetchone()
         return self._resource(row) if row else None
@@ -105,8 +105,8 @@ class ResourcesMixin:
         with self._db() as db:
             row = db.execute(
                 "SELECT r.id, v.number, v.checksum FROM resources r "
-                "LEFT JOIN resource_versions v ON v.id = r.current_version_id WHERE r.id = %s FOR UPDATE OF r",
-                (resource_id,)
+                "LEFT JOIN resource_versions v ON v.id = r.current_version_id WHERE r.id = %s AND r.deleted_at IS NULL "
+                "FOR UPDATE OF r", (resource_id,)
             ).fetchone()
             if not row:
                 return None
@@ -158,9 +158,11 @@ class ResourcesMixin:
 
     def delete_resource(self: Database, resource_id: int) -> bool:
         with self._db() as db:
-            if db.execute("SELECT 1 FROM resources WHERE parent_id = %s LIMIT 1", (resource_id,)).fetchone():
+            if db.execute("SELECT 1 FROM resources WHERE parent_id = %s AND deleted_at IS NULL LIMIT 1",
+                          (resource_id,)).fetchone():
                 raise Conflict("该资源有子资源，不能删除")
-            return db.execute("DELETE FROM resources WHERE id = %s", (resource_id,)).rowcount > 0
+            return db.execute("UPDATE resources SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL",
+                              (utcnow(), resource_id)).rowcount > 0
 
     def count_service_bindings(self: Database, resource_id: int) -> int:
         with self._db() as db:

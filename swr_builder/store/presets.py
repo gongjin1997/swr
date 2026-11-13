@@ -38,17 +38,17 @@ class PresetsMixin:
 
     def list_presets(self: Database) -> List[Dict[str, Any]]:
         with self._db() as db:
-            rows = db.execute("SELECT * FROM environment_presets ORDER BY name").fetchall()
+            rows = db.execute("SELECT * FROM environment_presets WHERE deleted_at IS NULL ORDER BY name").fetchall()
         return [self._preset(row) for row in rows]
 
     def get_preset(self: Database, preset_id: int) -> Optional[Dict[str, Any]]:
         with self._db() as db:
-            row = db.execute("SELECT * FROM environment_presets WHERE id = %s", (preset_id,)).fetchone()
+            row = db.execute("SELECT * FROM environment_presets WHERE id = %s AND deleted_at IS NULL", (preset_id,)).fetchone()
         return self._preset(row) if row else None
 
     def find_preset(self: Database, name: str) -> Optional[Dict[str, Any]]:
         with self._db() as db:
-            row = db.execute("SELECT * FROM environment_presets WHERE name = %s", (name,)).fetchone()
+            row = db.execute("SELECT * FROM environment_presets WHERE name = %s AND deleted_at IS NULL", (name,)).fetchone()
         return self._preset(row) if row else None
 
     def update_preset(self: Database, preset_id: int, base_version: int, name: str, description: str,
@@ -57,7 +57,7 @@ class PresetsMixin:
         """更新预置，返回新版本号；base_version 不匹配时抛 RevisionConflict。"""
         now = utcnow()
         with self._db() as db, self._unique("已有同名预置", "uq_environment_presets_name"):
-            row = db.execute("SELECT version FROM environment_presets WHERE id = %s FOR UPDATE",
+            row = db.execute("SELECT version FROM environment_presets WHERE id = %s AND deleted_at IS NULL FOR UPDATE",
                            (preset_id,)).fetchone()
             if not row:
                 return None
@@ -73,7 +73,8 @@ class PresetsMixin:
 
     def delete_preset(self: Database, preset_id: int) -> bool:
         with self._db() as db:
-            return db.execute("DELETE FROM environment_presets WHERE id = %s", (preset_id,)).rowcount > 0
+            return db.execute("UPDATE environment_presets SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL",
+                              (utcnow(), preset_id)).rowcount > 0
 
     def apply_preset_to_environment(self: Database, namespace_id: int, preset: Dict[str, Any], actor_id: int) -> None:
         """应用预置到环境：覆盖档案（带 base_version），跳过已存在的同名配置集。一个事务完成。"""

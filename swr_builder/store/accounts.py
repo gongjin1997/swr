@@ -19,7 +19,8 @@ LEGACY_ROLE_BINDINGS = {
 }
 _ACTIVE_ADMIN_SQL = ("SELECT u.id FROM role_bindings b JOIN users u ON u.id = b.subject_id "
                      "WHERE b.subject_type = 'user' AND b.role = 'platform_admin' AND b.scope_type = 'global' "
-                     "AND b.revoked_at IS NULL AND (b.expires_at IS NULL OR b.expires_at > %s)")
+                     "AND b.revoked_at IS NULL AND (b.expires_at IS NULL OR b.expires_at > %s) "
+                     "AND u.deleted_at IS NULL")
 
 
 class AccountsMixin:
@@ -40,17 +41,17 @@ class AccountsMixin:
 
     def list_users(self) -> List[Dict[str, Any]]:
         with self._db() as db:
-            return [dict(r) for r in db.execute("SELECT * FROM users ORDER BY id").fetchall()]
+            return [dict(r) for r in db.execute("SELECT * FROM users WHERE deleted_at IS NULL ORDER BY id").fetchall()]
 
     def get_user(self, user_id: int) -> Optional[Dict[str, Any]]:
         with self._db() as db:
-            row = db.execute("SELECT * FROM users WHERE id = %s", (user_id,)).fetchone()
+            row = db.execute("SELECT * FROM users WHERE id = %s AND deleted_at IS NULL", (user_id,)).fetchone()
         return dict(row) if row else None
 
     def get_user_by_name(self, username: str) -> Optional[Dict[str, Any]]:
         """用户名不区分大小写（与 v1.x 行为一致）。"""
         with self._db() as db:
-            row = db.execute("SELECT * FROM users WHERE lower(username) = lower(%s)", (username,)).fetchone()
+            row = db.execute("SELECT * FROM users WHERE lower(username) = lower(%s) AND deleted_at IS NULL", (username,)).fetchone()
         return dict(row) if row else None
 
     def create_user(self, *, grants: Sequence[Dict[str, Any]] = (), created_by: Optional[int] = None,
@@ -101,11 +102,14 @@ class AccountsMixin:
             db.execute("DELETE FROM sessions WHERE user_id = %s", (user_id,))
             db.execute("DELETE FROM api_tokens WHERE user_id = %s", (user_id,))
             db.execute("DELETE FROM role_bindings WHERE subject_type = 'user' AND subject_id = %s", (user_id,))
-            return db.execute("DELETE FROM users WHERE id = %s", (user_id,)).rowcount > 0
+            # 软删除：账号记录保留（审计与历史引用），会话与令牌已经失效
+            return db.execute("UPDATE users SET deleted_at = %s, enabled = FALSE, updated_at = %s "
+                              "WHERE id = %s AND deleted_at IS NULL",
+                              (utcnow(), utcnow(), user_id)).rowcount > 0
 
     def count_users(self) -> int:
         with self._db() as db:
-            return db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            return db.execute("SELECT COUNT(*) FROM users WHERE deleted_at IS NULL").fetchone()[0]
 
     def is_platform_admin(self, user_id: int) -> bool:
         """启用且持有有效平台管理员授权的账号。"""

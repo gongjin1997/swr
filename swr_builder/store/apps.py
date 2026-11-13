@@ -26,20 +26,20 @@ class AppsMixin:
             return []
         with self._db() as db:
             if project_ids is None:
-                rows = db.execute("SELECT * FROM apps ORDER BY lower(name), id").fetchall()
+                rows = db.execute("SELECT * FROM apps WHERE deleted_at IS NULL ORDER BY lower(name), id").fetchall()
             else:
                 rows = db.execute(f"SELECT * FROM apps WHERE project_id IN ({self.marks(project_ids)}) "
-                                  "ORDER BY lower(name), id", project_ids).fetchall()
+                                  "AND deleted_at IS NULL ORDER BY lower(name), id", project_ids).fetchall()
         return [self._app(r) for r in rows]
 
     def get_app(self, app_id: int) -> Optional[Dict[str, Any]]:
         with self._db() as db:
-            row = db.execute("SELECT * FROM apps WHERE id = %s", (app_id,)).fetchone()
+            row = db.execute("SELECT * FROM apps WHERE id = %s AND deleted_at IS NULL", (app_id,)).fetchone()
         return self._app(row) if row else None
 
     def find_app_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         with self._db() as db:
-            row = db.execute("SELECT * FROM apps WHERE name = %s", (name,)).fetchone()
+            row = db.execute("SELECT * FROM apps WHERE name = %s AND deleted_at IS NULL", (name,)).fetchone()
         return self._app(row) if row else None
 
     def create_app(self, data: Dict[str, Any], project_id: Optional[int] = None) -> Dict[str, Any]:
@@ -54,7 +54,7 @@ class AppsMixin:
     def update_app(self, app_id: int, data: Dict[str, Any], project_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         with self._db() as db, self._unique("应用名称已存在"):
             cur = db.execute("UPDATE apps SET name = %s, data = %s, updated_at = %s, "
-                             "project_id = COALESCE(%s, project_id) WHERE id = %s",
+                             "project_id = COALESCE(%s, project_id) WHERE id = %s AND deleted_at IS NULL",
                              (data["name"], self._app_data(data), utcnow(), project_id, app_id))
             if cur.rowcount == 0:
                 return None
@@ -62,4 +62,5 @@ class AppsMixin:
 
     def delete_app(self, app_id: int) -> bool:
         with self._db() as db:
-            return db.execute("DELETE FROM apps WHERE id = %s", (app_id,)).rowcount > 0
+            return db.execute("UPDATE apps SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL",
+                              (utcnow(), app_id)).rowcount > 0

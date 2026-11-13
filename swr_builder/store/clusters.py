@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+from ..errors import Conflict
 from .schema import utcnow
 
 CLUSTER_COLUMNS = ("id, name, auth_type, server, cce_cluster_id, credential_expires_at, cert_duration_days, status, "
@@ -17,19 +18,20 @@ class ClustersMixin:
     def list_clusters(self) -> List[Dict[str, Any]]:
         """集群列表（不含加密凭据）。"""
         with self._db() as db:
-            rows = db.execute(f"SELECT {CLUSTER_COLUMNS} FROM clusters ORDER BY lower(name), id").fetchall()
+            rows = db.execute(f"SELECT {CLUSTER_COLUMNS} FROM clusters WHERE deleted_at IS NULL ORDER BY lower(name), id").fetchall()
         return [dict(row) for row in rows]
 
     def get_cluster(self, cluster_id: int) -> Optional[Dict[str, Any]]:
         """集群（不含加密凭据）。"""
         with self._db() as db:
-            row = db.execute(f"SELECT {CLUSTER_COLUMNS} FROM clusters WHERE id = %s", (cluster_id,)).fetchone()
+            row = db.execute(f"SELECT {CLUSTER_COLUMNS} FROM clusters WHERE id = %s AND deleted_at IS NULL",
+                             (cluster_id,)).fetchone()
         return dict(row) if row else None
 
     def get_cluster_record(self, cluster_id: int) -> Optional[Dict[str, Any]]:
         """集群完整记录（含加密凭据），只在需要连接集群时使用。"""
         with self._db() as db:
-            row = db.execute("SELECT * FROM clusters WHERE id = %s", (cluster_id,)).fetchone()
+            row = db.execute("SELECT * FROM clusters WHERE id = %s AND deleted_at IS NULL", (cluster_id,)).fetchone()
         return dict(row) if row else None
 
     def create_cluster(self, data: Dict[str, Any]) -> int:
@@ -64,7 +66,7 @@ class ClustersMixin:
     def list_namespaces(self, namespace_ids: Optional[List[int]] = None, cluster_id: Optional[int] = None,
                         tier: Optional[str] = None) -> List[Dict[str, Any]]:
         """namespace_ids 为 None 表示不限，空列表表示没有可见的命名空间。"""
-        where: List[str] = []
+        where: List[str] = ["n.deleted_at IS NULL"]
         args: List[Any] = []
         if namespace_ids is not None:
             if not namespace_ids:
@@ -109,9 +111,15 @@ class ClustersMixin:
 
     def update_namespace(self, namespace_id: int, tier: str, policy: Dict[str, Any]) -> bool:
         with self._db() as db:
-            return db.execute("UPDATE namespaces SET tier = %s, policy_json = %s, updated_at = %s WHERE id = %s",
+            return db.execute("UPDATE namespaces SET tier = %s, policy_json = %s, updated_at = %s "
+                              "WHERE id = %s AND deleted_at IS NULL",
                               (tier, json.dumps(policy, ensure_ascii=False), utcnow(), namespace_id)).rowcount > 0
 
     def delete_namespace(self, namespace_id: int) -> bool:
         with self._db() as db:
-            return db.execute("DELETE FROM namespaces WHERE id = %s", (namespace_id,)).rowcount > 0
+            # 软删除；库里还有环境层的资源时拒绝，避免资源指向一个已删除的环境
+            if db.execute("SELECT 1 FROM resources WHERE scope_type = 'environment' AND scope_id = %s "
+                          "AND deleted_at IS NULL LIMIT 1", (namespace_id,)).fetchone():
+                raise Conflict("该环境仍登记了资源，请先删除这些资源")
+            return db.execute("UPDATE namespaces SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL",
+                              (utcnow(), namespace_id)).rowcount > 0

@@ -196,8 +196,10 @@ def test_resource_binding_prevents_deletion():
     store = new_store()
     box = SecretBox(b"test" * 8)
 
+    # 服务层检查权限需要真实授权，不能只靠 users.role
     user = store.create_user(username="admin", display_name="Admin", email="admin@example.com",
-                            password_hash="hash", role="platform_admin", enabled=1, must_change_password=0)
+                            password_hash="hash", role="platform_admin", enabled=1, must_change_password=0,
+                            grants=[{"role": "platform_admin", "scope_type": "global", "scope_id": 0}])
     me = load_principal(store, user)
 
     project = store.create_project("test-project", "测试项目", [])
@@ -222,13 +224,41 @@ def test_resource_binding_prevents_deletion():
 
     store.create_service_resource_binding(service_id, resource_id, "cache", user["id"])
 
-    # 删除应该失败（FK RESTRICT）
-    with pytest.raises(Exception):  # IntegrityError 或数据库错误
-        store.delete_resource(resource_id)
+    # 被服务绑定时业务层拒绝删除（软删除不再触发外键错误，保护在 services/resources.py）
+    from swr_builder.services import resources as resource_service
+
+    with pytest.raises(Conflict, match="不能删除"):
+        resource_service.delete_resource(store, me, resource_id)
 
     # 解绑后可以删除
     store.delete_service_resource_binding(service_id, resource_id)
-    assert store.delete_resource(resource_id)
+    resource_service.delete_resource(store, me, resource_id)
+    assert store.get_resource(resource_id) is None
+
+
+def test_soft_delete_keeps_row_and_frees_name():
+    """软删除：记录保留，列表与按名查找都看不到，名字可以重新使用。"""
+    store = new_store()
+    box = SecretBox(b"test" * 8)
+    user = store.create_user(username="admin", display_name="Admin", email="admin@example.com",
+                            password_hash="hash", role="platform_admin", enabled=1, must_change_password=0)
+    project = store.create_project("test-project", "测试项目", [])
+    cluster_id = store.create_cluster({"name": "test-cluster", "title": "测试集群",
+                                      "server": "https://k8s.example:6443", "auth_type": "sa_token",
+                                      "credential_encrypted": "{}"})
+    namespace_id = store.create_namespace(cluster_id, "test-ns", "dev", {}, project["id"])
+    service = store.create_service("test-service", project["id"], namespace_id,
+                                   store.create_app({"slug": "test-app", "name": "测试应用", "repo": "harbor.example/test",
+                                                     "description": "测试", "configs": [], "secrets": []},
+                                                    project["id"])["id"],
+                                   {"mode": "managed"}, user["id"])
+    assert store.delete_service(service["id"])
+    assert store.get_service(service["id"]) is None
+    assert all(s["id"] != service["id"] for s in store.list_services())
+    # 同一个命名空间下可以重新创建同名服务（唯一索引只约束未删除的行）
+    again = store.create_service("test-service", project["id"], namespace_id, service["app_id"],
+                                 {"mode": "managed"}, user["id"])
+    assert again["id"] != service["id"]
 
 
 def test_preset_crud():

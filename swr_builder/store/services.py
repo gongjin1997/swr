@@ -43,7 +43,7 @@ class ServicesMixin:
 
     def get_service(self, service_id: int) -> Optional[Dict[str, Any]]:
         with self._db() as db:
-            row = db.execute(SERVICE_SELECT + " WHERE s.id = %s", (service_id,)).fetchone()
+            row = db.execute(SERVICE_SELECT + " WHERE s.id = %s AND s.deleted_at IS NULL", (service_id,)).fetchone()
         return self._service(row) if row else None
 
     def list_services(self, project_ids: Optional[List[int]] = None,
@@ -62,12 +62,14 @@ class ServicesMixin:
                 return []
             where = " WHERE (" + " OR ".join(scopes) + ")"
         with self._db() as db:
-            rows = db.execute(SERVICE_SELECT + where + " ORDER BY lower(s.name), s.id", args).fetchall()
+            rows = db.execute(SERVICE_SELECT + (where + " AND " if where else " WHERE ") + "s.deleted_at IS NULL "
+                              "ORDER BY lower(s.name), s.id", args).fetchall()
         return [self._service(row) for row in rows]
 
     def app_has_services(self, app_id: int) -> bool:
         with self._db() as db:
-            return db.execute("SELECT 1 FROM services WHERE app_id = %s LIMIT 1", (app_id,)).fetchone() is not None
+            return db.execute("SELECT 1 FROM services WHERE app_id = %s AND deleted_at IS NULL LIMIT 1",
+                              (app_id,)).fetchone() is not None
 
     def create_service(self, name: str, project_id: int, namespace_id: int, app_id: int, spec: Dict[str, Any],
                        created_by: int) -> Dict[str, Any]:
@@ -92,8 +94,8 @@ class ServicesMixin:
         """基于 base_revision 创建新修订；base_revision 不是当前修订时抛 RevisionConflict。"""
         now = utcnow()
         with self._db() as db:
-            service = db.execute("SELECT current_revision_id FROM services WHERE id = %s FOR UPDATE",
-                                 (service_id,)).fetchone()
+            service = db.execute("SELECT current_revision_id FROM services WHERE id = %s AND deleted_at IS NULL "
+                                 "FOR UPDATE", (service_id,)).fetchone()
             if not service:
                 return None
             if service["current_revision_id"] != base_revision:
@@ -124,8 +126,8 @@ class ServicesMixin:
         """保存密钥的新版本，并基于当前修订生成引用该版本的新修订。"""
         now = utcnow()
         with self._db() as db:
-            service = db.execute("SELECT current_revision_id FROM services WHERE id = %s FOR UPDATE",
-                                 (service_id,)).fetchone()
+            service = db.execute("SELECT current_revision_id FROM services WHERE id = %s AND deleted_at IS NULL "
+                                 "FOR UPDATE", (service_id,)).fetchone()
             if not service:
                 return None
             current = db.execute("SELECT * FROM service_revisions WHERE id = %s",
@@ -145,15 +147,17 @@ class ServicesMixin:
 
     def delete_service(self, service_id: int) -> bool:
         """有待审批、排队或执行中的发布时不能删除。"""
+        now = utcnow()
         with self._db() as db:
-            if not db.execute("SELECT id FROM services WHERE id = %s FOR UPDATE", (service_id,)).fetchone():
+            if not db.execute("SELECT id FROM services WHERE id = %s AND deleted_at IS NULL FOR UPDATE",
+                              (service_id,)).fetchone():
                 return False
             active = db.execute("SELECT EXISTS(SELECT 1 FROM deployments WHERE service_id = %s AND status IN "
                                 "('pending_approval','queued','applying','verifying'))", (service_id,)).fetchone()[0]
             if active:
                 return False
-            db.execute("DELETE FROM service_secrets WHERE service_id = %s", (service_id,))
-            # 服务层配置集随服务删除（版本与证书引用级联删除）
-            db.execute("DELETE FROM config_sets WHERE scope_type = 'service' AND scope_id = %s", (service_id,))
-            db.execute("DELETE FROM service_revisions WHERE service_id = %s", (service_id,))
-            return db.execute("DELETE FROM services WHERE id = %s", (service_id,)).rowcount > 0
+            # 软删除：服务、服务层配置集一起标记；修订与密钥保留（发布记录引用它们）
+            db.execute("UPDATE config_sets SET deleted_at = %s WHERE scope_type = 'service' AND scope_id = %s "
+                       "AND deleted_at IS NULL", (now, service_id))
+            return db.execute("UPDATE services SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL",
+                              (now, service_id)).rowcount > 0

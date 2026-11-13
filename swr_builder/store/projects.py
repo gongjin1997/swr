@@ -18,9 +18,9 @@ class ProjectsMixin:
         where, args = ("", ()) if project_id is None else (" WHERE project_id = %s", (project_id,))
         with self._db() as db:
             if project_id is None:
-                rows = db.execute("SELECT * FROM projects ORDER BY lower(name), id").fetchall()
+                rows = db.execute("SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY lower(name), id").fetchall()
             else:
-                rows = db.execute("SELECT * FROM projects WHERE id = %s", (project_id,)).fetchall()
+                rows = db.execute("SELECT * FROM projects WHERE id = %s AND deleted_at IS NULL", (project_id,)).fetchall()
             orgs = db.execute("SELECT * FROM project_registry_orgs" + where + " ORDER BY namespace", args).fetchall()
             allocations = db.execute("SELECT project_id, namespace_id FROM project_namespaces" + where
                                      + " ORDER BY namespace_id", args).fetchall()
@@ -69,7 +69,7 @@ class ProjectsMixin:
         """合并（不覆盖）项目的 SWR 组织授权：已有前缀保留，新前缀追加。"""
         with self._db() as db:
             # 锁住项目行，避免并发合并时丢失前缀
-            if not db.execute("SELECT id FROM projects WHERE id = %s FOR UPDATE", (project_id,)).fetchone():
+            if not db.execute("SELECT id FROM projects WHERE id = %s AND deleted_at IS NULL FOR UPDATE", (project_id,)).fetchone():
                 return
             row = db.execute("SELECT base_prefixes_json FROM project_registry_orgs WHERE project_id = %s "
                              "AND namespace = %s", (project_id, namespace)).fetchone()
@@ -84,7 +84,7 @@ class ProjectsMixin:
             return
         project_id = self.default_project_id()
         with self._db() as db:
-            rows = db.execute("SELECT data FROM apps WHERE project_id = %s", (project_id,)).fetchall()
+            rows = db.execute("SELECT data FROM apps WHERE project_id = %s AND deleted_at IS NULL", (project_id,)).fetchall()
         if not rows:
             self.add_project_registry_org(project_id, default_namespace, [])
             return
@@ -103,25 +103,28 @@ class ProjectsMixin:
     def delete_project(self, project_id: int) -> bool:
         """默认项目，以及仍有应用、构建、服务、发布记录、成员授权或项目层配置的项目不能删除。"""
         with self._db() as db:
-            project = db.execute("SELECT slug FROM projects WHERE id = %s FOR UPDATE", (project_id,)).fetchone()
+            project = db.execute("SELECT slug FROM projects WHERE id = %s AND deleted_at IS NULL FOR UPDATE",
+                                 (project_id,)).fetchone()
             if not project or project["slug"] == "default":
                 return False
             referenced = db.execute(
-                "SELECT EXISTS(SELECT 1 FROM apps WHERE project_id = %s) OR "
+                "SELECT EXISTS(SELECT 1 FROM apps WHERE project_id = %s AND deleted_at IS NULL) OR "
                 "EXISTS(SELECT 1 FROM jobs WHERE project_id = %s) OR "
                 "EXISTS(SELECT 1 FROM deployments WHERE project_id = %s) OR "
-                "EXISTS(SELECT 1 FROM services WHERE project_id = %s) OR "
+                "EXISTS(SELECT 1 FROM services WHERE project_id = %s AND deleted_at IS NULL) OR "
                 "EXISTS(SELECT 1 FROM role_bindings WHERE scope_type = 'project' AND scope_id = %s) OR "
-                "EXISTS(SELECT 1 FROM config_sets WHERE scope_type = 'project' AND scope_id = %s)",
+                "EXISTS(SELECT 1 FROM config_sets WHERE scope_type = 'project' AND scope_id = %s "
+                "AND deleted_at IS NULL)",
                 (project_id, project_id, project_id, project_id, project_id, project_id),
             ).fetchone()[0]
             if referenced:
                 return False
-            return db.execute("DELETE FROM projects WHERE id = %s", (project_id,)).rowcount > 0
+            return db.execute("UPDATE projects SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL",
+                              (utcnow(), project_id)).rowcount > 0
 
     def default_project_id(self) -> int:
         with self._db() as db:
-            row = db.execute("SELECT id FROM projects WHERE slug = 'default'").fetchone()
+            row = db.execute("SELECT id FROM projects WHERE slug = 'default' AND deleted_at IS NULL").fetchone()
         if not row:
             raise RuntimeError("default project migration is missing")
         return int(row["id"])
@@ -140,7 +143,8 @@ class ProjectsMixin:
     def unassign_namespace(self, project_id: int, namespace_id: int) -> bool:
         """项目在该命名空间仍有服务时不能取消分配。"""
         with self._db() as db:
-            linked = db.execute("SELECT EXISTS(SELECT 1 FROM services WHERE project_id = %s AND namespace_id = %s)",
+            linked = db.execute("SELECT EXISTS(SELECT 1 FROM services WHERE project_id = %s AND namespace_id = %s "
+                                "AND deleted_at IS NULL)",
                                 (project_id, namespace_id)).fetchone()[0]
             if linked:
                 return False

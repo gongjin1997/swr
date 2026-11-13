@@ -13,7 +13,7 @@ import logging
 from typing import Any, Callable, List, Tuple
 
 from .schema import (BASELINE, ENVIRONMENT_CONFIG, MANAGED_DELIVERY, PATCH_SCRIPTS, RESOURCE_BINDINGS,
-                     RESOURCE_MANAGEMENT, utcnow)
+                     RESOURCE_MANAGEMENT, SOFT_DELETE, utcnow)
 
 logger = logging.getLogger("swr_builder.store")
 
@@ -53,6 +53,11 @@ def _resource_bindings(db: Any) -> None:
         db.execute(statement)
 
 
+def _soft_delete(db: Any) -> None:
+    for statement in SOFT_DELETE:
+        db.execute(statement)
+
+
 MIGRATIONS: List[Migration] = [
     (1, "v2-postgresql-baseline", _baseline),
     (2, "v2-environment-profiles-config-sets-certificates", _environment_config),
@@ -60,6 +65,7 @@ MIGRATIONS: List[Migration] = [
     (4, "v2-patch-script-history", _patch_scripts),
     (5, "v2-resource-management-and-bindings", _resource_management),
     (6, "v2-resource-parents-and-binding-keys", _resource_bindings),
+    (7, "v2-soft-delete", _soft_delete),
 ]
 
 
