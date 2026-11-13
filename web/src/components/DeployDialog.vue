@@ -57,7 +57,9 @@ async function submit() {
             <span class="hint digest">{{ j.digest ? j.digest.slice(0, 19) + '…' : '无 digest' }}</span>
           </el-option>
         </el-select>
-        <div class="hint">Deployment 中写入版本号；发布前平台会确认该版本号仍是构建时的镜像，不一致则停止发布。</div>
+        <div class="hint">{{ service?.mode === 'managed'
+          ? 'Deployment 中写入版本号；发布前平台会确认该版本号仍是构建时的镜像，不一致则停止发布。'
+          : '纳管服务只更新已有 Deployment 的镜像，不生成或修改其他对象；集群中的对象仍由你们维护。' }}</div>
       </el-form-item>
       <el-form-item>
         <el-checkbox v-model="form.useLatest" :disabled="!service?.deployed_revision_id">
