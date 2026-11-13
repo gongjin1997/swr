@@ -77,7 +77,10 @@ def list_resources(store: Store, box: SecretBox, me: Principal, scope_type: Opti
 
 def get_resource(store: Store, box: SecretBox, me: Principal, resource_id: int) -> Dict[str, Any]:
     resource = resource_or_404(store, me, resource_id)
-    return public_resource(store, box, me, resource)
+    result = public_resource(store, box, me, resource)
+    # 谁在用它：详情页直接展示，删除前也能先看清楚
+    result["used_by"] = store.list_resource_bindings_by_resource(resource_id)
+    return result
 
 
 def create_resource(store: Store, box: SecretBox, me: Principal, data: Any) -> Dict[str, Any]:
