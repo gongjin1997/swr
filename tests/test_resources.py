@@ -58,22 +58,26 @@ def test_mask_secrets():
 
 def test_compute_exports():
     """测试导出计算"""
+    from swr_builder.security import SecretBox
+    box = SecretBox(b"test" * 8)
     chain = [
-        {"type": "gauss_db", "attributes": {"host": "db.example", "port": 5432}},
+        {"type": "gauss_db", "name": "test-db", "attributes": {"host": "db.example", "port": 5432}},
     ]
-    exports = resource_types.compute_exports(chain)
+    exports = resource_types.compute_exports(chain, "", box)
     assert ("DB_HOST", "db.example") in exports["env"]
     assert ("DB_PORT", "5432") in exports["env"]
 
 
 def test_compute_exports_with_parent_chain():
     """测试父链导出计算"""
+    from swr_builder.security import SecretBox
+    box = SecretBox(b"test" * 8)
     chain = [
-        {"type": "gauss_user", "attributes": {"user": "app_user", "password": "secret"}},
-        {"type": "gauss_schema", "attributes": {"database": "app_db", "schema": "public"}},
-        {"type": "gauss_db", "attributes": {"host": "db.example", "port": 5432}},
+        {"type": "gauss_user", "name": "test-user", "attributes": {"user": "app_user", "password": "secret"}},
+        {"type": "gauss_schema", "name": "test-schema", "attributes": {"database": "app_db", "schema": "public"}},
+        {"type": "gauss_db", "name": "test-db", "attributes": {"host": "db.example", "port": 5432}},
     ]
-    exports = resource_types.compute_exports(chain)
+    exports = resource_types.compute_exports(chain, "", box)
 
     # DB 层导出
     assert ("DB_HOST", "db.example") in exports["env"]
@@ -103,7 +107,7 @@ def test_resource_crud():
 
     # 创建资源
     attrs = {"host": "db.example", "port": 5432}
-    validated = resource_types.validate_attributes("gauss_db", attrs, box)
+    validated = resource_types.validate_attributes("gauss_db", attrs, None, box)
     checksum = resource_types.checksum(validated)
 
     resource_id = store.create_resource("platform", 0, "gauss_db", "test-db", "测试数据库",
@@ -119,7 +123,7 @@ def test_resource_crud():
 
     # 更新资源（创建新版本）
     new_attrs = {"host": "db2.example", "port": 5433}
-    validated = resource_types.validate_attributes("gauss_db", new_attrs, box)
+    validated = resource_types.validate_attributes("gauss_db", new_attrs, None, box)
     checksum = resource_types.checksum(validated)
 
     new_version = store.add_resource_version(resource_id, 1, validated, checksum, "更新主机", user["id"])
@@ -165,13 +169,13 @@ def test_service_resource_binding():
 
     # 创建资源
     attrs = {"host": "redis.example", "port": 6379, "password": "secret"}
-    validated = resource_types.validate_attributes("redis", attrs, box)
+    validated = resource_types.validate_attributes("redis", attrs, None, box)
     checksum = resource_types.checksum(validated)
     resource_id = store.create_resource("environment", namespace_id, "redis", "cache-redis", "缓存",
                                        validated, checksum, "初始版本", user["id"])
 
     # 绑定资源
-    store.create_service_resource_binding(service_id, resource_id, "cache")
+    store.create_service_resource_binding(service_id, resource_id, "cache", user["id"])
 
     # 查询绑定
     bindings = store.list_service_resource_bindings(service_id)
@@ -180,7 +184,7 @@ def test_service_resource_binding():
     assert bindings[0]["resource_id"] == resource_id
 
     # 删除绑定
-    assert store.delete_service_resource_binding(service_id, "cache")
+    assert store.delete_service_resource_binding(service_id, resource_id)
     bindings = store.list_service_resource_bindings(service_id)
     assert len(bindings) == 0
 
@@ -211,19 +215,19 @@ def test_resource_binding_prevents_deletion():
     service_id = service["id"]
 
     attrs = {"host": "redis.example", "port": 6379}
-    validated = resource_types.validate_attributes("redis", attrs, box)
+    validated = resource_types.validate_attributes("redis", attrs, None, box)
     checksum = resource_types.checksum(validated)
     resource_id = store.create_resource("environment", namespace_id, "redis", "cache-redis", "缓存",
                                        validated, checksum, "初始版本", user["id"])
 
-    store.create_service_resource_binding(service_id, resource_id, "cache")
+    store.create_service_resource_binding(service_id, resource_id, "cache", user["id"])
 
     # 删除应该失败（FK RESTRICT）
     with pytest.raises(Exception):  # IntegrityError 或数据库错误
         store.delete_resource(resource_id)
 
     # 解绑后可以删除
-    store.delete_service_resource_binding(service_id, "cache")
+    store.delete_service_resource_binding(service_id, resource_id)
     assert store.delete_resource(resource_id)
 
 
