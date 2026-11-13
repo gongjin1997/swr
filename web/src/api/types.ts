@@ -931,7 +931,7 @@ export interface Deployment {
 export type DeploymentTicket = Pick<Deployment, 'id' | 'service_id' | 'job_id' | 'revision_id' | 'kind' | 'status' | 'digest' | 'created_at'>
 
 // ------------------------------------------------------------------ 环境与配置
-export type ConfigScope = 'platform' | 'project' | 'environment' | 'service'
+export type ConfigScope = 'platform' | 'project' | 'environment' | 'binding' | 'service'
 export type ConfigKind = 'env' | 'secret_env' | 'files' | 'secret_files'
 export type FileFormat = 'properties' | 'yaml' | 'json' | 'xml' | 'text'
 
@@ -999,6 +999,10 @@ export interface ConfigOrigin {
   scope_id: number
   config_set_id: number
   version: number
+  /** 资源绑定层：来源资源 */
+  resource_id?: number
+  resource_name?: string
+  alias?: string
 }
 
 export interface EffectiveEntry extends ConfigEntry {

@@ -1,7 +1,7 @@
 /** 资源管理 API */
 import { http } from './http'
 import type {
-  Resource, ResourceVersion, ResourceBinding, ResourceExport,
+  Resource, ResourceVersion, ResourceBinding,
   CreateResourceRequest, UpdateResourceRequest, BindResourceRequest, Page
 } from './types'
 
@@ -33,6 +33,4 @@ export const serviceResourceApi = {
     http.post<{ resource_id: number; alias: string }>(`/api/services/${serviceId}/bindings`, data),
   unbind: (serviceId: number, resourceId: number) =>
     http.del(`/api/services/${serviceId}/bindings/${resourceId}`),
-  previewExports: (serviceId: number, reveal?: boolean) =>
-    http.get<{ exports: Record<string, ResourceExport> }>(`/api/services/${serviceId}/exports`, { reveal }),
 }

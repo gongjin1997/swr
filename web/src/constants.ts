@@ -104,10 +104,10 @@ export const TAG_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/
 
 // ------------------------------------------------------------------ 环境与配置
 export const CONFIG_SCOPE_TEXT: Record<ConfigScope, string> = {
-  platform: '平台', project: '项目', environment: '环境', service: '服务',
+  platform: '平台', project: '项目', environment: '环境', binding: '资源绑定', service: '服务',
 }
 export const CONFIG_SCOPE_TAG: Record<ConfigScope, TagType> = {
-  platform: 'info', project: 'primary', environment: 'success', service: 'warning',
+  platform: 'info', project: 'primary', environment: 'success', binding: 'danger', service: 'warning',
 }
 export const CONFIG_KIND_TEXT: Record<ConfigKind, string> = {
   env: '环境变量', secret_env: '敏感环境变量', files: '配置文件', secret_files: '敏感文件',

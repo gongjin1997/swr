@@ -2,8 +2,8 @@
 import { Delete, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
-import { serviceResourceApi, resourceApi } from '@/api'
-import type { Resource, ResourceBinding } from '@/api/types'
+import { resourceApi, serviceApi, serviceResourceApi } from '@/api'
+import type { EffectiveEntry, Resource, ResourceBinding } from '@/api/types'
 import { useAction } from '@/composables/useAction'
 import { useSession } from '@/stores/session'
 import { getResourceTypeLabel } from '@/utils/resourceTypes'
@@ -21,12 +21,26 @@ const bindDialogVisible = ref(false)
 const bindForm = ref({ resource_id: null as number | null, alias: '' })
 
 const canManage = computed(() => session.canNamespace(props.namespaceId, 'service.config'))
+/** 生效配置里来自资源绑定层的变量，按资源分组，用于预览每个绑定注入的键 */
+const exportsByResource = ref<Map<number, string[]>>(new Map())
 
 async function loadBindings() {
   loading.value = true
   try {
-    const result = await serviceResourceApi.listBindings(props.serviceId)
+    const [result, effective] = await Promise.all([
+      serviceResourceApi.listBindings(props.serviceId),
+      serviceApi.effective(props.serviceId).catch(() => null),
+    ])
     bindings.value = result.items
+    const grouped = new Map<number, string[]>()
+    for (const entry of [...(effective?.env ?? []), ...(effective?.secret_env ?? [])] as EffectiveEntry[]) {
+      const origin = entry.origin
+      if (origin.scope_type !== 'binding' || !origin.resource_id) continue
+      const keys = grouped.get(origin.resource_id) ?? []
+      keys.push(entry.key)
+      grouped.set(origin.resource_id, keys)
+    }
+    exportsByResource.value = grouped
   } catch (e) {
     ElMessage.error('加载资源绑定失败')
     console.error(e)
@@ -59,8 +73,8 @@ const bindAction = useAction()
 
 async function handleBind() {
   await bindAction.run(async () => {
-    if (!bindForm.value.resource_id || !bindForm.value.alias) {
-      ElMessage.error('请填写完整信息')
+    if (!bindForm.value.resource_id) {
+      ElMessage.error('请选择要绑定的资源')
       return
     }
     await serviceResourceApi.bind(props.serviceId, {
@@ -135,6 +149,19 @@ onMounted(loadBindings)
         </template>
       </el-table-column>
 
+      <el-table-column label="导出变量" min-width="220">
+        <template #default="{ row }">
+          <el-space wrap :size="4">
+            <el-tag v-for="key in exportsByResource.get(row.resource_id) ?? []" :key="key" size="small" effect="plain">
+              {{ key }}
+            </el-tag>
+            <el-text v-if="!(exportsByResource.get(row.resource_id) ?? []).length" type="info" size="small">
+              —
+            </el-text>
+          </el-space>
+        </template>
+      </el-table-column>
+
       <el-table-column label="操作" width="100" fixed="right">
         <template #default="{ row }">
           <el-button
@@ -166,14 +193,14 @@ onMounted(loadBindings)
           </el-select>
         </el-form-item>
 
-        <el-form-item label="别名" required>
+        <el-form-item label="别名">
           <el-input
             v-model="bindForm.alias"
-            placeholder="例如：db, cache, mq"
+            placeholder="可留空；例如 DB"
             maxlength="63"
           />
           <div style="font-size: 12px; color: var(--el-text-color-secondary); margin-top: 4px">
-            用于导出环境变量的前缀，例如：cache → CACHE_HOST, CACHE_PORT
+            大写前缀，用来区分同类资源：DB → DB_HOST、DB_PORT；留空则直接导出 HOST、PORT
           </div>
         </el-form-item>
       </el-form>
