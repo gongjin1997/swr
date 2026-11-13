@@ -420,17 +420,18 @@ RESOURCE_MANAGEMENT = [
         description TEXT NOT NULL DEFAULT '',
         profile_template TEXT NOT NULL,
         default_config_sets TEXT NOT NULL,
-        required_resource_types TEXT NOT NULL,
-        required_params TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
         created_by BIGINT,
         created_at TIMESTAMPTZ NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL,
+        updated_by BIGINT,
         CONSTRAINT uq_environment_presets_name UNIQUE (name)
     )""",
     "ALTER TABLE environment_profiles ADD COLUMN required_params TEXT NOT NULL DEFAULT '[]'",
 ]
 
-# 迁移 6：资源有明确的上级；一个服务对同一资源只绑定一次（别名改为可选的变量名前缀）
+# 迁移 6：资源有明确的上级；一个服务对同一资源只绑定一次（别名改为可选的变量名前缀）；
+# 预置简化（删除 required_resource_types/required_params，添加 version/updated_by）
 RESOURCE_BINDINGS = [
     "ALTER TABLE resources ADD COLUMN parent_id BIGINT",
     "ALTER TABLE resources ADD CONSTRAINT fk_resources_parent FOREIGN KEY (parent_id) REFERENCES resources(id) "
@@ -455,6 +456,11 @@ RESOURCE_BINDINGS = [
     "GROUP BY service_id, resource_id",
     "DROP TABLE service_resource_bindings_v5",
     "CREATE INDEX idx_service_resource_bindings_resource ON service_resource_bindings (resource_id)",
+    # 预置简化：环境要求并入档案，预置只保留模板
+    "ALTER TABLE environment_presets DROP COLUMN IF EXISTS required_resource_types",
+    "ALTER TABLE environment_presets DROP COLUMN IF EXISTS required_params",
+    "ALTER TABLE environment_presets ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE environment_presets ADD COLUMN IF NOT EXISTS updated_by BIGINT",
 ]
 
 # 有自增主键的表：导入旧数据后要重置序列

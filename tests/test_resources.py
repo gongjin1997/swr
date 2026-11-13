@@ -235,26 +235,25 @@ def test_preset_crud():
     """测试环境预置 CRUD"""
     store = new_store()
 
-    profile_template = {"naming": {"deployment": "{base}-app"}}
+    profile_template = {"naming": {"deployment": "{base}-app"}, "required_params": [{"key": "DB_HOST", "label": "数据库地址"}]}
     default_config_sets = [{"kind": "env", "name": "env", "entries": [{"key": "ENV", "value": "test"}]}]
-    required_resource_types = ["gauss_db", "redis"]
-    required_params = [{"key": "DB_HOST", "label": "数据库地址", "required": True}]
 
-    preset_id = store.create_preset("dev-preset", "开发环境预置", profile_template, default_config_sets,
-                                   required_resource_types, required_params, 1)
+    preset_id = store.create_preset("dev-preset", "开发环境预置", profile_template, default_config_sets, 1)
     assert preset_id > 0
 
     preset = store.get_preset(preset_id)
     assert preset is not None
     assert preset["name"] == "dev-preset"
-    assert len(preset["required_resource_types"]) == 2
+    assert preset["version"] == 1
 
     # 更新
-    assert store.update_preset(preset_id, "dev-preset-v2", "开发环境预置 v2", profile_template,
-                              default_config_sets, required_resource_types, required_params, 1)
+    new_version = store.update_preset(preset_id, 1, "dev-preset-v2", "开发环境预置 v2", profile_template,
+                                     default_config_sets, 1)
+    assert new_version == 2
 
     preset = store.get_preset(preset_id)
     assert preset["name"] == "dev-preset-v2"
+    assert preset["version"] == 2
 
     # 删除
     assert store.delete_preset(preset_id)
@@ -276,20 +275,19 @@ def test_apply_preset_to_environment():
                                       "credential_encrypted": "{}"})
     namespace_id = store.create_namespace(cluster_id, "test-ns", "dev", {}, project_id)
 
-    # 创建预置
-    profile_template = {"naming": {"deployment": "{base}-app"}}
+    # 创建预置（required_params 在 profile_template 中）
+    profile_template = {
+        "naming": {"deployment": "{base}-app"},
+        "required_params": [{"key": "REDIS_HOST", "label": "Redis 地址"}]
+    }
     default_config_sets = [
         {"kind": "env", "name": "common-env", "entries": [{"key": "LOG_LEVEL", "value": "debug"}]}
     ]
-    required_resource_types = ["redis"]
-    required_params = [{"key": "REDIS_HOST", "label": "Redis 地址"}]
 
     preset = {
         "id": 1,
         "profile_template": profile_template,
         "default_config_sets": default_config_sets,
-        "required_resource_types": required_resource_types,
-        "required_params": required_params,
     }
 
     # 应用预置
@@ -299,11 +297,12 @@ def test_apply_preset_to_environment():
     profile = store.get_environment_profile(namespace_id)
     assert profile is not None
     assert profile["version"] == 1
-    assert "required_params" in profile
 
     import json
-    required_params = json.loads(profile["required_params"]) if isinstance(profile["required_params"], str) else profile["required_params"]
-    assert len(required_params) == 1
+    profile_data = json.loads(profile["profile"]) if isinstance(profile["profile"], str) else profile["profile"]
+    assert "required_params" in profile_data
+    assert len(profile_data["required_params"]) == 1
+    assert profile_data["required_params"][0]["key"] == "REDIS_HOST"
 
     # 验证配置集已创建
     config_sets = store.list_config_sets([("environment", namespace_id)])

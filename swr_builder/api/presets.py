@@ -38,7 +38,7 @@ async def get_preset(id: int, ctx: Ctx, me: Me):
 async def update_preset(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(...)):
     """更新环境预置"""
     preset = presets.update_preset(ctx.store, me, id, data)
-    audit(request, "preset.update", id, f"name={preset['name']}")
+    audit(request, "preset.update", id, f"name={preset['name']};version={preset['version']}")
     return preset
 
 
@@ -58,6 +58,6 @@ async def apply_preset(id: int, request: Request, ctx: Ctx, me: Me, data: dict =
     if not isinstance(preset_id, int):
         raise ValueError("preset_id 必须是整数")
 
-    environment = presets.apply_preset(ctx.store, ctx.box, me, id, preset_id)
+    environment = presets.apply_preset(ctx.store, me, id, preset_id)
     audit(request, "environment.apply_preset", id, f"preset_id={preset_id}")
     return environment
