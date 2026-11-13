@@ -6,16 +6,29 @@ import { useRouter } from 'vue-router'
 import { resourceApi } from '@/api'
 import type { Resource, ResourceScopeType } from '@/api/types'
 import PageHeader from '@/components/PageHeader.vue'
+import TablePager from '@/components/TablePager.vue'
 import { useAction } from '@/composables/useAction'
+import { usePagination } from '@/composables/usePagination'
 import { useSession } from '@/stores/session'
 import { fmtTime } from '@/utils/format'
-import { getResourceTypeLabel } from '@/utils/resourceTypes'
+import { getResourceTypeLabel, getResourceTypeOptions } from '@/utils/resourceTypes'
 
 const session = useSession()
 const router = useRouter()
 const resources = ref<Resource[]>([])
 const loading = ref(false)
 const activeTab = ref<ResourceScopeType>('platform')
+const typeFilter = ref('')
+const keyword = ref('')
+const typeOptions = getResourceTypeOptions()
+
+const filtered = computed(() => {
+  const q = keyword.value.trim().toLowerCase()
+  return resources.value.filter((r) =>
+    (!typeFilter.value || r.type === typeFilter.value)
+    && (!q || `${r.name} ${r.description}`.toLowerCase().includes(q)))
+})
+const pager = usePagination(() => filtered.value, { size: 20, resetOn: () => [keyword.value, typeFilter.value, activeTab.value] })
 
 const canManage = computed(() => session.can('resource.manage'))
 
@@ -49,7 +62,7 @@ async function handleDelete(resource: Resource) {
 
 function handleTabChange(tab: ResourceScopeType) {
   activeTab.value = tab
-  load()
+  void load()
 }
 
 function getScopeTag(resource: Resource) {
@@ -76,7 +89,14 @@ onMounted(load)
     <el-tab-pane label="环境资源" name="environment" />
   </el-tabs>
 
-  <el-table :data="resources" v-loading="loading" stripe>
+  <div class="toolbar">
+    <el-input v-model="keyword" placeholder="搜索资源名称、描述" clearable style="max-width: 260px" />
+    <el-select v-model="typeFilter" placeholder="全部类型" clearable style="width: 180px">
+      <el-option v-for="option in typeOptions" :key="option.value" :label="option.label" :value="option.value" />
+    </el-select>
+  </div>
+
+  <el-table :data="pager.rows.value" v-loading="loading" stripe>
     <el-table-column prop="name" label="资源名称" min-width="150">
       <template #default="{ row }">
         <el-link type="primary" @click="router.push(`/resources/${row.id}`)">
@@ -133,4 +153,6 @@ onMounted(load)
       </template>
     </el-table-column>
   </el-table>
+  <TablePager :page="pager.page.value" :size="pager.size.value" :total="pager.total.value"
+    @update:page="pager.page.value = $event" @update:size="pager.size.value = $event" />
 </template>
