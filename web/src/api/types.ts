@@ -1190,6 +1190,8 @@ export interface Resource {
   can_edit: boolean
   can_reveal: boolean
   binding_count?: number
+  /** 详情接口返回：引用这个资源的服务（命名空间/服务名、别名） */
+  used_by?: { service_id: number; service_name: string; namespace_name: string; alias: string }[]
 }
 
 export interface ResourceVersion {
