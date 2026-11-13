@@ -194,27 +194,27 @@ onMounted(load)
       <el-button type="primary" :icon="Plus" @click="openCreator">新增账号</el-button>
     </div>
     <el-table v-loading="loading" :data="pager.rows.value" empty-text="没有匹配的账号">
-      <el-table-column label="账号" min-width="190">
+      <el-table-column label="账号" min-width="150">
         <template #default="{ row }">
           <el-button link type="primary" @click="openDetail(row)">{{ row.display_name }}</el-button>
           <div class="hint">{{ row.username }}<template v-if="row.email"> · {{ row.email }}</template></div>
         </template>
       </el-table-column>
-      <el-table-column label="身份" min-width="170">
+      <el-table-column label="身份" min-width="140">
         <template #default="{ row }">
           <el-tag v-if="row.is_platform_admin" type="danger" effect="plain">平台管理员</el-tag>
           <span v-else :class="{ hint: !row.grant_count }">{{ row.role_label }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="授权数" width="90"><template #default="{ row }">{{ row.grant_count }}</template></el-table-column>
-      <el-table-column label="状态" width="150">
+      <el-table-column label="授权数" width="78"><template #default="{ row }">{{ row.grant_count }}</template></el-table-column>
+      <el-table-column label="状态" width="120">
         <template #default="{ row }">
           <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
           <el-tag v-if="row.must_change_password" type="warning" class="gap">待改密</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="最近登录" width="170"><template #default="{ row }">{{ fmtTime(row.last_login_at) }}</template></el-table-column>
-      <el-table-column label="操作" width="260" fixed="right">
+      <el-table-column label="最近登录" width="150"><template #default="{ row }">{{ fmtTime(row.last_login_at) }}</template></el-table-column>
+      <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openDetail(row)">授权</el-button>
           <template v-if="row.can_manage">

@@ -82,13 +82,13 @@ onMounted(load)
         <span class="count">共 {{ filtered.length }} 个项目</span>
       </div>
       <el-table v-loading="loading" :data="pager.rows.value" empty-text="暂无可见项目">
-        <el-table-column label="项目" min-width="190">
+        <el-table-column label="项目" min-width="150">
           <template #default="{ row }">
             <RouterLink :to="{ name: 'project-detail', params: { id: row.id } }"><b>{{ row.name }}</b></RouterLink>
             <div class="hint mono">{{ row.slug }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="SWR 授权" min-width="240">
+        <el-table-column label="SWR 授权" min-width="190">
           <template #default="{ row }">
             <div v-for="o in row.registry_orgs" :key="o.namespace" class="hint">
               <span class="mono">{{ o.namespace }}</span>：{{ o.base_prefixes.length ? o.base_prefixes.join('、') : '全部仓库' }}
@@ -96,7 +96,7 @@ onMounted(load)
             <span v-if="!row.registry_orgs.length" class="hint">未授权</span>
           </template>
         </el-table-column>
-        <el-table-column label="命名空间" min-width="240">
+        <el-table-column label="命名空间" min-width="190">
           <template #default="{ row }">
             <div class="tags">
               <el-tag v-for="id in row.namespace_ids" :key="id" size="small" :type="namespaceTag(id).type" effect="plain">
@@ -106,9 +106,9 @@ onMounted(load)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="我的权限" width="120"><template #default="{ row }">{{ access(row) }}</template></el-table-column>
-        <el-table-column label="更新时间" width="170"><template #default="{ row }">{{ fmtTime(row.updated_at) }}</template></el-table-column>
-        <el-table-column label="操作" width="170" fixed="right">
+        <el-table-column label="我的权限" width="100"><template #default="{ row }">{{ access(row) }}</template></el-table-column>
+        <el-table-column label="更新时间" width="150"><template #default="{ row }">{{ fmtTime(row.updated_at) }}</template></el-table-column>
+        <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="router.push({ name: 'project-detail', params: { id: row.id } })">进入</el-button>
             <template v-if="session.canGlobal('project.manage')">

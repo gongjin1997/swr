@@ -86,20 +86,20 @@ onMounted(load)
         <el-button v-if="embedded && canCreate" type="primary" :icon="Plus" @click="open(null)">新建应用</el-button>
       </div>
       <el-table v-loading="loading" :data="pager.rows.value" :empty-text="keyword || mode ? '没有匹配的应用' : '还没有应用'">
-        <el-table-column label="应用" min-width="200">
+        <el-table-column label="应用" min-width="160">
           <template #default="{ row }">
             <b>{{ row.name }}</b>
             <div v-if="row.description" class="hint">{{ row.description }}</div>
           </template>
         </el-table-column>
-        <el-table-column v-if="!embedded" label="项目" min-width="140">
+        <el-table-column v-if="!embedded" label="项目" min-width="110">
           <template #default="{ row }"><RouterLink :to="{ name: 'project-detail', params: { id: row.project_id } }">{{ session.projectName(row.project_id) }}</RouterLink></template>
         </el-table-column>
-        <el-table-column label="镜像仓库" min-width="260"><template #default="{ row }"><span class="mono break-word">{{ row.image_repo }}</span></template></el-table-column>
-        <el-table-column label="默认方式" width="100"><template #default="{ row }">{{ MODE_TEXT[row.default_mode] }}</template></el-table-column>
-        <el-table-column label="镜像内路径" min-width="180"><template #default="{ row }"><span class="mono">{{ destination(row) }}</span></template></el-table-column>
-        <el-table-column label="更新时间" width="170"><template #default="{ row }">{{ fmtTime(row.updated_at) }}</template></el-table-column>
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="镜像仓库" min-width="200"><template #default="{ row }"><span class="mono break-word">{{ row.image_repo }}</span></template></el-table-column>
+        <el-table-column label="默认方式" width="88"><template #default="{ row }">{{ MODE_TEXT[row.default_mode] }}</template></el-table-column>
+        <el-table-column label="镜像内路径" min-width="140"><template #default="{ row }"><span class="mono">{{ destination(row) }}</span></template></el-table-column>
+        <el-table-column label="更新时间" width="150"><template #default="{ row }">{{ fmtTime(row.updated_at) }}</template></el-table-column>
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button v-if="session.canProject(row.project_id, 'build.run')" link type="primary"
               @click="router.push({ name: 'build', query: { app: row.id } })">构建</el-button>
