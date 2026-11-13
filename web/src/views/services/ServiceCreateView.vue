@@ -84,7 +84,9 @@ function payload(): ServiceCreate {
   return {
     ...base,
     spec: spec.value,
-    config: { env: entries(config.env), secret_env: entries(config.secret), files: entries(config.files, true) }
+    config: { env: entries(config.env), secret_env: entries(config.secret), files: entries(config.files, true) },
+    // 绑定只提交选了资源的行；预览与创建都走同一份 payload
+    bindings: bindings.value.filter((b) => b.resource_id).map((b) => ({ resource_id: b.resource_id, alias: b.alias.trim().toUpperCase() })),
   }
 }
 
@@ -219,6 +221,9 @@ watch(() => [form.namespaceId, form.mode], () => {
   spec.value = null
   preview.value = null
   environment.value = null
+  bindings.value = []
+  availableResources.value = []
+  if (form.mode === 'managed') void loadAvailableResources()
 })
 watch(() => form.deployment, () => { form.container = containers.value[0]?.name ?? '' })
 watch(() => form.name, (name) => {
@@ -340,9 +345,9 @@ onMounted(load)
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="别名" min-width="150">
+          <el-table-column label="别名（可空）" min-width="170">
             <template #default="{ row }">
-              <el-input v-model="row.alias" placeholder="例如：db, cache" />
+              <el-input v-model="row.alias" placeholder="大写前缀，可留空，如 DB" />
             </template>
           </el-table-column>
           <el-table-column width="56">

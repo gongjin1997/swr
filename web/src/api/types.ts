@@ -722,14 +722,6 @@ export interface Service {
   updated_at: string
 }
 
-export interface ServiceCreate {
-  name: string
-  namespace_id: number
-  app_id?: number
-  mode: ServiceMode
-  spec: ImageOnlySpec | ManagedSpec
-  bindings?: { resource_id: number; alias: string }[]
-}
 
 export interface ConfigPin {
   set_id: number

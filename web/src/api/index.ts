@@ -205,6 +205,8 @@ export interface ServiceCreate {
   app_id: number
   spec: ImageOnlySpec | ManagedSpec
   config?: ServiceConfigInput
+  /** 新建时一并绑定的资源（只有托管服务）；别名可空 */
+  bindings?: { resource_id: number; alias: string }[]
 }
 
 export const serviceApi = {
