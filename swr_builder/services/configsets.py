@@ -436,6 +436,30 @@ def effective_config(store: Store, me: Principal, namespace_id: int, project_id:
             files[item["name"]] = {"name": item["name"], "kind": item["kind"], "origin": origin,
                                    "keys": [e["key"] for e in item["entries"]],
                                    "overrides": [replaced["origin"]] if replaced else []}
+    if service_id:
+        bindings = store.list_service_resource_bindings(service_id)
+        if bindings:
+            for binding in bindings:
+                resource = binding["resource"]
+                origin = {"scope_type": "binding", "scope_id": 0, "config_set_id": 0, "resource_id": resource["id"],
+                         "resource_name": resource["name"], "alias": binding["alias"], "version": resource.get("version") or 0}
+                from ..delivery import resources as resource_types
+                sizes = resource_types.secret_size(resource["type"], resource.get("attributes") or {}, store._box)
+                masked = resource_types.mask_secrets(resource["type"], resource.get("attributes") or {}, sizes)
+                for key in masked:
+                    is_secret = key in resource_types.secret_attributes(resource["type"])
+                    kind_key = "secret_env" if is_secret else "env"
+                    target = merged[kind_key]
+                    export_key = (binding["alias"] + "_" if binding["alias"] else "") + key.upper()
+                    current = target.get(export_key)
+                    if current and current.get("locked"):
+                        warnings.append(f"{export_key} 被{SCOPE_LABELS[current['origin']['scope_type']]}层锁定，资源绑定的值未生效")
+                        continue
+                    overridden = ([current["origin"]] + current.get("overrides", [])) if current else []
+                    entry_data = {"key": export_key, "value": masked[key] if not is_secret else None,
+                                 "secret": is_secret, "source": "resource", "size": sizes.get(key, 0) if is_secret else 0,
+                                 "origin": origin, "overrides": overridden}
+                    target[export_key] = entry_data
     return {"env": list(merged["env"].values()), "secret_env": list(merged["secret_env"].values()),
             "files": list(files.values()), "warnings": warnings}
 

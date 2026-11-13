@@ -17,7 +17,7 @@ from ..store import Store
 from .render import ConfigObject, RenderInputs
 from .spec import SERVICE_FILES, check_resources, effective_resources, ingress_host, object_names
 
-SCOPE_ORDER = {"platform": 0, "project": 1, "environment": 2, "binding": 2.5, "service": 3}
+SCOPE_ORDER = {"platform": 0, "project": 1, "environment": 2, "service": 3}
 MAX_OBJECT_BYTES = 1000 * 1024
 FILE_KINDS = ("files", "secret_files")
 
@@ -39,234 +39,129 @@ def _pinned_sets(store: Store, items: List[Dict[str, Any]]) -> List[Dict[str, An
     return sets
 
 
-def _pinned_resources(store: Store, box: Optional[SecretBox], items: List[Dict[str, Any]], reveal: bool
-                     ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Tuple[str, str]]]]:
-    """从快照恢复资源及其导出。返回 (resources, exports_by_kind)"""
-    from . import resources as resource_types
+def _build_resource_chain(store: Store, resource_id: int, visited: Optional[set] = None) -> List[Dict[str, Any]]:
+    """构建资源链 [自己, 父, 祖父, ...]。"""
+    if visited is None:
+        visited = set()
+    if resource_id in visited:
+        raise ValueError("资源父链中存在循环引用")
+    visited.add(resource_id)
+    resource = store.get_resource(resource_id)
+    if not resource:
+        raise ValueError(f"资源 ID {resource_id} 不存在")
+    chain = [resource]
+    if resource.get("parent_id"):
+        chain.extend(_build_resource_chain(store, resource["parent_id"], visited))
+    return chain
 
-    resources_by_id: Dict[int, Dict[str, Any]] = {}
-    exports: Dict[str, List[Tuple[str, str]]] = {"env": [], "secret_env": []}
 
+def _pinned_resources(store: Store, box: SecretBox, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """从快照恢复资源绑定。返回 [{resource_id, alias, name, type, version, chain}]。"""
+    result = []
     for item in items:
         resource_id = item["resource_id"]
-        version = item["version"]
-
-        # 恢复资源版本
-        resource_version = store.get_resource_version(resource_id, version)
+        version_num = item["version"]
+        resource_version = store.get_resource_version(resource_id, version_num)
         if not resource_version:
-            raise ValueError(f"发布快照引用的资源版本已被删除（资源 ID {resource_id} v{version}）")
-
+            raise ValueError(f"发布快照引用的资源版本已被删除（资源 ID {resource_id} v{version_num}）")
         resource = store.get_resource(resource_id)
         if not resource:
-            raise ValueError(f"发布快照引用的资源已被删除（资源 ID {resource_id}）")
-
-        # 解密属性（如果 reveal）
-        attributes = resource_version.get("attributes") or {}
-        if reveal and box:
-            decrypted = {}
-            for key, value in attributes.items():
-                if key in resource_types.secret_attributes(resource["type"]):
-                    try:
-                        decrypted[key] = box.decrypt(value)
-                    except Exception:
-                        decrypted[key] = ""
-                else:
-                    decrypted[key] = value
-            attributes = decrypted
-
-        resources_by_id[resource_id] = {
-            "id": resource_id,
+            raise ValueError(f"资源 ID {resource_id} 已被删除")
+        chain_data = []
+        for ancestor in item.get("chain") or []:
+            anc_version = store.get_resource_version(ancestor["resource_id"], ancestor["version"])
+            if not anc_version:
+                raise ValueError(f"快照引用的祖先资源版本已被删除（ID {ancestor['resource_id']} v{ancestor['version']}）")
+            anc_resource = store.get_resource(ancestor["resource_id"])
+            if not anc_resource:
+                raise ValueError(f"祖先资源 ID {ancestor['resource_id']} 已被删除")
+            chain_data.append({
+                "resource_id": anc_resource["id"],
+                "name": anc_resource["name"],
+                "type": anc_resource["type"],
+                "version": ancestor["version"],
+            })
+        result.append({
+            "resource_id": resource_id,
+            "alias": item.get("alias", ""),
+            "name": resource["name"],
             "type": resource["type"],
-            "attributes": attributes,
-        }
-
-    # 计算每个资源的导出（包括父链）
-    for item in items:
-        resource_id = item["resource_id"]
-        alias = item["alias"]
-
-        # 恢复父链
-        parent_chain_data = item.get("parent_chain") or []
-        chain = []
-
-        for chain_item in parent_chain_data:
-            chain_resource_id = chain_item["resource_id"]
-            chain_version = chain_item["version"]
-
-            if chain_resource_id not in resources_by_id:
-                # 恢复父链资源
-                chain_resource_version = store.get_resource_version(chain_resource_id, chain_version)
-                if not chain_resource_version:
-                    continue
-
-                chain_resource = store.get_resource(chain_resource_id)
-                if not chain_resource:
-                    continue
-
-                chain_attributes = chain_resource_version.get("attributes") or {}
-                if reveal and box:
-                    decrypted = {}
-                    for key, value in chain_attributes.items():
-                        if key in resource_types.secret_attributes(chain_resource["type"]):
-                            try:
-                                decrypted[key] = box.decrypt(value)
-                            except Exception:
-                                decrypted[key] = ""
-                        else:
-                            decrypted[key] = value
-                    chain_attributes = decrypted
-
-                resources_by_id[chain_resource_id] = {
-                    "id": chain_resource_id,
-                    "type": chain_resource["type"],
-                    "attributes": chain_attributes,
-                }
-
-            chain.append(resources_by_id[chain_resource_id])
-
-        # 计算导出
-        try:
-            resource_exports = resource_types.compute_exports(chain)
-            for kind in ("env", "secret_env"):
-                exports[kind].extend(resource_exports.get(kind, []))
-        except ValueError:
-            # 导出计算失败，跳过
-            continue
-
-    return list(resources_by_id.values()), exports
+            "version": version_num,
+            "chain": chain_data,
+        })
+    return result
 
 
-def _current_bindings(store: Store, box: Optional[SecretBox], service_id: int, reveal: bool
-                     ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Tuple[str, str]]], List[Dict[str, Any]]]:
-    """查询服务当前的资源绑定。返回 (bindings, exports_by_kind, resource_pins)"""
-    from . import resources as resource_types
-
+def _current_resources(store: Store, service_id: int) -> List[Dict[str, Any]]:
+    """当前绑定的资源（含完整链）。返回 [{resource_id, alias, name, type, version, chain}]。"""
     bindings = store.list_service_resource_bindings(service_id)
-    resources_by_id: Dict[int, Dict[str, Any]] = {}
-    exports: Dict[str, List[Tuple[str, str]]] = {"env": [], "secret_env": []}
-    resource_pins: List[Dict[str, Any]] = []
-
+    result = []
     for binding in bindings:
         resource = binding["resource"]
-        resource_id = resource["id"]
-
-        # 收集资源及其父链
-        chain: List[Dict[str, Any]] = []
-
-        # 构建父链（需要查询父资源）
-        # 简化实现：仅包含当前资源，父链展开由 resource_types.parent_chain 完成
-        attributes = resource.get("attributes") or {}
-
-        if reveal and box:
-            decrypted = {}
-            for key, value in attributes.items():
-                if key in resource_types.secret_attributes(resource["type"]):
-                    try:
-                        decrypted[key] = box.decrypt(value)
-                    except Exception:
-                        decrypted[key] = ""
-                else:
-                    decrypted[key] = value
-            attributes = decrypted
-
-        resources_by_id[resource_id] = {
-            "id": resource_id,
-            "type": resource["type"],
-            "attributes": attributes,
-            "scope_type": resource["scope_type"],
-            "scope_id": resource["scope_id"],
-        }
-
-        chain.append(resources_by_id[resource_id])
-
-        # 展开父链（如果有父资源）
-        parent_chain_data: List[Dict[str, Any]] = []
-        if resource.get("parent_resource_id"):
-            try:
-                # 查询父资源并添加到链中
-                parent_id = resource["parent_resource_id"]
-                parent_resource = store.get_resource(parent_id)
-                if parent_resource:
-                    parent_attributes = parent_resource.get("attributes") or {}
-                    if reveal and box:
-                        parent_decrypted = {}
-                        for key, value in parent_attributes.items():
-                            if key in resource_types.secret_attributes(parent_resource["type"]):
-                                try:
-                                    parent_decrypted[key] = box.decrypt(value)
-                                except Exception:
-                                    parent_decrypted[key] = ""
-                            else:
-                                parent_decrypted[key] = value
-                        parent_attributes = parent_decrypted
-
-                    parent_data = {
-                        "id": parent_id,
-                        "type": parent_resource["type"],
-                        "attributes": parent_attributes,
-                        "scope_type": parent_resource["scope_type"],
-                        "scope_id": parent_resource["scope_id"],
-                    }
-                    resources_by_id[parent_id] = parent_data
-                    chain.append(parent_data)
-                    parent_chain_data.append({
-                        "resource_id": parent_id,
-                        "version": parent_resource.get("version") or 0,
-                    })
-
-                    # 递归查询祖父资源（如果有）
-                    if parent_resource.get("parent_resource_id"):
-                        grandparent_id = parent_resource["parent_resource_id"]
-                        grandparent_resource = store.get_resource(grandparent_id)
-                        if grandparent_resource:
-                            grandparent_attributes = grandparent_resource.get("attributes") or {}
-                            if reveal and box:
-                                grandparent_decrypted = {}
-                                for key, value in grandparent_attributes.items():
-                                    if key in resource_types.secret_attributes(grandparent_resource["type"]):
-                                        try:
-                                            grandparent_decrypted[key] = box.decrypt(value)
-                                        except Exception:
-                                            grandparent_decrypted[key] = ""
-                                    else:
-                                        grandparent_decrypted[key] = value
-                                grandparent_attributes = grandparent_decrypted
-
-                            grandparent_data = {
-                                "id": grandparent_id,
-                                "type": grandparent_resource["type"],
-                                "attributes": grandparent_attributes,
-                                "scope_type": grandparent_resource["scope_type"],
-                                "scope_id": grandparent_resource["scope_id"],
-                            }
-                            resources_by_id[grandparent_id] = grandparent_data
-                            chain.append(grandparent_data)
-                            parent_chain_data.append({
-                                "resource_id": grandparent_id,
-                                "version": grandparent_resource.get("version") or 0,
-                            })
-            except Exception:
-                # 父链展开失败，仅使用当前资源
-                pass
-
-        # 计算导出
-        try:
-            resource_exports = resource_types.compute_exports(chain)
-            for kind in ("env", "secret_env"):
-                exports[kind].extend(resource_exports.get(kind, []))
-        except ValueError:
-            continue
-
-        # 记录资源 pin（包括父链）
-        resource_pins.append({
-            "resource_id": resource_id,
+        chain = _build_resource_chain(store, resource["id"])
+        chain_data = [{"resource_id": r["id"], "name": r["name"], "type": r["type"], "version": r.get("version") or 0}
+                      for r in chain[1:]]
+        result.append({
+            "resource_id": resource["id"],
             "alias": binding["alias"],
+            "name": resource["name"],
             "type": resource["type"],
             "version": resource.get("version") or 0,
-            "parent_chain": parent_chain_data,
+            "chain": chain_data,
         })
+    return result
 
-    return bindings, exports, resource_pins
+
+def _resource_exports(store: Store, box: SecretBox, bindings: List[Dict[str, Any]], reveal: bool
+                     ) -> Tuple[Dict[str, str], Dict[str, bytes], List[str]]:
+    """计算资源导出。返回 (env, secret_env, warnings)。"""
+    from . import resources as resource_types
+    env: Dict[str, str] = {}
+    secret_env: Dict[str, bytes] = {}
+    warnings: List[str] = []
+    export_list = []
+    for binding in bindings:
+        resource_id = binding["resource_id"]
+        version = binding["version"]
+        alias = binding.get("alias", "")
+        resource_version = store.get_resource_version(resource_id, version)
+        if not resource_version:
+            warnings.append(f"资源 {binding['name']} 版本 {version} 不存在，跳过导出")
+            continue
+        resource = store.get_resource(resource_id)
+        if not resource:
+            warnings.append(f"资源 {binding['name']} 已被删除，跳过导出")
+            continue
+        chain_full = [{"type": resource["type"], "name": resource["name"],
+                      "attributes": resource_version.get("attributes") or {}}]
+        for anc in binding.get("chain") or []:
+            anc_version = store.get_resource_version(anc["resource_id"], anc["version"])
+            if not anc_version:
+                warnings.append(f"祖先资源版本缺失，跳过 {binding['name']} 的导出")
+                chain_full = []
+                break
+            chain_full.append({"type": anc["type"], "name": anc["name"],
+                              "attributes": anc_version.get("attributes") or {}})
+        if not chain_full:
+            continue
+        try:
+            exports = resource_types.compute_exports(chain_full, alias, box)
+            export_list.append({"alias": alias or f"资源{resource_id}", "exports": exports})
+        except ValueError as e:
+            warnings.append(f"资源 {binding['name']} 导出失败：{e}")
+    try:
+        resource_types.check_conflicts(export_list)
+    except ValueError as e:
+        raise ValueError(f"资源绑定导出冲突：{e}")
+    for item in export_list:
+        for key, value in item["exports"].get("env") or []:
+            env[key] = value
+        for key, value in item["exports"].get("secret_env") or []:
+            if reveal:
+                secret_env[key] = value.encode("utf-8")
+            else:
+                secret_env[key] = b"*" * max(len(value.encode("utf-8")), 1)
+    return env, secret_env, warnings
 
 
 def secret_bytes(store: Store, box: Optional[SecretBox], entry: Dict[str, Any], reveal: bool) -> bytes:
@@ -294,14 +189,13 @@ def _merge(sets: List[Dict[str, Any]], kind: str) -> Tuple[Dict[str, Dict[str, A
                 continue
             merged[entry["key"]] = entry
             origin[entry["key"]] = {"platform": "平台", "project": "项目", "environment": "环境",
-                                    "binding": "资源绑定", "service": "服务"}[item["scope_type"]]
+                                    "service": "服务"}[item["scope_type"]]
     return merged, warnings
 
 
 def current_snapshot(store: Store, service: Dict[str, Any]) -> Dict[str, Any]:
     """当前的环境档案与负载均衡入口（不含配置集）。"""
     from ..services.environments import merged_profile
-
     row = store.get_environment_profile(service["namespace_id"])
     ingress = store.get_ingress_profile(row["ingress_profile_id"]) if row and row.get("ingress_profile_id") else None
     return {"profile": merged_profile(row["profile"] if row else None), "profile_version": row["version"] if row else 0,
@@ -314,69 +208,39 @@ def resolve(store: Store, box: Optional[SecretBox], service: Dict[str, Any], spe
             deployment_id: Optional[int] = None, extra_sets: Optional[List[Dict[str, Any]]] = None,
             extra_bindings: Optional[List[Dict[str, Any]]] = None
             ) -> Tuple[RenderInputs, Dict[str, Any]]:
-    """返回 (渲染输入, 快照)。pinned 为已提交发布的快照；extra_sets 用于新建前的预览（尚未保存的服务层配置）；
-    extra_bindings 用于新建前的预览（尚未保存的资源绑定）。"""
+    """返回 (渲染输入, 快照)。pinned 为已提交发布的快照；extra_sets/extra_bindings 用于新建前的预览（尚未保存）。"""
     namespace = store.get_namespace(service["namespace_id"])
     if not namespace:
         raise ValueError("服务所在的环境不存在")
-
-    # 处理配置集
     if pinned:
         snapshot = {key: copy.deepcopy(pinned.get(key)) for key in
                     ("profile", "profile_version", "ingress_profile_id", "ingress", "ingress_version")}
         sets = _pinned_sets(store, pinned.get("config") or [])
+        resource_items = _pinned_resources(store, box, pinned.get("resources") or []) if box else []
     else:
         snapshot = current_snapshot(store, service)
         sets = [s for s in store.list_config_sets(layers(service)) if s.get("version")] if service.get("id") else \
             [s for s in store.list_config_sets(layers(service)[:3]) if s.get("version")]
         sets += extra_sets or []
-
-    # 处理资源绑定
-    resource_exports: Dict[str, List[Tuple[str, str]]] = {"env": [], "secret_env": []}
-    resource_pins: List[Dict[str, Any]] = []
-
-    if pinned and "resources" in pinned:
-        # 从快照恢复资源
-        _, resource_exports = _pinned_resources(store, box, pinned["resources"], reveal)
-        resource_pins = pinned["resources"]
-    elif service.get("id"):
-        # 查询当前绑定
-        _, resource_exports, resource_pins = _current_bindings(store, box, service["id"], reveal)
-    elif extra_bindings:
-        # 新建服务预览：使用传入的绑定
-        # 简化实现：不计算导出，留给后续完善
-        pass
-
-    # 将资源导出转换为配置集格式参与合并
-    if resource_exports["env"] or resource_exports["secret_env"]:
-        if resource_exports["env"]:
-            binding_env_set = {
-                "id": -1,
-                "scope_type": "binding",
-                "scope_id": 0,
-                "kind": "env",
-                "entries": [{"key": k, "value": v} for k, v in resource_exports["env"]]
-            }
-            sets.append(binding_env_set)
-
-        if resource_exports["secret_env"]:
-            binding_secret_set = {
-                "id": -2,
-                "scope_type": "binding",
-                "scope_id": 0,
-                "kind": "secret_env",
-                "entries": [{"key": k, "size": len(v.encode("utf-8")), "ciphertext": v if not reveal else ""}
-                           for k, v in resource_exports["secret_env"]]
-            }
-            sets.append(binding_secret_set)
-
+        if service.get("id"):
+            resource_items = _current_resources(store, service["id"])
+        else:
+            resource_items = extra_bindings or []
     profile = snapshot["profile"]
     names = object_names(spec, service["name"], namespace["name"], profile)
     env_entries, warnings = _merge(sets, "env")
     secret_entries, secret_warnings = _merge(sets, "secret_env")
     warnings += secret_warnings
-    used = {s["id"]: s for s in sets if s["kind"] in ("env", "secret_env") and s["id"] > 0}
-
+    used = {s["id"]: s for s in sets if s["kind"] in ("env", "secret_env")}
+    if box and resource_items:
+        resource_env, resource_secret, resource_warnings = _resource_exports(store, box, resource_items, reveal)
+        warnings += resource_warnings
+        env_entries.update({k: {"key": k, "value": v} for k, v in resource_env.items()})
+        for k, v in resource_secret.items():
+            secret_entries[k] = {"key": k, "secret": True, "source": "resource", "size": len(v)}
+    else:
+        resource_env = {}
+        resource_secret = {}
     mounts: Dict[str, ConfigObject] = {}
     for mount in spec.get("mounts") or []:
         config = mount["config"]
@@ -400,23 +264,26 @@ def resolve(store: Store, box: Optional[SecretBox], service: Dict[str, Any], spe
         mounts[config] = ConfigObject(name=chosen["name"] if shared else names["properties"], secret=secret, data=data,
                                       shared=shared, source=source if shared else {})
         used[chosen["id"]] = chosen
-
     pins = [{"set_id": s["id"], "scope_type": s["scope_type"], "scope_id": s["scope_id"], "name": s["name"],
              "kind": s["kind"], "version": s["version"]}
             for s in sorted(used.values(), key=lambda s: (SCOPE_ORDER[s["scope_type"]], s["kind"], s["name"]))]
     snapshot["config"] = pins
-    snapshot["resources"] = resource_pins
-
-    # config_hash 包含配置集和资源
-    config_digest = json.dumps([(p["set_id"], p["version"]) for p in pins])
-    resource_digest = json.dumps([(r["resource_id"], r["version"]) for r in resource_pins])
-    digest = hashlib.sha256((config_digest + resource_digest).encode("ascii")).hexdigest()[:16]
-
+    snapshot["resources"] = resource_items
+    if resource_items:
+        all_versions = [(p["set_id"], p["version"]) for p in pins]
+        for item in resource_items:
+            all_versions.append((f"resource_{item['resource_id']}", item["version"]))
+            for anc in item.get("chain") or []:
+                all_versions.append((f"resource_{anc['resource_id']}", anc["version"]))
+        digest = hashlib.sha256(json.dumps(all_versions, sort_keys=True).encode("ascii")).hexdigest()[:16]
+    else:
+        digest = hashlib.sha256(json.dumps([(p["set_id"], p["version"]) for p in pins]).encode("ascii")).hexdigest()[:16]
     inputs = RenderInputs(
         service_id=service.get("id") or 0, service_name=service["name"], namespace=namespace["name"], spec=spec,
         profile=profile, ingress=snapshot.get("ingress"), image=image,
-        env={key: entry["value"] for key, entry in env_entries.items()},
-        secret_env={key: secret_bytes(store, box, entry, reveal) for key, entry in secret_entries.items()},
+        env={**{key: entry["value"] for key, entry in env_entries.items()}, **resource_env},
+        secret_env={**{key: secret_bytes(store, box, entry, reveal) for key, entry in secret_entries.items()},
+                    **resource_secret},
         mounts=mounts, config_hash=digest, revision_id=revision_id, deployment_id=deployment_id, warnings=warnings)
     return inputs, snapshot
 
@@ -424,7 +291,6 @@ def resolve(store: Store, box: Optional[SecretBox], service: Dict[str, Any], spe
 def check_render(inputs: RenderInputs, namespace: Dict[str, Any]) -> List[str]:
     """依赖环境档案、负载均衡入口与命名空间策略的检查，返回错误列表（空列表表示可以下发）。"""
     from ..services.namespaces import effective_policy
-
     policy = effective_policy(namespace["policy"])
     spec, profile = inputs.spec, inputs.profile
     errors: List[str] = []

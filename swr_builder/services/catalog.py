@@ -77,7 +77,7 @@ def revision_diff(old: Any, new: Any) -> List[Dict[str, Any]]:
 
 # ------------------------------------------------------------------ 配置漂移
 def config_status(store: Store, services: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
-    """托管服务上次成功发布所用的配置版本与当前版本的差异（各层配置集、环境档案、负载均衡入口）。"""
+    """托管服务上次成功发布所用的配置版本与当前版本的差异（各层配置集、环境档案、负载均衡入口、资源绑定）。"""
     managed = [s for s in services if mode_of(s) == "managed"]
     if not managed:
         return {}
@@ -119,6 +119,32 @@ def config_status(store: Store, services: List[Dict[str, Any]]) -> Dict[int, Dic
                 changes.append({"set_id": item["id"], "scope_type": item["scope_type"], "scope_id": item["scope_id"],
                                 "name": item["name"], "kind": item["kind"], "version": None, "change": "added",
                                 "current": item["version"]})
+        pinned_resources = {r["resource_id"]: r for r in inputs.get("resources") or []}
+        current_bindings = store.list_service_resource_bindings(service["id"])
+        for binding in current_bindings:
+            resource = binding["resource"]
+            pinned = pinned_resources.get(resource["id"])
+            if not pinned:
+                changes.append({"kind": "resource", "name": f"资源 {resource['name']}", "change": "added",
+                               "scope_type": "binding", "resource_id": resource["id"], "version": None,
+                               "current": resource.get("version") or 0})
+            elif pinned["version"] != resource.get("version", 0):
+                changes.append({"kind": "resource", "name": f"资源 {resource['name']}", "change": "updated",
+                               "scope_type": "binding", "resource_id": resource["id"], "version": pinned["version"],
+                               "current": resource.get("version") or 0})
+            else:
+                for anc_pinned in pinned.get("chain") or []:
+                    anc = store.get_resource(anc_pinned["resource_id"])
+                    if anc and anc.get("version", 0) != anc_pinned["version"]:
+                        changes.append({"kind": "resource", "name": f"资源 {resource['name']} 的父资源", "change": "updated",
+                                       "scope_type": "binding", "resource_id": anc["id"], "version": anc_pinned["version"],
+                                       "current": anc.get("version") or 0})
+                        break
+        for pinned_res in pinned_resources.values():
+            if not any(b["resource_id"] == pinned_res["resource_id"] for b in current_bindings):
+                changes.append({"kind": "resource", "name": f"资源 ID {pinned_res['resource_id']}", "change": "removed",
+                               "scope_type": "binding", "resource_id": pinned_res["resource_id"],
+                               "version": pinned_res["version"], "current": None})
         profile = profiles.get(service["namespace_id"])
         if (profile["version"] if profile else 0) != inputs.get("profile_version", 0):
             changes.append({"kind": "profile", "name": "环境档案", "change": "updated", "scope_type": "environment",
@@ -262,30 +288,39 @@ def create_service(store: Store, me: Principal, data: Any, box: Optional[SecretB
             raise Conflict(f"该环境中的服务 {clash['name']} 已关联 Deployment {deployment}；"
                            "可以在该服务中把它转为托管服务")
     prepared = _service_config(store, box, data.get("config")) if managed else []
-    created = store.create_service(name, project_id, namespace_id, app_id, spec, me.id)
-    for kind, entries, refs in prepared:
-        set_name = configsets.SINGLETON_NAMES.get(kind) or SERVICE_FILES
-        store.create_config_set("service", created["id"], set_name, kind, "", entries, refs, "新建服务时创建", me.id)
-
-    # 创建资源绑定
     bindings = data.get("bindings") or []
+    if bindings and not managed:
+        raise ValueError("只有托管服务可以绑定资源")
+    validated_bindings = []
     if bindings:
+        from . import resources as resource_service
         if not isinstance(bindings, list):
             raise ValueError("bindings 必须是列表")
         for binding in bindings:
             if not isinstance(binding, dict):
                 raise ValueError("每个 binding 必须是字典")
             resource_id = binding.get("resource_id")
-            alias = binding.get("alias")
-            if type(resource_id) is not int or not isinstance(alias, str):
-                raise ValueError("binding 必须包含 resource_id (int) 和 alias (str)")
-            # 验证资源是否存在且可访问
+            alias = binding.get("alias", "")
+            if type(resource_id) is not int:
+                raise ValueError("binding.resource_id 必须是整数")
+            if not isinstance(alias, str):
+                raise ValueError("binding.alias 必须是字符串")
+            from ..delivery import resources as resource_types
+            resource_types.validate_alias(alias)
             resource = store.get_resource(resource_id)
             if not resource:
                 raise NotFound(f"资源 #{resource_id} 不存在")
-            # 创建绑定
-            store.create_service_resource_binding(created["id"], resource_id, alias)
-
+            if not resource_service._can_view(me, resource["scope_type"], resource["scope_id"]):
+                raise NotFound(f"资源 #{resource_id} 不存在")
+            if resource["scope_type"] == "environment" and resource["scope_id"] != namespace_id:
+                raise Forbidden("只能绑定本环境或平台的资源")
+            validated_bindings.append((resource_id, alias))
+    created = store.create_service(name, project_id, namespace_id, app_id, spec, me.id)
+    for kind, entries, refs in prepared:
+        set_name = configsets.SINGLETON_NAMES.get(kind) or SERVICE_FILES
+        store.create_config_set("service", created["id"], set_name, kind, "", entries, refs, "新建服务时创建", me.id)
+    for resource_id, alias in validated_bindings:
+        store.create_service_resource_binding(created["id"], resource_id, alias, me.id)
     return service_response(created)
 
 

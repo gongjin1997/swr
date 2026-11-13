@@ -48,12 +48,18 @@ def _resource_management(db: Any) -> None:
         db.execute(statement)
 
 
+def _resource_bindings(db: Any) -> None:
+    for statement in RESOURCE_BINDINGS:
+        db.execute(statement)
+
+
 MIGRATIONS: List[Migration] = [
     (1, "v2-postgresql-baseline", _baseline),
     (2, "v2-environment-profiles-config-sets-certificates", _environment_config),
     (3, "v2-managed-service-manifests", _managed_delivery),
     (4, "v2-patch-script-history", _patch_scripts),
     (5, "v2-resource-management-and-bindings", _resource_management),
+    (6, "v2-resource-parents-and-binding-keys", _resource_bindings),
 ]
 
 

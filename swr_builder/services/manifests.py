@@ -41,14 +41,15 @@ def _preview_image(ctx, service: Dict[str, Any]) -> str:
 
 async def _render_preview(ctx, service: Dict[str, Any], spec: Dict[str, Any], *, dry_run: bool,
                           revision_id: Optional[int] = None, image: Optional[str] = None,
-                          extra_sets: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                          extra_sets: Optional[List[Dict[str, Any]]] = None,
+                          extra_bindings: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     namespace = ctx.store.get_namespace(service["namespace_id"])
     image = image or _preview_image(ctx, service)
     result: Dict[str, Any] = {"mode": "managed", "image": image, "revision_id": revision_id, "objects": [], "yaml": "",
-                              "errors": [], "warnings": [], "config": [], "dry_run": None}
+                              "errors": [], "warnings": [], "config": [], "resources": [], "dry_run": None}
     try:
-        inputs, snapshot = resolve(ctx.store, None, service, spec, image, revision_id=revision_id,
-                                   extra_sets=extra_sets)
+        inputs, snapshot = resolve(ctx.store, ctx.box, service, spec, image, revision_id=revision_id,
+                                   extra_sets=extra_sets, extra_bindings=extra_bindings)
         objects = render(inputs)
     except ValueError as exc:
         result["errors"] = [str(exc)]
@@ -56,6 +57,7 @@ async def _render_preview(ctx, service: Dict[str, Any], spec: Dict[str, Any], *,
     result["errors"] = check_render(inputs, namespace)
     result["warnings"] = inputs.warnings
     result["config"] = snapshot["config"]
+    result["resources"] = snapshot.get("resources") or []
     masked = mask(objects)
     result["objects"] = [{"key": object_key(o), "kind": o["kind"], "name": o["metadata"]["name"], "yaml": to_yaml([o])}
                          for o in masked]
@@ -128,7 +130,7 @@ async def preview_new(ctx, me: Principal, data: Any) -> Dict[str, Any]:
     """新建托管服务前预览清单（可选服务端校验）。参数与新建服务相同。"""
     if not isinstance(data, dict):
         raise ValueError("请求体必须是对象")
-    reject_unknown(data, ("name", "project_id", "namespace_id", "app_id", "spec", "config", "dry_run"),
+    reject_unknown(data, ("name", "project_id", "namespace_id", "app_id", "spec", "config", "bindings", "dry_run"),
                    "包含不支持的字段")
     name = text_field(data, "name", 63).lower()
     if not DNS_LABEL_RE.fullmatch(name):
@@ -147,7 +149,32 @@ async def preview_new(ctx, me: Principal, data: Any) -> Dict[str, Any]:
         raise ValueError("只有托管服务需要预览清单")
     draft = {"id": 0, "name": name, "project_id": project_id, "namespace_id": namespace_id, "app_id": app_id,
              "spec": spec}
-    return await _render_preview(ctx, draft, spec, dry_run=_flag(data, "dry_run"), extra_sets=_draft_sets(ctx, data.get("config")))
+    bindings = data.get("bindings") or []
+    extra_bindings = []
+    if bindings:
+        from ..delivery import resources as resource_types
+        if not isinstance(bindings, list):
+            raise ValueError("bindings 必须是列表")
+        for binding in bindings:
+            resource_id = binding.get("resource_id")
+            alias = binding.get("alias", "")
+            resource = ctx.store.get_resource(resource_id)
+            if not resource:
+                raise NotFound(f"资源 #{resource_id} 不存在")
+            from ..delivery.resolve import _build_resource_chain
+            chain = _build_resource_chain(ctx.store, resource_id)
+            chain_data = [{"resource_id": r["id"], "name": r["name"], "type": r["type"], "version": r.get("version") or 0}
+                         for r in chain[1:]]
+            extra_bindings.append({
+                "resource_id": resource_id,
+                "alias": alias,
+                "name": resource["name"],
+                "type": resource["type"],
+                "version": resource.get("version") or 0,
+                "chain": chain_data,
+            })
+    return await _render_preview(ctx, draft, spec, dry_run=_flag(data, "dry_run"),
+                                extra_sets=_draft_sets(ctx, data.get("config")), extra_bindings=extra_bindings)
 
 
 def manifest(ctx, me: Principal, service_id: int, deployment_id: Optional[int] = None) -> Dict[str, Any]:
@@ -161,7 +188,8 @@ def manifest(ctx, me: Principal, service_id: int, deployment_id: Optional[int] =
     if not item:
         raise NotFound("没有发布快照")
     return {"deployment_id": item["deployment_id"], "checksum": item["checksum"], "created_at": item["created_at"],
-            "config": item["inputs"].get("config") or [], "profile_version": item["inputs"].get("profile_version"),
+            "config": item["inputs"].get("config") or [], "resources": item["inputs"].get("resources") or [],
+            "profile_version": item["inputs"].get("profile_version"),
             "ingress_version": item["inputs"].get("ingress_version"), "yaml": to_yaml(item["objects"]),
             "objects": [{"key": object_key(o), "kind": o["kind"], "name": o["metadata"]["name"]} for o in item["objects"]]}
 
