@@ -1,13 +1,40 @@
+# 开发与单机部署：平台 + 独立的 PostgreSQL 16。
+# 首次使用：
+#   1. 在 deploy/.env 写入 POSTGRES_PASSWORD=<数据库口令>（compose 用它初始化数据库）；
+#   2. cp swr-builder.env.example swr-builder.env，把 BUILDER_DATABASE_PASSWORD 设为同一个口令；
+#   3. docker compose up -d
+# 使用外部 PostgreSQL / GaussDB 时删除 postgres 服务和 depends_on，并把 BUILDER_DATABASE_URL 指向外部库。
 services:
+  postgres:
+    image: postgres:16
+    container_name: swr-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: swr
+      POSTGRES_USER: swr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?在 .env 或环境变量中设置 POSTGRES_PASSWORD}
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U swr -d swr"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   swr-builder:
     build: ..
-    image: swr-builder:1.3.0-dev.1
+    image: swr-builder:2.0.0-dev.1
     container_name: swr-builder
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8080:8080"
     env_file:
       - ./swr-builder.env
+    environment:
+      BUILDER_DATABASE_URL: postgresql://swr@postgres:5432/swr
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../config.yaml:/app/config.yaml:ro

@@ -3,7 +3,8 @@
 处理顺序：
 1. authenticate        公开路径放行；解析 Bearer 令牌或会话 Cookie；未登录 API 返回 401，页面 303 到登录页
 2. check_request_guard  Cookie 会话的写请求必须带 X-Requested-With；待改密账号只能访问改密相关接口
-3. authorize           载入请求主体（Principal），按路由声明的权限做粗检查，并检查部署模块开关
+3. authorize           载入请求主体（Principal），按路由声明的权限做粗检查；关闭“启用部署中心”时
+                       拒绝部署模块的路由（@deploy_module）
 4. finalize            安全响应头、缓存策略、通用审计
 """
 from __future__ import annotations
@@ -17,7 +18,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from ..access import Principal, global_only, load_principal
 from ..auth import SESSION_COOKIE
 from ..context import AppContext
-from .permissions import AUTHENTICATED_ROUTE, PUBLIC_ROUTE, route_permission
+from .permissions import AUTHENTICATED_ROUTE, PUBLIC_ROUTE, match_route
 
 PUBLIC_PATHS = ("/login", "/healthz", "/favicon.ico", "/favicon.svg")
 PUBLIC_PREFIXES = ("/assets/",)
@@ -63,7 +64,8 @@ def check_request_guard(request: Request, user: Dict[str, Any]) -> Optional[Resp
     return None
 
 
-def authorize(ctx: AppContext, request: Request, principal: Principal, permission: Optional[str]) -> Optional[Response]:
+def authorize(ctx: AppContext, request: Request, principal: Principal, permission: Optional[str],
+              deploy_route: bool = False) -> Optional[Response]:
     path = request.url.path
     if path.startswith("/api/"):
         if permission is None:
@@ -74,8 +76,8 @@ def authorize(ctx: AppContext, request: Request, principal: Principal, permissio
                     return _deny("没有操作权限")
             elif not principal.can_anywhere(permission):
                 return _deny("没有可访问的项目或命名空间资源")
-    if not ctx.settings.general.deploy_enabled and path.startswith(("/api/deploy/", "/api/deployments")):
-        return _deny("部署模块已关闭", code="MODULE_DISABLED")
+    if deploy_route and not ctx.settings.general.deploy_enabled:
+        return _deny("部署中心已关闭（系统设置 › 启用部署中心），不能提交、审批或查看发布", code="MODULE_DISABLED")
     return None
 
 
@@ -103,7 +105,8 @@ def install(app: FastAPI, ctx: AppContext) -> None:
     @app.middleware("http")
     async def security(request: Request, call_next):
         path = request.url.path
-        permission = route_permission(app, path, request.method) if path.startswith("/api/") else None
+        matched = match_route(path, request.method) if path.startswith("/api/") else None
+        permission, deploy_route = matched if matched else (None, False)
         request.state.session_hash = None
         user = None
         public = path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES) or permission == PUBLIC_ROUTE
@@ -115,7 +118,7 @@ def install(app: FastAPI, ctx: AppContext) -> None:
             denied = check_request_guard(request, user)
             if denied is None:
                 request.state.principal = load_principal(ctx.store, user)
-                denied = authorize(ctx, request, request.state.principal, permission)
+                denied = authorize(ctx, request, request.state.principal, permission, deploy_route)
             if denied:
                 return finalize(ctx, request, denied, None)
         response = await call_next(request)

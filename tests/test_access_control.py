@@ -1,6 +1,4 @@
 """统一访问控制：权限目录、请求主体、账号管理与授权规则。"""
-import sqlite3
-
 import pytest
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
@@ -11,9 +9,10 @@ from swr_builder.config import Settings
 from swr_builder.main import AUTHENTICATED_ROUTE, PUBLIC_ROUTE, ROUTE_PERMISSIONS, create_app
 from swr_builder.security import hash_password
 from swr_builder.services import releases
-from swr_builder.store import Store
+from swr_builder.store import IntegrityViolation
 from swr_builder.web.guard import requires
-from swr_builder.web.permissions import collect_route_permissions
+from swr_builder.web.permissions import DEPLOY_MODULE_ROUTES, ROUTE_TABLE, collect_route_permissions, match_route
+from tests.dbutil import new_store
 from tests.test_accounts_settings import HEAD, login
 
 PASSWORD = 'UserPass123'
@@ -79,9 +78,31 @@ def test_routes_must_declare_known_permissions():
         collect_route_permissions([router])
 
 
+def test_deploy_module_routes_are_declared():
+    """部署中心开关覆盖的路由：发布记录、审批与日志，旧部署目标，以及服务的发布、回滚、重新发布、接管与扩缩容。
+    服务、配置、运行状态和清单预览不受开关影响。"""
+    legacy = {(m, p) for m, p, _ in ROUTE_TABLE if p.startswith(('/api/deploy/', '/api/deployments'))}
+    releases_routes = {('POST', f'/api/services/{{id}}/{name}')
+                       for name in ('deployments', 'rollback', 'restart', 'adopt', 'scale')}
+    assert legacy and DEPLOY_MODULE_ROUTES == legacy | releases_routes
+    assert ('GET', '/api/services/{id}/runtime') not in DEPLOY_MODULE_ROUTES
+    assert match_route('/api/services/7/rollback', 'POST') == (AUTHENTICATED_ROUTE, True)
+    assert match_route('/api/services/7', 'GET') == (AUTHENTICATED_ROUTE, False)
+
+
+def test_deploy_switch_closes_release_routes_but_not_services(platform):
+    app, client = platform
+    app.state.settings.general.deploy_enabled = False
+    response = client.post('/api/services/1/rollback', json={}, headers={'Idempotency-Key': 'switch-off-1'})
+    assert response.status_code == 403 and response.json()['code'] == 'MODULE_DISABLED'
+    assert client.post('/api/deployments/1/approve', json={}).json()['code'] == 'MODULE_DISABLED'
+    assert client.get('/api/services').status_code == 200
+    assert client.get('/api/overview').json()['approvals'] == []
+
+
 # ------------------------------------------------------------------ 请求主体
 def test_principal_scoping_status_and_role_state(tmp_path):
-    store = Store(tmp_path / 'builder.db')
+    store = new_store()
     other = store.create_project('other', '其他项目', [])['id']
     default = store.default_project_id()
     cluster = store.create_cluster({'name': 'c', 'auth_type': 'sa_token', 'server': 'https://k.example',
@@ -109,26 +130,46 @@ def test_principal_scoping_status_and_role_state(tmp_path):
 
 
 def test_legacy_admin_role_is_reconciled_into_bindings(tmp_path):
+    """v1.3.0-dev.2 之前 users.role = 'admin' 即管理员。导入 v6 的 SQLite 数据时补齐平台管理员授权，
+    并把授权过期时间统一为 UTC。"""
+    import sqlite3
+
+    from swr_builder.store import legacy_sqlite
+    from swr_builder.store.importer import import_sqlite
+
     path = tmp_path / 'builder.db'
-    store = Store(path)
-    lost = store.create_user(username='lost-admin', role='admin', enabled=1, must_change_password=0,
-                             password_hash='x')
-    expired = store.create_user(username='expired-admin', role='admin', enabled=1, must_change_password=0,
-                                password_hash='x')
-    viewer = member(store, 'viewer-with-offset')
-    default_project = store.default_project_id()
-    with store._db() as db:  # 模拟 v1.3 数据：授权缺失或已过期，旧代码仍按 users.role 视为管理员
-        db.execute("DELETE FROM role_bindings WHERE subject_id = ?", (lost['id'],))
-        db.execute("UPDATE role_bindings SET expires_at = '2000-01-01T00:00:00+00:00' WHERE subject_id = ?",
-                   (expired['id'],))
-        db.execute("INSERT INTO role_bindings(subject_type, subject_id, role, scope_type, scope_id, expires_at, "
-                   "created_at) VALUES ('user', ?, 'project_viewer', 'project', ?, '2999-01-01T08:00:00+08:00', "
-                   "'2026-01-01T00:00:00+00:00')", (viewer['id'], default_project))
-        db.execute("DELETE FROM schema_migrations WHERE version = 7")
-    store = Store(path)
+    db = sqlite3.connect(path)
+    db.row_factory = sqlite3.Row
+    db.executescript(legacy_sqlite.SCHEMA)
+    db.executescript(legacy_sqlite.SCHEMA_EXT)
+    db.execute("ALTER TABLE jobs ADD COLUMN created_by TEXT")
+    db.commit()
+    legacy_sqlite.apply_legacy_migrations(db, legacy_sqlite.MIGRATIONS[:6])
+    now = '2026-01-01T00:00:00+00:00'
+    for name, role in (('lost-admin', 'admin'), ('expired-admin', 'admin'), ('viewer-with-offset', 'member')):
+        db.execute("INSERT INTO users(username, password_hash, role, enabled, must_change_password, created_at, updated_at) "
+                   "VALUES (?, 'x', ?, 1, 0, ?, ?)", (name, role, now, now))
+    ids = {r['username']: r['id'] for r in db.execute("SELECT id, username FROM users")}
+    default_project = db.execute("SELECT id FROM projects WHERE slug = 'default'").fetchone()[0]
+    db.execute("INSERT INTO role_bindings(subject_type, subject_id, role, scope_type, scope_id, expires_at, created_at) "
+               "VALUES ('user', ?, 'platform_admin', 'global', 0, '2000-01-01T00:00:00+00:00', ?)",
+               (ids['expired-admin'], now))
+    db.execute("INSERT INTO role_bindings(subject_type, subject_id, role, scope_type, scope_id, expires_at, created_at) "
+               "VALUES ('user', ?, 'project_viewer', 'project', ?, '2999-01-01T08:00:00+08:00', ?)",
+               (ids['viewer-with-offset'], default_project, now))
+    db.commit()
+    db.close()
+
+    store = new_store()
+    import_sqlite(store, path)
+    lost, expired, viewer = (store.get_user_by_name(n) for n in ('lost-admin', 'expired-admin', 'viewer-with-offset'))
     assert store.is_platform_admin(lost['id']) and store.is_platform_admin(expired['id'])
+    assert not store.is_platform_admin(viewer['id'])
     expiry = [b['expires_at'] for b in store.all_bindings() if b['subject_id'] == viewer['id']]
     assert expiry == ['2999-01-01T00:00:00+00:00']
+    # 原文件只读打开，迁移只在副本上执行
+    assert [r[0] for r in sqlite3.connect(path).execute('SELECT version FROM schema_migrations ORDER BY version')] \
+        == [1, 2, 3, 4, 5, 6]
 
 
 # ------------------------------------------------------------------ 账号管理
@@ -286,7 +327,7 @@ def test_session_profile_separates_global_and_scoped_permissions(platform):
 
 # ------------------------------------------------------------------ 其他健壮性修复
 def test_submitter_is_never_offered_self_approval(tmp_path):
-    store = Store(tmp_path / 'builder.db')
+    store = new_store()
     cluster = store.create_cluster({'name': 'c', 'auth_type': 'sa_token', 'server': 'https://k.example',
                                     'credential_encrypted': 'x'})
     namespace = store.create_namespace(cluster, 'uat', 'staging', {}, store.default_project_id())
@@ -295,7 +336,7 @@ def test_submitter_is_never_offered_self_approval(tmp_path):
     deployment_id = store.create_deployment(target_name='svc', image='r/x@sha256:' + 'a' * 64, status='pending_approval',
                                             namespace_id=namespace, created_by=submitter['id'])
     record = store.get_deployment(deployment_id)
-    assert isinstance(record['created_by'], str)  # TEXT 列
+    assert record['created_by'] == submitter['id']  # BIGINT 列
     me = load_principal(store, submitter)
     assert me.can_namespace(namespace, 'deploy.approve')
     assert not releases.can_decide(store, me, record) and not releases.can_decide(store, me, record, 'rejected')
@@ -305,7 +346,7 @@ def test_login_failure_tracking_is_bounded(tmp_path, monkeypatch):
     monkeypatch.setattr(auth_module, 'MAX_TRACKED_LOGIN_KEYS', 20)
     settings = Settings()
     settings.build.data_dir = str(tmp_path / 'data')
-    service = auth_module.AuthService(settings, Store(tmp_path / 'builder.db'))
+    service = auth_module.AuthService(settings, new_store())
     for index in range(200):
         with pytest.raises(auth_module.AuthError):
             service.authenticate(f'nobody-{index}', 'wrong-password', '10.0.0.1')
@@ -320,9 +361,9 @@ def test_invalid_cluster_ca_is_a_validation_error(platform):
 
 
 def test_unique_binding_violation_is_a_conflict(tmp_path):
-    store = Store(tmp_path / 'builder.db')
+    store = new_store()
     user = member(store, 'dup')
     store.create_binding('user', user['id'], 'auditor', 'global', 0, None)
     with pytest.raises(Exception) as caught:
         store.create_binding('user', user['id'], 'auditor', 'global', 0, None)
-    assert getattr(caught.value, 'status', None) == 409 and not isinstance(caught.value, sqlite3.IntegrityError)
+    assert getattr(caught.value, 'status', None) == 409 and not isinstance(caught.value, IntegrityViolation)

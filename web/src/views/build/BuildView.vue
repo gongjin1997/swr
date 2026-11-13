@@ -250,11 +250,11 @@ function updateViewportWidth() {
                 <el-descriptions-item label="上一版本"><span class="mono">{{ versions.latest }}</span></el-descriptions-item>
                 <el-descriptions-item label="新版本"><b class="mono accent">{{ form.tag.trim() || versions.next_tag }}</b></el-descriptions-item>
                 <el-descriptions-item label="镜像层数">
-                  <span :class="{ warn: layerWarn }">{{ versions.latest_info?.layers ?? '-' }}<template v-if="versions.max_layers"> / 上限 {{ versions.max_layers }}</template></span>
+                  <span :class="{ warn: layerWarn }">{{ versions.latest_info?.layers ?? '—' }}<template v-if="versions.max_layers"> / 上限 {{ versions.max_layers }}</template></span>
                 </el-descriptions-item>
                 <el-descriptions-item label="压缩后大小">{{ fmtSize(versions.latest_info?.size) }}</el-descriptions-item>
                 <el-descriptions-item label="架构">
-                  {{ versions.latest_info?.architecture ? `${versions.latest_info.os || 'linux'}/${versions.latest_info.architecture}` : '-' }}
+                  {{ versions.latest_info?.architecture ? `${versions.latest_info.os || 'linux'}/${versions.latest_info.architecture}` : '—' }}
                 </el-descriptions-item>
                 <el-descriptions-item label="推送时间">{{ fmtTime(versions.latest_info?.created) }}</el-descriptions-item>
               </el-descriptions>

@@ -1,12 +1,16 @@
 <script setup lang="ts">
-/** 发布服务：选择一次成功构建（固定 digest）和配置修订。同一次对话框内重复提交复用幂等键。 */
+/**
+ * 发布服务：选择一次成功构建和配置。Deployment 中写入构建的版本号（仓库:版本号），
+ * 平台在写入集群前核对该版本号仍指向构建时的镜像。同一次对话框内重复提交复用幂等键。
+ * 托管服务勾选“使用最新配置”时按当前修订与各层配置的最新版本渲染；不勾选时只换镜像，配置沿用上次成功发布的快照。
+ */
 import { reactive, ref, watch } from 'vue'
 import { serviceApi } from '@/api'
 import { idempotencyKey } from '@/api/http'
 import type { Job, Service } from '@/api/types'
 import { notifyError, notifySuccess } from '@/composables/useAction'
 
-const props = defineProps<{ service: Service | null; jobId?: number }>()
+const props = defineProps<{ service: Service | null; jobId?: number; preferLatest?: boolean }>()
 const visible = defineModel<boolean>({ required: true })
 const emit = defineEmits<{ submitted: [id: number] }>()
 
@@ -18,7 +22,7 @@ let key = ''
 watch(visible, async (open) => {
   if (!open || !props.service) return
   key = idempotencyKey()
-  Object.assign(form, { jobId: null, useLatest: false, remark: '' })
+  Object.assign(form, { jobId: null, useLatest: !!props.preferLatest || !props.service.deployed_revision_id, remark: '' })
   try {
     jobs.value = (await serviceApi.builds(props.service.id)).items.filter(j => !!j.digest)
     form.jobId = jobs.value.find(j => j.id === props.jobId)?.id ?? jobs.value[0]?.id ?? null
@@ -46,16 +50,24 @@ async function submit() {
 <template>
   <el-dialog v-model="visible" :title="`发布 ${service?.name ?? ''}`" width="620px">
     <el-form label-position="top">
-      <el-form-item label="成功构建">
+      <el-form-item label="镜像版本">
         <el-select v-model="form.jobId" filterable placeholder="该服务应用暂无成功构建" style="width: 100%">
           <el-option v-for="j in jobs" :key="j.id" :value="j.id" :label="`#${j.id} · ${j.new_tag || j.image}`">
             <span>#{{ j.id }} · {{ j.new_tag || j.image }}</span>
             <span class="hint digest">{{ j.digest ? j.digest.slice(0, 19) + '…' : '无 digest' }}</span>
           </el-option>
         </el-select>
+        <div class="hint">{{ service?.mode === 'managed'
+          ? 'Deployment 中写入版本号；发布前平台会确认该版本号仍是构建时的镜像，不一致则停止发布。'
+          : '纳管服务只更新已有 Deployment 的镜像，不生成或修改其他对象；集群中的对象仍由你们维护。' }}</div>
       </el-form-item>
       <el-form-item>
-        <el-checkbox v-model="form.useLatest">使用最新配置修订（默认沿用已部署的修订；首次发布使用最新修订）</el-checkbox>
+        <el-checkbox v-model="form.useLatest" :disabled="!service?.deployed_revision_id">
+          {{ service?.mode === 'managed' ? '使用最新配置（服务修订与平台、项目、环境、服务各层配置的最新版本）'
+            : '使用最新配置修订' }}
+        </el-checkbox>
+        <div class="hint">{{ !service?.deployed_revision_id ? '首次发布使用最新配置。'
+          : service?.mode === 'managed' ? '不勾选时只更新镜像，配置沿用上次成功发布时的版本。' : '不勾选时沿用已部署的修订。' }}</div>
       </el-form-item>
       <el-form-item label="备注"><el-input v-model="form.remark" maxlength="200" /></el-form-item>
     </el-form>

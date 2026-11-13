@@ -56,7 +56,9 @@ for key,label,lo,hi in [('session_hours','普通登录有效期（小时）',1,1
     ('lock_minutes','失败锁定时间（分钟）',1,1440)]:
     field('security',key,'int',label,minimum=lo,maximum=hi)
 field('general','site_name','str','系统名称')
-field('general','deploy_enabled','bool','启用部署中心','开放服务发布、审批与运行状态。')
+field('general','deploy_enabled','bool','启用部署中心',
+      '开放服务的发布、回滚、接管与审批，以及发布记录。关闭后不能提交或审批发布，排队中的发布会取消，'
+      '已开始写入集群的发布照常完成；服务、环境、配置与运行状态仍可查看。')
 field('hcs','enabled','bool','启用 HCS 连接','默认关闭；当前仅认证与只读客户端扩展点，不会创建云资源。')
 for key,label in [('version','平台版本标识'),('region','区域标识'),('iam_endpoint','IAM Endpoint'),
     ('swr_endpoint','SWR 管理 API Endpoint（预留）'),('cce_endpoint','CCE 管理 API Endpoint（预留）'),

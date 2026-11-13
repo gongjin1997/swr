@@ -17,7 +17,8 @@ const writableProjects = computed(() => session.projectsWith('app.manage'))
 
 const FIELD_KEYS: (keyof AppFields)[] = [
   'name', 'repository', 'organization', 'description', 'base_image', 'default_mode', 'max_layers', 'target_dir',
-  'target_name', 'chown', 'platform', 'latest_strategy', 'initial_tag', 'tag_template', 'tag_regex', 'push_latest',
+  'target_name', 'chown', 'platform', 'latest_strategy', 'initial_tag', 'version_increment', 'tag_template', 'tag_regex',
+  'push_latest',
   'full_template', 'incremental_template',
 ]
 
@@ -69,6 +70,7 @@ watch(visible, async (open) => {
     for (const key of FIELD_KEYS) formFields[key] = source[key] ?? ''
     form.max_layers = Number(source.max_layers ?? 0)
     form.push_latest = !!source.push_latest
+    form.version_increment = source.version_increment === 'last' ? 'last' : 'carry'
     formRef.value?.clearValidate()
   } catch (e) {
     notifyError(e)
@@ -186,9 +188,16 @@ async function save() {
           <el-input v-model="form.initial_tag" placeholder="1.0.0" />
           <div class="hint">仓库里还没有版本时使用</div>
         </el-form-item>
+        <el-form-item label="版本递增方式">
+          <el-select v-model="form.version_increment">
+            <el-option label="逢十进一（1.0.9 → 1.1.0）" value="carry" />
+            <el-option label="末位递增（1.0.9 → 1.0.10）" value="last" />
+          </el-select>
+          <div class="hint">逢十进一：除第一位外每一位只用 0–9，例如 1.0.8 → 1.0.9 → 1.1.0、1.9.9 → 2.0.0</div>
+        </el-form-item>
         <el-form-item label="版本号模板">
           <el-input v-model="form.tag_template" placeholder="可选，如 1.0.{seq} 或 {date}.{seq}" />
-          <div class="hint">留空则把上一版本最后一位数字加 1</div>
+          <div class="hint">填写后按模板生成版本号，不使用上面的递增方式</div>
         </el-form-item>
         <el-form-item label="标签过滤（正则）" prop="tag_regex">
           <el-input v-model="form.tag_regex" placeholder="可选，如 ^\d+\.\d+\.\d+$" />

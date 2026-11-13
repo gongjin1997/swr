@@ -1,6 +1,8 @@
 """服务目录：服务的新建/修改/删除、spec 校验、配置修订与对比、密钥版本、可发布的构建。
 
-服务 = 某个项目的应用部署到项目已分配的某个命名空间中的一个 Deployment / 容器。
+服务 = 某个项目的应用在项目已分配的某个环境（命名空间）中的一份部署，两种方式：
+- 纳管（image_only）：关联集群中已有的 Deployment，发布时只更新容器镜像；
+- 托管（managed）：按模板生成并下发 Deployment、Service、Ingress、HPA 与配置对象（见 swr_builder/delivery）。
 读取：命名空间上有 namespace.view，或项目上有 app.view；修改需要命名空间上的对应权限。
 """
 from __future__ import annotations
@@ -9,30 +11,39 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..access import Principal
-from ..errors import Conflict, Forbidden, NotFound, NotImplementedYet
+from ..delivery.resolve import SCOPE_ORDER, layers
+from ..delivery.spec import SERVICE_FILES, normalize_managed_spec, selector_of, object_names
+from ..errors import Conflict, Forbidden, NotFound
 from ..security import SecretBox
 from ..store import Store
 from ..validation import DNS_LABEL_RE, reject_unknown, text_field
+from . import configsets
 from .access import service_or_404
-from .namespaces import effective_policy
+from .environments import merged_profile
 
 SERVICE_RESPONSE_FIELDS = ("id", "name", "project_id", "namespace_id", "app_id", "current_revision_id",
                            "deployed_revision_id", "spec", "created_at", "updated_at")
 SECRET_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,127}")
 BUILD_FIELDS = ("id", "app_id", "project_id", "app_name", "status", "image", "digest", "new_tag", "created_at")
-SPEC_KEYS = {"mode", "target", "workload", "container", "config_files", "service", "ingress", "hpa", "scheduling",
-             "image_pull_secrets", "labels", "annotations"}
 _DNS_SUBDOMAIN_RE = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?)*")
 _DNS_LABEL_RE = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
+# 新建托管服务时可以一并提交的服务层配置
+SERVICE_CONFIG_KINDS = {"env": "env", "secret_env": "secret_env", "files": "files"}
+
+
+def mode_of(service: Dict[str, Any]) -> str:
+    return (service.get("spec") or {}).get("mode") or "image_only"
 
 
 def service_response(service: Dict[str, Any]) -> Dict[str, Any]:
-    return {key: service.get(key) for key in SERVICE_RESPONSE_FIELDS}
+    result = {key: service.get(key) for key in SERVICE_RESPONSE_FIELDS}
+    result["mode"] = mode_of(service)
+    return result
 
 
 def normalize_service_spec(value: Any, namespace: Dict[str, Any]) -> Dict[str, Any]:
-    if not isinstance(value, dict) or set(value) - SPEC_KEYS:
-        raise ValueError("服务 spec 包含未知字段")
+    if not isinstance(value, dict):
+        raise ValueError("服务 spec 必须是对象")
     mode = value.get("mode")
     if mode == "image_only":
         target = value.get("target")
@@ -45,33 +56,8 @@ def normalize_service_spec(value: Any, namespace: Dict[str, Any]) -> Dict[str, A
             raise ValueError("容器名称无效")
         return value
     if mode != "managed":
-        raise ValueError("mode 必须是 managed 或 image_only")
-    policy = effective_policy(namespace["policy"])
-    if "workload" in value:
-        workload = value["workload"]
-        if not isinstance(workload, dict) or set(workload) - {"kind", "replicas", "strategy", "progress_deadline_seconds",
-                                                              "revision_history_limit", "termination_grace_period_seconds"}:
-            raise ValueError("workload 配置包含未知字段")
-        if workload.get("kind", "Deployment") != "Deployment":
-            raise ValueError("当前只支持 Deployment workload")
-        replicas = workload.get("replicas", 1)
-        if type(replicas) is not int or not 0 <= replicas <= policy["max_replicas"]:
-            raise ValueError("副本数超出命名空间策略")
-    if "service" in value:
-        service = value["service"]
-        if not isinstance(service, dict) or set(service) - {"enabled", "type", "ports"}:
-            raise ValueError("Service 配置包含未知字段")
-        if service.get("type", "ClusterIP") not in policy["service_types"]:
-            raise ValueError("Service 类型不符合命名空间策略")
-    if "image_pull_secrets" in value:
-        names = value["image_pull_secrets"]
-        if not isinstance(names, list) or any(name not in policy["image_pull_secrets"] for name in names):
-            raise ValueError("imagePullSecrets 不符合命名空间策略")
-    if "hpa" in value and value["hpa"].get("enabled") and not policy["hpa_enabled"]:
-        raise ValueError("命名空间策略未启用 HPA")
-    if "ingress" in value and value["ingress"].get("enabled") and not policy["ingress"].get("enabled"):
-        raise ValueError("命名空间策略未启用 Ingress")
-    return value
+        raise ValueError("mode 必须是 managed（托管）或 image_only（纳管）")
+    return normalize_managed_spec(value, namespace)
 
 
 def revision_diff(old: Any, new: Any) -> List[Dict[str, Any]]:
@@ -87,6 +73,90 @@ def revision_diff(old: Any, new: Any) -> List[Dict[str, Any]]:
 
     compare("", old, new)
     return changes
+
+
+# ------------------------------------------------------------------ 配置漂移
+def config_status(store: Store, services: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    """托管服务上次成功发布所用的配置版本与当前版本的差异（各层配置集、环境档案、负载均衡入口、资源绑定）。"""
+    managed = [s for s in services if mode_of(s) == "managed"]
+    if not managed:
+        return {}
+    manifests = store.last_success_manifests([s["id"] for s in managed])
+    scopes = sorted({scope for s in managed for scope in layers(s)})
+    sets = [s for s in store.list_config_sets(scopes) if s.get("version")]
+    by_id = {s["id"]: s for s in sets}
+    profiles = store.list_environment_profiles()
+    ingress_versions = {p["id"]: p["version"] for p in store.list_ingress_profiles()}
+    result: Dict[int, Dict[str, Any]] = {}
+    for service in managed:
+        manifest = manifests.get(service["id"])
+        if not manifest:
+            result[service["id"]] = {"deployed": False, "pending": False, "changes": []}
+            continue
+        inputs = manifest["inputs"]
+        scope_keys = set(layers(service))
+        pins = {p["set_id"]: p for p in inputs.get("config") or []}
+        changes: List[Dict[str, Any]] = []
+        for pin in pins.values():
+            current = by_id.get(pin["set_id"])
+            if pin["kind"] in ("files", "secret_files"):
+                candidates = [s for s in sets if s["name"] == pin["name"] and s["kind"] == pin["kind"]
+                              and (s["scope_type"], s["scope_id"]) in scope_keys
+                              and (s["scope_type"] != "service" or s["name"] == SERVICE_FILES)]
+                chosen = max(candidates, key=lambda s: SCOPE_ORDER[s["scope_type"]]) if candidates else None
+                if chosen and chosen["id"] != pin["set_id"]:
+                    current = None
+                    changes.append({**pin, "change": "replaced", "current": chosen["version"],
+                                    "current_scope": chosen["scope_type"]})
+                    continue
+            if current is None:
+                changes.append({**pin, "change": "removed", "current": None})
+            elif current["version"] != pin["version"]:
+                changes.append({**pin, "change": "updated", "current": current["version"]})
+        for item in sets:
+            if item["kind"] in ("env", "secret_env") and (item["scope_type"], item["scope_id"]) in scope_keys \
+                    and item["id"] not in pins:
+                changes.append({"set_id": item["id"], "scope_type": item["scope_type"], "scope_id": item["scope_id"],
+                                "name": item["name"], "kind": item["kind"], "version": None, "change": "added",
+                                "current": item["version"]})
+        pinned_resources = {r["resource_id"]: r for r in inputs.get("resources") or []}
+        current_bindings = store.list_service_resource_bindings(service["id"])
+        for binding in current_bindings:
+            resource = binding["resource"]
+            pinned = pinned_resources.get(resource["id"])
+            if not pinned:
+                changes.append({"kind": "resource", "name": f"资源 {resource['name']}", "change": "added",
+                               "scope_type": "binding", "resource_id": resource["id"], "version": None,
+                               "current": resource.get("version") or 0})
+            elif pinned["version"] != resource.get("version", 0):
+                changes.append({"kind": "resource", "name": f"资源 {resource['name']}", "change": "updated",
+                               "scope_type": "binding", "resource_id": resource["id"], "version": pinned["version"],
+                               "current": resource.get("version") or 0})
+            else:
+                for anc_pinned in pinned.get("chain") or []:
+                    anc = store.get_resource(anc_pinned["resource_id"])
+                    if anc and anc.get("version", 0) != anc_pinned["version"]:
+                        changes.append({"kind": "resource", "name": f"资源 {resource['name']} 的父资源", "change": "updated",
+                                       "scope_type": "binding", "resource_id": anc["id"], "version": anc_pinned["version"],
+                                       "current": anc.get("version") or 0})
+                        break
+        for pinned_res in pinned_resources.values():
+            if not any(b["resource_id"] == pinned_res["resource_id"] for b in current_bindings):
+                changes.append({"kind": "resource", "name": f"资源 ID {pinned_res['resource_id']}", "change": "removed",
+                               "scope_type": "binding", "resource_id": pinned_res["resource_id"],
+                               "version": pinned_res["version"], "current": None})
+        profile = profiles.get(service["namespace_id"])
+        if (profile["version"] if profile else 0) != inputs.get("profile_version", 0):
+            changes.append({"kind": "profile", "name": "环境档案", "change": "updated", "scope_type": "environment",
+                            "version": inputs.get("profile_version", 0), "current": profile["version"] if profile else 0})
+        ingress_id = profile["ingress_profile_id"] if profile else None
+        if ingress_id != inputs.get("ingress_profile_id") or (
+                ingress_id and ingress_versions.get(ingress_id) != inputs.get("ingress_version")):
+            changes.append({"kind": "ingress", "name": "负载均衡入口", "change": "updated", "scope_type": "platform",
+                            "version": inputs.get("ingress_version"), "current": ingress_versions.get(ingress_id)})
+        result[service["id"]] = {"deployed": True, "pending": bool(changes), "changes": changes,
+                                 "deployment_id": manifest["deployment_id"]}
+    return result
 
 
 # ------------------------------------------------------------------ 列表与展示
@@ -111,11 +181,28 @@ class Lookup:
     def namespace(self, namespace_id: Any) -> Optional[Dict[str, Any]]:
         return self._get("namespace", namespace_id, self.store.get_namespace)
 
-    def service_view(self, row: Dict[str, Any]) -> Dict[str, Any]:
+    def service_view(self, row: Dict[str, Any], status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         ns, project, app = self.namespace(row["namespace_id"]), self.project(row["project_id"]), self.app(row["app_id"])
-        return dict(service_response(row), project_name=project["name"] if project else "",
+        view = dict(service_response(row), project_name=project["name"] if project else "",
                     app_name=app["name"] if app else "", cluster_name=ns["cluster_name"] if ns else "",
                     namespace_name=ns["name"] if ns else "", tier=ns["tier"] if ns else "")
+        view["workload"] = workload_name(self.store, row, ns)
+        if status is not None:
+            view["config_status"] = status
+        return view
+
+
+def workload_name(store: Store, service: Dict[str, Any], namespace: Optional[Dict[str, Any]] = None) -> str:
+    spec = service.get("spec") or {}
+    if mode_of(service) != "managed":
+        return (spec.get("target") or {}).get("name", "")
+    namespace = namespace or store.get_namespace(service["namespace_id"]) or {}
+    row = store.get_environment_profile(service["namespace_id"])
+    try:
+        return object_names(spec, service["name"], namespace.get("name", ""),
+                            merged_profile(row["profile"] if row else None))["deployment"]
+    except ValueError:
+        return ""
 
 
 def list_services(store: Store, me: Principal, *, project_id: Optional[int] = None,
@@ -128,11 +215,17 @@ def list_services(store: Store, me: Principal, *, project_id: Optional[int] = No
             and (namespace_id is None or s["namespace_id"] == namespace_id)
             and (app_id is None or s["app_id"] == app_id)]
     lookup = Lookup(store)
-    return [lookup.service_view(row) for row in rows]
+    statuses = config_status(store, rows)
+    return [lookup.service_view(row, statuses.get(row["id"])) for row in rows]
 
 
 def get_service(store: Store, me: Principal, service_id: int) -> Dict[str, Any]:
-    return Lookup(store).service_view(service_or_404(store, me, service_id))
+    service = service_or_404(store, me, service_id)
+    view = Lookup(store).service_view(service, config_status(store, [service]).get(service_id))
+    view["permissions"] = sorted(p for p in ("service.config", "service.create", "service.deploy", "service.operate",
+                                             "service.rollback", "service.delete", "secret.manage", "secret.view")
+                                 if me.can_namespace(service["namespace_id"], p))
+    return view
 
 
 def require_namespace(me: Principal, service: Dict[str, Any], permission: str, message: str) -> None:
@@ -148,10 +241,27 @@ def writable_service(store: Store, me: Principal, service_id: int, permission: s
 
 
 # ------------------------------------------------------------------ 新建 / 修订 / 删除
-def create_service(store: Store, me: Principal, data: Any) -> Dict[str, Any]:
+def _service_config(store: Store, box: Optional[SecretBox], raw: Any) -> List[Tuple[str, List[Dict[str, Any]], list]]:
+    """新建托管服务时一并提交的服务层配置：{env: [...], secret_env: [...], files: [...]}。先校验，后写入。"""
+    if raw in (None, {}):
+        return []
+    if not isinstance(raw, dict):
+        raise ValueError("config 必须是对象")
+    reject_unknown(raw, tuple(SERVICE_CONFIG_KINDS), "config 只能包含 env、secret_env、files")
+    if raw.get("secret_env") and box is None:
+        raise ValueError("缺少加密组件，不能保存敏感配置")
+    prepared = []
+    for kind in SERVICE_CONFIG_KINDS:
+        if raw.get(kind):
+            entries, refs = configsets.normalize_entries(store, box, kind, raw[kind], "service")  # type: ignore[arg-type]
+            prepared.append((kind, entries, refs))
+    return prepared
+
+
+def create_service(store: Store, me: Principal, data: Any, box: Optional[SecretBox] = None) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("服务请求格式错误")
-    reject_unknown(data, {"name", "project_id", "namespace_id", "app_id", "spec"}, "服务请求包含未知字段")
+    reject_unknown(data, {"name", "project_id", "namespace_id", "app_id", "spec", "config", "bindings"}, "服务请求包含未知字段")
     name = text_field(data, "name", 63).lower()
     if not DNS_LABEL_RE.fullmatch(name):
         raise ValueError("服务名称必须是 DNS-1123 label（小写字母、数字和 -）")
@@ -162,10 +272,56 @@ def create_service(store: Store, me: Principal, data: Any) -> Dict[str, Any]:
     if (not namespace or not app or app["project_id"] != project_id
             or namespace_id not in store.project_namespace_ids(project_id)):
         raise NotFound("服务所属资源不存在：应用必须属于该项目，命名空间必须已分配给该项目")
-    if not me.can_namespace(namespace_id, "service.config"):
-        raise Forbidden("没有命名空间服务配置权限")
     spec = normalize_service_spec(data.get("spec"), namespace)
-    return service_response(store.create_service(name, project_id, namespace_id, app_id, spec, me.id))
+    managed = spec["mode"] == "managed"
+    permission = "service.create" if managed else "service.config"
+    if not me.can_namespace(namespace_id, permission):
+        raise Forbidden("没有在该环境新建托管服务的权限" if managed else "没有命名空间服务配置权限")
+    if not managed and data.get("config"):
+        raise ValueError("纳管服务不使用分层配置")
+    if managed:
+        row = store.get_environment_profile(namespace_id)
+        deployment = object_names(spec, name, namespace["name"], merged_profile(row["profile"] if row else None))["deployment"]
+        clash = next((s for s in store.list_services(namespace_ids=[namespace_id])
+                      if workload_name(store, s, namespace) == deployment), None)
+        if clash:
+            raise Conflict(f"该环境中的服务 {clash['name']} 已关联 Deployment {deployment}；"
+                           "可以在该服务中把它转为托管服务")
+    prepared = _service_config(store, box, data.get("config")) if managed else []
+    bindings = data.get("bindings") or []
+    if bindings and not managed:
+        raise ValueError("只有托管服务可以绑定资源")
+    validated_bindings = []
+    if bindings:
+        from . import resources as resource_service
+        if not isinstance(bindings, list):
+            raise ValueError("bindings 必须是列表")
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                raise ValueError("每个 binding 必须是字典")
+            resource_id = binding.get("resource_id")
+            alias = binding.get("alias", "")
+            if type(resource_id) is not int:
+                raise ValueError("binding.resource_id 必须是整数")
+            if not isinstance(alias, str):
+                raise ValueError("binding.alias 必须是字符串")
+            from ..delivery import resources as resource_types
+            resource_types.validate_alias(alias)
+            resource = store.get_resource(resource_id)
+            if not resource:
+                raise NotFound(f"资源 #{resource_id} 不存在")
+            if not resource_service._can_view(me, resource["scope_type"], resource["scope_id"]):
+                raise NotFound(f"资源 #{resource_id} 不存在")
+            if resource["scope_type"] == "environment" and resource["scope_id"] != namespace_id:
+                raise Forbidden("只能绑定本环境或平台的资源")
+            validated_bindings.append((resource_id, alias))
+    created = store.create_service(name, project_id, namespace_id, app_id, spec, me.id)
+    for kind, entries, refs in prepared:
+        set_name = configsets.SINGLETON_NAMES.get(kind) or SERVICE_FILES
+        store.create_config_set("service", created["id"], set_name, kind, "", entries, refs, "新建服务时创建", me.id)
+    for resource_id, alias in validated_bindings:
+        store.create_service_resource_binding(created["id"], resource_id, alias, me.id)
+    return service_response(created)
 
 
 def update_service_spec(store: Store, me: Principal, service_id: int, data: Any
@@ -178,7 +334,18 @@ def update_service_spec(store: Store, me: Principal, service_id: int, data: Any
     base_revision = data.get("base_revision")
     if type(base_revision) is not int:
         raise ValueError("base_revision 必须是整数")
-    spec = normalize_service_spec(data.get("spec"), store.get_namespace(service["namespace_id"]))
+    namespace = store.get_namespace(service["namespace_id"])
+    spec = normalize_service_spec(data.get("spec"), namespace)
+    if spec["mode"] == "managed":
+        if mode_of(service) != "managed" and not me.can_namespace(service["namespace_id"], "service.create"):
+            raise Forbidden("转为托管服务需要新建托管服务的权限")
+        row = store.get_environment_profile(service["namespace_id"])
+        profile = merged_profile(row["profile"] if row else None)
+        names = object_names(spec, service["name"], namespace["name"], profile)
+        manifest = store.last_success_manifest(service_id)
+        deployed = next((o for o in (manifest or {}).get("objects", []) if o["kind"] == "Deployment"), None)
+        if deployed and deployed["spec"]["selector"]["matchLabels"] != selector_of(spec, names):
+            raise ValueError("Deployment 的 selector 创建后不能修改；需要修改时请新建服务")
     updated, revision = store.update_service_revision(service_id, base_revision, spec, me.id)
     return service_response(updated), revision
 
@@ -190,36 +357,20 @@ def delete_service(store: Store, me: Principal, service_id: int) -> None:
 
 
 def set_secret(store: Store, box: SecretBox, me: Principal, service_id: int, key: str, data: Any) -> Dict[str, Any]:
-    """密钥加密保存为新版本，并生成新的配置修订；值不会回显。"""
+    """纳管服务的密钥：加密保存为新版本，并生成新的配置修订；值不会回显。托管服务改用服务层敏感变量。"""
     value = data.get("value") if isinstance(data, dict) else None
     if not isinstance(data, dict) or set(data) != {"value"} or not isinstance(value, str) or not value \
             or len(value) > 65536:
         raise ValueError("value 必须是 1–65536 字符的非空字符串")
     if not SECRET_KEY_RE.fullmatch(key):
         raise ValueError("Secret key 格式无效")
-    writable_service(store, me, service_id, "secret.manage", "没有服务密钥管理权限")
+    service = writable_service(store, me, service_id, "secret.manage", "没有服务密钥管理权限")
+    if mode_of(service) == "managed":
+        raise ValueError("托管服务的敏感变量在服务的“配置”中维护")
     revision = store.create_secret_revision(service_id, key, box.encrypt(value), me.id)
     if revision is None:
         raise NotFound("服务不存在")
     return {"key": key, "version": revision["secret_versions"][key], "updated_at": revision["created_at"]}
-
-
-def render(store: Store, me: Principal, service_id: int, data: Any) -> Dict[str, Any]:
-    if not isinstance(data, dict):
-        raise ValueError("渲染请求格式错误")
-    reject_unknown(data, {"revision_id", "dry_run"}, "渲染请求包含未知字段")
-    service = writable_service(store, me, service_id, "service.config", "没有服务配置权限")
-    revision_id, dry_run = data.get("revision_id"), data.get("dry_run", True)
-    if type(revision_id) is not int or not isinstance(dry_run, bool):
-        raise ValueError("revision_id 或 dry_run 格式错误")
-    revision = store.get_revision(service_id, revision_id)
-    if not revision:
-        raise NotFound("服务修订不存在")
-    if revision["spec"].get("mode") != "image_only":
-        raise NotImplementedYet("managed 服务的清单渲染尚未开放")
-    warnings = ["Kubernetes dry-run 尚未执行；清单渲染与现场 API 校验将在部署 worker 阶段完成。"] if dry_run else []
-    return {"revision_id": revision_id, "valid": True, "resources": [{"kind": "Deployment", "name": service["name"]}],
-            "warnings": warnings}
 
 
 # ------------------------------------------------------------------ 修订与可发布构建
@@ -253,3 +404,8 @@ def deployable_builds(store: Store, me: Principal, service_id: int, limit: int, 
         raise Forbidden("没有查看此服务可发布构建的权限")
     rows, total = store.list_jobs(service["app_id"], "success", limit, offset, [service["project_id"]])
     return [{key: row.get(key) for key in BUILD_FIELDS} for row in rows], total
+
+
+def effective_config(store: Store, me: Principal, service_id: int) -> Dict[str, Any]:
+    service = service_or_404(store, me, service_id)
+    return configsets.effective_config(store, me, service["namespace_id"], service["project_id"], service_id)

@@ -9,6 +9,8 @@ import NamespacePolicyForm from '@/components/NamespacePolicyForm.vue'
 import { notifyError, notifySuccess, useAction } from '@/composables/useAction'
 import { TIER_TAG, TIER_TEXT, TIERS } from '@/constants'
 import { useSession } from '@/stores/session'
+import TablePager from '@/components/TablePager.vue'
+import { usePagination } from '@/composables/usePagination'
 
 const session = useSession()
 const namespaces = ref<Namespace[]>([])
@@ -21,6 +23,7 @@ const manage = computed(() => session.canGlobal('cluster.manage'))
 const filtered = computed(() => namespaces.value.filter((n) =>
   (!filters.clusterId || n.cluster_id === filters.clusterId) && (!filters.tier || n.tier === filters.tier) &&
   (!filters.keyword.trim() || `${n.name} ${n.cluster_name}`.toLowerCase().includes(filters.keyword.trim().toLowerCase()))))
+const pager = usePagination(() => filtered.value, { resetOn: () => [filters.keyword, filters.clusterId, filters.tier] })
 const projectName = (id: number) => projects.value.find((p) => p.id === id)?.name ?? `项目 #${id}`
 
 const defaultPolicy = (): NamespacePolicy => ({
@@ -135,7 +138,7 @@ function openMembers(namespace: Namespace) {
 
 function approvalText(n: Namespace): string {
   if (n.policy.require_admin_approval || n.tier === 'prod') return '平台管理员确认'
-  if (n.policy.require_approval || n.tier === 'staging') return `需 ${n.policy.min_approvals} 人审批`
+  if (n.policy.require_approval || n.tier === 'staging') return `需 ${n.policy.min_approvals ?? 1} 人审批`
   return '无需审批'
 }
 
@@ -164,7 +167,7 @@ onMounted(load)
       <span class="count">共 {{ filtered.length }} 个命名空间</span>
       <el-button v-if="manage" type="primary" :icon="Plus" @click="open(null)">纳管命名空间</el-button>
     </div>
-    <el-table v-loading="loading" :data="filtered" empty-text="暂无可见命名空间">
+    <el-table v-loading="loading" :data="pager.rows.value" empty-text="暂无可见命名空间">
       <el-table-column label="命名空间" min-width="190">
         <template #default="{ row }"><b>{{ row.name }}</b><div class="hint">{{ row.cluster_name }}</div></template>
       </el-table-column>
@@ -189,6 +192,7 @@ onMounted(load)
         </template>
       </el-table-column>
     </el-table>
+    <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
   </el-card>
 
   <el-dialog v-model="editor.visible" :title="editor.namespace ? `命名空间策略 · ${editor.namespace.name}` : '纳管命名空间'" width="780px" top="5vh" :close-on-click-modal="false">

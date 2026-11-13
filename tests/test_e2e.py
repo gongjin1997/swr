@@ -142,9 +142,9 @@ def test_incremental_build_flow(env):
     job2 = build(client, app["id"])
     assert (job2["status"], job2["prev_tag"], job2["new_tag"]) == ("success", "1.0.8", "1.0.9")
 
-    # 全量构建：基于基础镜像
+    # 全量构建：基于基础镜像；版本号逢十进一（1.0.9 之后是 1.1.0）
     job3 = build(client, app["id"], mode="full")
-    assert (job3["status"], job3["mode"], job3["new_tag"]) == ("success", "full", "1.0.10")
+    assert (job3["status"], job3["mode"], job3["new_tag"]) == ("success", "full", "1.1.0")
     assert "FROM swr.mock/metaerp_sdk/java:8-huawei-r30-arm64" in job3["dockerfile"]
     assert "EXPOSE 8080" in job3["dockerfile"]
 

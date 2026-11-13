@@ -5,3 +5,5 @@ httpx>=0.24
 PyYAML>=5.4
 cryptography>=42
 huaweicloudsdkcore==3.1.219
+# PostgreSQL / GaussDB（PG 兼容模式）驱动；GaussDB 使用 SHA256 认证时改用华为 gaussdb 驱动（见 docs/开发文档.md）
+psycopg[binary]>=3.2

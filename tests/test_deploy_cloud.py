@@ -262,7 +262,7 @@ def test_service_revisions_secrets_idempotent_deployment_and_approval(tmp_path,k
         assert response.status_code==202,response.text
         deployment=response.json()
         assert deployment['status']=='pending_approval' and deployment['digest']=='sha256:'+'cd'*32
-        assert app.state.store.get_deployment(deployment['id'])['image']=='registry.example/team/api/payments@sha256:'+'cd'*32
+        assert app.state.store.get_deployment(deployment['id'])['image']=='registry.example/team/api/payments:1.0.1'
         replay=c.post(f"/api/services/{service['id']}/deployments",headers=headers,json={'job_id':job,'revision_id':next_revision})
         assert replay.status_code==202 and replay.json()['id']==deployment['id']
         mismatch=c.post(f"/api/services/{service['id']}/deployments",headers=headers,json={'job_id':job,'revision_id':revision})
@@ -291,7 +291,7 @@ def test_service_revisions_secrets_idempotent_deployment_and_approval(tmp_path,k
         c.cookies.clear();login(c)
         completed=wait_deploy(c,deployment['id'])
         assert completed['status']=='success',completed
-        assert deployment_state['image']=='registry.example/team/api/payments@sha256:'+'cd'*32
+        assert deployment_state['image']=='registry.example/team/api/payments:1.0.1'
         assert len(seen_auth)>=2
 
 
@@ -345,7 +345,7 @@ def test_service_worker_rechecks_policy_before_kubernetes_write(tmp_path,freeze_
             json={'job_id':job})
         assert response.status_code==202,response.text
         deployment=wait_deploy(c,response.json()['id'])
-        expected='registry.example/team/api/payments@sha256:'+'ef'*32
+        expected='registry.example/team/api/payments:2.0.0'
         if freeze_during_read:
             assert deployment['status']=='failed',deployment
             assert state['image']=='old' and state['patches']==0

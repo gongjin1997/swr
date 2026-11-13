@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
+from .apps import version_carry
 from .config import Settings
 from .registry import RegistryClient, RegistryError, normalize_arch, parse_image_ref
 from .versioning import candidate_tags, is_valid_tag, latest_by_version, next_tag
@@ -125,7 +126,8 @@ async def resolve_plan(client: RegistryClient, settings: Settings, app: Dict[str
             raise PlanError(f"版本 {requested} 已存在，请换一个版本号（平台不会覆盖已有版本）")
         final_tag = requested
     else:
-        final_tag = next_tag(tags, latest, app.get("initial_tag") or "1.0.0", app.get("tag_template") or "")
+        final_tag = next_tag(tags, latest, app.get("initial_tag") or "1.0.0", app.get("tag_template") or "",
+                             carry=version_carry(app))
 
     expected_arch: Optional[str] = None
     if platform:

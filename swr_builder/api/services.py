@@ -5,11 +5,12 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Header, Query, Request, Response
 
-from ..errors import NotImplementedYet
-from ..services import catalog, releases
+from ..delivery.spec import DEFAULT_SPEC, TEMPLATES
+from ..errors import NotFound, NotImplementedYet
+from ..services import catalog, manifests, releases
 from ..services.access import service_or_404
-from ..services.discovery import service_runtime
-from ..web.deps import Ctx, Me, audit, authenticated
+from ..services.discovery import service_runtime, services_status
+from ..web.deps import Ctx, Me, audit, authenticated, deploy_module
 
 router = APIRouter()
 
@@ -23,13 +24,46 @@ async def list_services(ctx: Ctx, me: Me, project_id: Optional[int] = None, name
     return {"items": items, "total": len(items)}
 
 
+@router.get("/api/service-templates")
+@authenticated
+async def service_templates():
+    """内置的服务模板与托管服务规格的默认值（新建向导使用）。"""
+    items = [dict(t, defaults=DEFAULT_SPEC) for t in TEMPLATES.values()]
+    return {"items": items, "total": len(items)}
+
+
 @router.post("/api/services", status_code=201)
 @authenticated
 async def create_service(request: Request, ctx: Ctx, me: Me, data: dict = Body(...)):
-    service = catalog.create_service(ctx.store, me, data)
+    service = catalog.create_service(ctx.store, me, data, ctx.box)
     audit(request, "service.create", service["id"],
-          f"project={service['project_id']};namespace={service['namespace_id']};app={service['app_id']}")
+          f"project={service['project_id']};namespace={service['namespace_id']};app={service['app_id']};"
+          f"mode={service['mode']}")
     return service
+
+
+@router.post("/api/services/preview")
+@authenticated
+async def preview_new_service(ctx: Ctx, me: Me, data: dict = Body(...)):
+    """新建托管服务前预览清单；dry_run=true 时在集群中做服务端校验。"""
+    return await manifests.preview_new(ctx, me, data)
+
+
+@router.post("/api/services/status")
+@authenticated
+async def service_status(ctx: Ctx, me: Me, data: dict = Body(...)):
+    """服务列表的运行状态（每个命名空间读取一次 Deployment 列表）。只返回当前账号可见的服务。"""
+    ids = data.get("ids")
+    if not isinstance(ids, list) or len(ids) > 200 or any(type(i) is not int for i in ids):
+        raise ValueError("ids 必须是最多 200 个服务 ID 的数组")
+    visible = []
+    for service_id in dict.fromkeys(ids):
+        try:
+            visible.append(service_or_404(ctx.store, me, service_id))
+        except NotFound:  # 看不到的服务直接忽略
+            continue
+    items = await services_status(ctx, visible)
+    return {"items": items, "total": len(items)}
 
 
 @router.get("/api/services/{id}")
@@ -92,7 +126,22 @@ async def get_revision(id: int, revision_id: int, ctx: Ctx, me: Me):
 @router.post("/api/services/{id}/render")
 @authenticated
 async def render_service(id: int, ctx: Ctx, me: Me, data: dict = Body(...)):
-    return catalog.render(ctx.store, me, id, data)
+    """托管服务的清单（敏感值已隐藏）；dry_run=true 时在集群中做服务端校验并列出与线上的差异。"""
+    return await manifests.preview(ctx, me, id, data)
+
+
+@router.get("/api/services/{id}/manifest")
+@authenticated
+async def service_manifest(id: int, ctx: Ctx, me: Me, deployment_id: Optional[int] = None):
+    """某次发布（默认最近一次成功发布）的渲染快照。"""
+    return manifests.manifest(ctx, me, id, deployment_id)
+
+
+@router.get("/api/services/{id}/effective-config")
+@authenticated
+async def service_effective_config(id: int, ctx: Ctx, me: Me):
+    """平台 → 项目 → 环境 → 服务合并后的配置，标注每个键来自哪一层。"""
+    return catalog.effective_config(ctx.store, me, id)
 
 
 @router.put("/api/services/{id}/secrets/{key}")
@@ -103,7 +152,7 @@ async def update_secret(id: int, key: str, request: Request, ctx: Ctx, me: Me, d
     return result
 
 
-# ------------------------------------------------------------------ 发布
+# ------------------------------------------------------------------ 发布（部署模块：关闭“启用部署中心”时拒绝）
 async def _submit(kind: str, id: int, request: Request, ctx, me, data: dict, idempotency_key: str):
     deployment = releases.submit(ctx.store, me, id, kind, data, idempotency_key)
     audit(request, "deploy.submit", deployment["id"],
@@ -113,6 +162,7 @@ async def _submit(kind: str, id: int, request: Request, ctx, me, data: dict, ide
 
 @router.post("/api/services/{id}/deployments", status_code=202)
 @authenticated
+@deploy_module
 async def submit_deployment(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(...),
                             idempotency_key: str = Header(..., alias="Idempotency-Key")):
     return await _submit("deploy", id, request, ctx, me, data, idempotency_key)
@@ -120,6 +170,7 @@ async def submit_deployment(id: int, request: Request, ctx: Ctx, me: Me, data: d
 
 @router.post("/api/services/{id}/rollback", status_code=202)
 @authenticated
+@deploy_module
 async def rollback_service(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(...),
                            idempotency_key: str = Header(..., alias="Idempotency-Key")):
     return await _submit("rollback", id, request, ctx, me, data, idempotency_key)
@@ -127,15 +178,32 @@ async def rollback_service(id: int, request: Request, ctx: Ctx, me: Me, data: di
 
 @router.post("/api/services/{id}/restart", status_code=202)
 @authenticated
+@deploy_module
 async def restart_service(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(...),
                           idempotency_key: str = Header(..., alias="Idempotency-Key")):
     """以最近一次成功发布的构建和修订重新发布。"""
     return await _submit("restart", id, request, ctx, me, data, idempotency_key)
 
 
+@router.post("/api/services/{id}/adopt", status_code=202)
+@authenticated
+@deploy_module
+async def adopt_service(id: int, request: Request, ctx: Ctx, me: Me, data: dict = Body(...),
+                        idempotency_key: str = Header(..., alias="Idempotency-Key")):
+    """接管发布：导入（或由纳管转为托管）的服务第一次由平台下发，镜像沿用集群中 Deployment 正在使用的镜像地址（通常是版本号）。"""
+    service = catalog.writable_service(ctx.store, me, id, "service.deploy", "没有服务发布权限")
+    image = await manifests.live_image(ctx, service)
+    deployment = releases.submit(ctx.store, me, id, "adopt", data, idempotency_key, live_image=image)
+    audit(request, "deploy.submit", deployment["id"],
+          f"service={id};kind=adopt;status={deployment['status']};revision={deployment['revision_id']};"
+          f"image={image['image']}")
+    return releases.deployment_response(deployment)
+
+
 @router.post("/api/services/{id}/scale", status_code=202)
 @authenticated
+@deploy_module
 async def scale_service(id: int, ctx: Ctx, me: Me, data: dict = Body(...),
                         idempotency_key: str = Header(..., alias="Idempotency-Key")):
     catalog.writable_service(ctx.store, me, id, "service.operate", "没有服务运维权限")
-    raise NotImplementedYet("受控扩缩容需要 managed 工作负载，当前版本尚未开放")
+    raise NotImplementedYet("托管服务请在服务配置中修改副本数（或 HPA）后发布；纳管服务只更新镜像，不支持扩缩容")

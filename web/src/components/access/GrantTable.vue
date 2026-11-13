@@ -2,11 +2,14 @@
 /** 授权记录表：授权页、账号详情、项目/命名空间成员共用。撤销按钮只对可撤销的授权显示。 */
 import { bindingApi } from '@/api'
 import type { BindingRow } from '@/api/types'
+import TablePager from '@/components/TablePager.vue'
 import { confirmAction, useAction } from '@/composables/useAction'
+import { usePagination } from '@/composables/usePagination'
 import { SCOPE_TEXT } from '@/constants'
 import { fmtTime } from '@/utils/format'
 
-defineProps<{ rows: BindingRow[]; loading?: boolean; hideSubject?: boolean; hideScope?: boolean; emptyText?: string }>()
+const props = defineProps<{ rows: BindingRow[]; loading?: boolean; hideSubject?: boolean; hideScope?: boolean; emptyText?: string }>()
+const pager = usePagination(() => props.rows)
 const emit = defineEmits<{ revoked: [] }>()
 const { busy, run } = useAction()
 
@@ -18,7 +21,7 @@ async function revoke(row: BindingRow) {
 </script>
 
 <template>
-  <el-table v-loading="loading" :data="rows" :empty-text="emptyText ?? '暂无授权'">
+  <el-table v-loading="loading" :data="pager.rows.value" :empty-text="emptyText ?? '暂无授权'">
     <el-table-column v-if="!hideSubject" label="账号" min-width="170">
       <template #default="{ row }">
         <b>{{ row.subject.display_name || row.subject.username }}</b>
@@ -50,6 +53,7 @@ async function revoke(row: BindingRow) {
       </template>
     </el-table-column>
   </el-table>
+  <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
 </template>
 
 <style scoped>

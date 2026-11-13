@@ -1,11 +1,15 @@
 /** 各领域的接口函数。后端所有列表接口返回 { items, total }，删除接口返回 204。 */
 import { http, upload } from './http'
 import type {
-  Account, AccountDetail, ApiToken, App, AppFields, AuditEntry, BindableUser, Binding, BindingRow, Cluster,
-  ClusterDiscovery, Deployment, DeploymentTicket, DockerfileImport, GrantInput, GrantOptions, Job, LogChunk, Namespace,
-  NamespacePolicy, NamespaceResources, Overview, Page, PlatformInfo, Preview, Project, RbacReview, RegistryOrg,
-  Revision, RevisionDiff, RoleCatalog, RoleDefinition, ScopeType, Service, SessionProfile, SessionRow, SettingsView,
-  SystemInfo, Tier, Versions,
+  Account, AccountDetail, ApiToken, App, AppFields, ApplyPresetRequest, AuditEntry, BindableUser, Binding, BindingRow, Certificate,
+  CertificateDetail, CertificateOption, CertificateUpload, Cluster, ClusterDiscovery, ConfigChange, ConfigEntry,
+  ConfigEntryInput, ConfigKind, ConfigScope, ConfigSet, ConfigVersion, Deployment, DeploymentTicket, DockerfileImport,
+  EffectiveConfig, EnvironmentCompare, EnvironmentDetail, EnvironmentProfile, EnvironmentSummary, GrantInput,
+  GrantOptions, ImageOnlySpec, ImportApply, ImportReport, ImportResult, ImportSource, IngressProfile, IngressSpec, Job,
+  LogChunk, ManagedSpec, ManifestSnapshot, Namespace, NamespacePolicy, NamespaceResources, Overview, Page, PlatformInfo,
+  Preview, Project, RbacReview, RegistryOrg, RenderResult, Revision, RevisionDiff, RoleCatalog, RoleDefinition, ScopeType,
+  Service, ServiceConfigInput, ServiceRuntime, ServiceStatusRow, ServiceTemplate, SessionProfile, SessionRow,
+  SettingsView, SystemInfo, Tier, Versions,
 } from './types'
 
 export const authApi = {
@@ -133,6 +137,60 @@ export const namespaceApi = {
   rbacYaml: (id: number) => http.get<{ yaml: string; warning: string }>(`/api/namespaces/${id}/rbac-yaml`),
 }
 
+// ------------------------------------------------------------------ 环境与配置
+export const environmentApi = {
+  list: () => http.get<Page<EnvironmentSummary>>('/api/environments'),
+  get: (id: number) => http.get<EnvironmentDetail>(`/api/environments/${id}`),
+  saveProfile: (id: number, data: { base_version: number; profile: EnvironmentProfile; ingress_profile_id: number | null }) =>
+    http.put<EnvironmentDetail>(`/api/environments/${id}/profile`, data),
+  effective: (id: number, projectId?: number | null) =>
+    http.get<EffectiveConfig>(`/api/environments/${id}/effective-config`, { project_id: projectId ?? undefined }),
+  compare: (left: number, right: number, projectId?: number | null) =>
+    http.get<EnvironmentCompare>('/api/environments/compare', { left, right, project_id: projectId ?? undefined }),
+  analyzeImport: (id: number, data: ImportSource) => http.post<ImportReport>(`/api/environments/${id}/import/analyze`, data),
+  applyImport: (id: number, data: ImportApply) => http.post<ImportResult>(`/api/environments/${id}/import/apply`, data),
+  applyPreset: (id: number, data: ApplyPresetRequest) => http.post(`/api/environments/${id}/apply-preset`, data),
+}
+
+export const ingressProfileApi = {
+  list: () => http.get<Page<IngressProfile>>('/api/ingress-profiles'),
+  create: (data: { name: string; description: string; spec: IngressSpec }) =>
+    http.post<IngressProfile>('/api/ingress-profiles', data),
+  update: (id: number, data: { base_version: number; name: string; description: string; spec: IngressSpec }) =>
+    http.put<IngressProfile>(`/api/ingress-profiles/${id}`, data),
+  remove: (id: number) => http.del(`/api/ingress-profiles/${id}`),
+}
+
+export const configApi = {
+  list: (scope_type: ConfigScope, scope_id: number) => http.get<Page<ConfigSet>>('/api/config-sets', { scope_type, scope_id }),
+  get: (id: number) => http.get<ConfigSet>(`/api/config-sets/${id}`),
+  create: (data: { scope_type: ConfigScope; scope_id: number; kind: ConfigKind; name?: string; description?: string;
+    entries: ConfigEntryInput[]; note?: string }) => http.post<ConfigSet>('/api/config-sets', data),
+  update: (id: number, data: { base_version: number; entries: ConfigEntryInput[]; note?: string; description?: string }) =>
+    http.put<ConfigSet>(`/api/config-sets/${id}`, data),
+  remove: (id: number) => http.del(`/api/config-sets/${id}`),
+  versions: (id: number) => http.get<Page<ConfigVersion>>(`/api/config-sets/${id}/versions`),
+  version: (id: number, number: number) =>
+    http.get<{ number: number; note: string; created_at: string; entries: ConfigEntry[] }>(`/api/config-sets/${id}/versions/${number}`),
+  diff: (id: number, from: number, to: number) => http.get<Page<ConfigChange>>(`/api/config-sets/${id}/diff`, { from, to }),
+  reveal: (id: number, keys?: string[], version?: number) =>
+    http.post<{ values: Record<string, { value: string; encoding: 'text' | 'base64' }> }>(`/api/config-sets/${id}/reveal`,
+      { ...(keys ? { keys } : {}), ...(version ? { version } : {}) }),
+}
+
+export const certificateApi = {
+  list: () => http.get<Page<Certificate>>('/api/certificates'),
+  options: () => http.get<Page<CertificateOption>>('/api/certificates/options'),
+  get: (id: number) => http.get<CertificateDetail>(`/api/certificates/${id}`),
+  create: (data: CertificateUpload & { name: string; description: string }) =>
+    http.post<CertificateDetail>('/api/certificates', data),
+  rotate: (id: number, data: CertificateUpload & { base_version: number }) =>
+    http.post<CertificateDetail>(`/api/certificates/${id}/versions`, data),
+  content: (id: number, number: number) =>
+    http.get<{ filename: string; number: number; content_base64: string }>(`/api/certificates/${id}/versions/${number}/content`),
+  remove: (id: number) => http.del(`/api/certificates/${id}`),
+}
+
 // ------------------------------------------------------------------ 服务与发布
 export interface ServiceQuery {
   project_id?: number
@@ -140,13 +198,31 @@ export interface ServiceQuery {
   namespace_id?: number
 }
 
+export interface ServiceCreate {
+  name: string
+  project_id: number
+  namespace_id: number
+  app_id: number
+  spec: ImageOnlySpec | ManagedSpec
+  config?: ServiceConfigInput
+  /** 新建时一并绑定的资源（只有托管服务）；别名可空 */
+  bindings?: { resource_id: number; alias: string }[]
+}
+
 export const serviceApi = {
   list: (query: ServiceQuery = {}) => http.get<Page<Service>>('/api/services', { ...query }),
   get: (id: number) => http.get<Service>(`/api/services/${id}`),
-  runtime: (id: number) => http.get<NamespaceResources>(`/api/services/${id}/runtime`),
+  templates: () => http.get<Page<ServiceTemplate>>('/api/service-templates'),
+  status: (ids: number[]) => http.post<Page<ServiceStatusRow>>('/api/services/status', { ids }),
+  runtime: (id: number) => http.get<ServiceRuntime>(`/api/services/${id}/runtime`),
   builds: (id: number) => http.get<Page<Job>>(`/api/services/${id}/builds`),
-  create: (data: { name: string; project_id: number; namespace_id: number; app_id: number; spec: unknown }) =>
-    http.post<Service>('/api/services', data),
+  create: (data: ServiceCreate) => http.post<Service>('/api/services', data),
+  previewNew: (data: ServiceCreate & { dry_run: boolean }) => http.post<RenderResult>('/api/services/preview', data),
+  render: (id: number, data: { revision_id?: number; dry_run?: boolean; spec?: ManagedSpec }) =>
+    http.post<RenderResult>(`/api/services/${id}/render`, data),
+  manifest: (id: number, deploymentId?: number) =>
+    http.get<ManifestSnapshot>(`/api/services/${id}/manifest`, { deployment_id: deploymentId }),
+  effective: (id: number) => http.get<EffectiveConfig>(`/api/services/${id}/effective-config`),
   updateSpec: (id: number, base_revision: number, spec: unknown) =>
     http.put<{ service: Service; revision: Revision }>(`/api/services/${id}`, { base_revision, spec }),
   remove: (id: number) => http.del(`/api/services/${id}`),
@@ -160,6 +236,8 @@ export const serviceApi = {
     http.post<DeploymentTicket>(`/api/services/${id}/rollback`, data, { 'Idempotency-Key': key }),
   restart: (id: number, key: string, remark: string) =>
     http.post<DeploymentTicket>(`/api/services/${id}/restart`, { remark }, { 'Idempotency-Key': key }),
+  adopt: (id: number, key: string, remark: string) =>
+    http.post<DeploymentTicket>(`/api/services/${id}/adopt`, { remark }, { 'Idempotency-Key': key }),
 }
 
 export interface DeploymentQuery {
@@ -190,10 +268,11 @@ export interface AccountCreate {
   grants: GrantInput[]
 }
 
+/** 部分更新：没传的字段保持原值（后端按“存在才改”处理）。 */
 export interface AccountUpdate {
-  display_name: string
-  email: string
-  enabled: boolean
+  display_name?: string
+  email?: string
+  enabled?: boolean
   platform_admin?: boolean
 }
 
@@ -248,3 +327,8 @@ export const settingsApi = {
   save: (change: SettingsChange) => http.put<{ ok: boolean; changed: string[] }>('/api/settings', change),
   testRegistry: (change: SettingsChange) => http.post<{ ok: boolean; message: string }>('/api/settings/registry/test', change),
 }
+
+// ------------------------------------------------------------------ 资源管理与环境预置
+export { resourceApi, serviceResourceApi } from './resources'
+export { presetApi } from './presets'
+

@@ -9,6 +9,7 @@ from copy import deepcopy
 
 import asyncio
 import base64
+import hashlib
 import json
 import re
 import ssl
@@ -277,6 +278,19 @@ class RegistryClient:
             sub, sub_digest, _ = await self.get_manifest(repo, chosen["digest"], platform)
             return sub, sub_digest, True
         return manifest, digest, False
+
+    async def manifest_digest(self, repo: str, reference: str) -> str:
+        """标签当前指向的清单 digest。多架构镜像取整个清单列表的 digest，与 docker push 输出的一致；
+        仓库没有返回 Docker-Content-Digest 时按响应内容计算。"""
+        resp = await self._request("GET", f"/v2/{repo}/manifests/{reference}", f"repository:{repo}:pull",
+                                   headers={"Accept": ", ".join(MANIFEST_TYPES)})
+        if resp.status_code == 404:
+            raise RegistryError(f"镜像 {repo}:{reference} 不存在")
+        if resp.status_code in (401, 403):
+            raise RegistryError(f"没有镜像 {repo} 的读取权限")
+        if resp.status_code != 200:
+            raise RegistryError(f"读取镜像清单失败：HTTP {resp.status_code}")
+        return resp.headers.get("docker-content-digest") or "sha256:" + hashlib.sha256(resp.content).hexdigest()
 
     async def get_image_info(self, repo: str, reference: str, platform: str = "") -> Dict[str, Any]:
         """读取镜像的层数、压缩后大小、架构、创建时间。"""

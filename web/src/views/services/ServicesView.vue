@@ -1,16 +1,22 @@
 <script setup lang="ts">
-/** 服务列表：应用部署到命名空间的 Deployment。独立页面可筛选；嵌入项目工作台时固定为该项目。 */
-import { Plus, Refresh, Search } from '@element-plus/icons-vue'
+/**
+ * 服务列表：应用在各环境中的部署。显示服务方式（托管 / 纳管）、集群中的运行状态与就绪副本、未发布的配置。
+ * 独立页面可筛选；嵌入项目工作台时固定为该项目。运行状态只读取当前页的服务（每个命名空间一次请求）。
+ */
+import { ArrowDown, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { namespaceApi, projectApi, serviceApi } from '@/api'
-import type { Namespace, NamespaceResources, Project, Service } from '@/api/types'
+import type { Namespace, Project, Service, ServiceStatusRow } from '@/api/types'
 import DeployDialog from '@/components/DeployDialog.vue'
 import PageHeader from '@/components/PageHeader.vue'
-import { notifyError, useAction } from '@/composables/useAction'
-import { TIER_TAG, TIER_TEXT } from '@/constants'
+import TablePager from '@/components/TablePager.vue'
+import { notifyError } from '@/composables/useAction'
+import { usePagination } from '@/composables/usePagination'
+import { RUNTIME_STATE_TAG, RUNTIME_STATE_TEXT, SERVICE_MODE_HINT, SERVICE_MODE_TEXT, TIER_TAG, TIER_TEXT } from '@/constants'
 import { usePlatform } from '@/stores/platform'
 import { useSession } from '@/stores/session'
+import { shortImage } from '@/utils/format'
 
 const props = defineProps<{ projectId?: number; embedded?: boolean }>()
 const session = useSession()
@@ -20,23 +26,30 @@ const route = useRoute()
 const services = ref<Service[]>([])
 const projects = ref<Project[]>([])
 const namespaces = ref<Namespace[]>([])
+const status = ref<Record<number, ServiceStatusRow>>({})
+const statusLoading = ref(false)
 const loading = ref(false)
 const keyword = ref('')
 const filters = reactive({
   projectId: props.projectId ?? (Number(route.query.project) || null),
   appId: props.embedded ? null : (Number(route.query.app) || null),
   namespaceId: props.embedded ? null : (Number(route.query.namespace) || null),
+  mode: '',
 })
-const { busy, run } = useAction()
 const deployTarget = ref<Service | null>(null)
 const deployOpen = ref(false)
+let statusSequence = 0
 
 const filtered = computed(() => services.value.filter((s) =>
   (!filters.projectId || s.project_id === filters.projectId) && (!filters.appId || s.app_id === filters.appId) &&
-  (!filters.namespaceId || s.namespace_id === filters.namespaceId) &&
-  (!keyword.value.trim() || `${s.name} ${s.app_name} ${s.namespace_name}`.toLowerCase().includes(keyword.value.trim().toLowerCase()))))
+  (!filters.namespaceId || s.namespace_id === filters.namespaceId) && (!filters.mode || s.mode === filters.mode) &&
+  (!keyword.value.trim() || `${s.name} ${s.app_name} ${s.namespace_name} ${s.workload}`.toLowerCase()
+    .includes(keyword.value.trim().toLowerCase()))))
+const pager = usePagination(() => filtered.value, { size: 20, resetOn: () => [keyword.value, filters.projectId, filters.appId, filters.namespaceId, filters.mode] })
 const appOptions = computed(() => platform.apps.filter((a) => !filters.projectId || a.project_id === filters.projectId))
-const canCreate = computed(() => session.can('service.config'))
+const canCreate = computed(() => session.can('service.create') || session.can('service.config'))
+const importTargets = computed(() => namespaces.value.filter((n) => session.canNamespace(n.id, 'service.create')))
+const managedCount = computed(() => filtered.value.filter((s) => s.mode === 'managed').length)
 
 async function load() {
   loading.value = true
@@ -58,182 +71,154 @@ async function load() {
   }
 }
 
+/** 当前页服务的运行状态。读取失败只影响状态列。 */
+async function loadStatus() {
+  const ids = pager.rows.value.map((s) => s.id).filter((id) => !status.value[id])
+  if (!ids.length) return
+  const request = ++statusSequence
+  statusLoading.value = true
+  try {
+    const result = await serviceApi.status(ids)
+    if (request !== statusSequence) return
+    status.value = { ...status.value, ...Object.fromEntries(result.items.map((row) => [row.service_id, row])) }
+  } catch {
+    /* 状态列显示“未读取” */
+  } finally {
+    if (request === statusSequence) statusLoading.value = false
+  }
+}
+
+async function refresh() {
+  status.value = {}
+  await load()
+  await loadStatus()
+}
+
 function openDeploy(service: Service) {
   deployTarget.value = service
   deployOpen.value = true
 }
 
-// ------------------------------------------------------------------ 新建服务
-const creator = reactive({ visible: false, name: '', projectId: null as number | null, appId: null as number | null,
-  namespaceId: null as number | null, deployment: '', container: '' })
-const discovered = ref<NamespaceResources | null>(null)
-const discovering = ref(false)
-const resourceError = ref('')
-let resourceSequence = 0
-const creatorProjects = computed(() => projects.value.filter((p) => p.namespace_ids.some((id) => session.canNamespace(id, 'service.config'))))
-const creatorApps = computed(() => platform.apps.filter((a) => a.project_id === creator.projectId))
-const creatorNamespaces = computed(() => {
-  const project = projects.value.find((p) => p.id === creator.projectId)
-  return namespaces.value.filter((n) => project?.namespace_ids.includes(n.id) && session.canNamespace(n.id, 'service.config'))
-})
-const containers = computed(() => discovered.value?.deployments.find((d) => d.name === creator.deployment)?.containers ?? [])
-
-function openCreator() {
-  const preferred = creatorProjects.value.find((p) => p.id === filters.projectId) ?? creatorProjects.value[0]
-  if (!preferred) return notifyError(new Error('需要一个已分配命名空间、且你在该命名空间有服务配置权限的项目'))
-  Object.assign(creator, { visible: true, name: '', projectId: preferred.id, appId: filters.appId, namespaceId: null, deployment: '', container: '' })
+function create() {
+  void router.push({ name: 'service-create', query: { project: filters.projectId ? String(filters.projectId) : undefined,
+    app: filters.appId ? String(filters.appId) : undefined, namespace: filters.namespaceId ? String(filters.namespaceId) : undefined } })
 }
 
-function changeProject() {
-  creator.appId = null
-  creator.namespaceId = null
+function openImport(command: string | number | object) {
+  void router.push({ name: 'environment-import', params: { id: Number(command) },
+    query: { project: filters.projectId ? String(filters.projectId) : undefined } })
 }
 
-async function create() {
-  if (!creator.projectId || !creator.appId || !creator.namespaceId) return notifyError(new Error('请选择项目、应用和命名空间'))
-  const result: { id?: number } = {}
-  const ok = await run(async () => {
-    const created = await serviceApi.create({
-      name: creator.name.trim(), project_id: creator.projectId as number, namespace_id: creator.namespaceId as number,
-      app_id: creator.appId as number,
-      spec: { mode: 'image_only', target: { kind: 'Deployment', name: creator.deployment.trim(), container: creator.container.trim() } },
-    })
-    result.id = created.id
-  }, '服务已创建')
-  if (ok && result.id) {
-    creator.visible = false
-    await router.push({ name: 'service-detail', params: { id: result.id } })
-  }
-}
+const rowStatus = (service: Service) => status.value[service.id]
 
-watch(() => [creator.namespaceId, creator.visible] as const, async ([id, visible]) => {
-  const request = ++resourceSequence
-  discovered.value = null
-  creator.deployment = ''
-  creator.container = ''
-  resourceError.value = ''
-  if (!id || !visible) {
-    discovering.value = false
-    return
-  }
-  discovering.value = true
-  try {
-    const result = await namespaceApi.resources(id)
-    if (request === resourceSequence) discovered.value = result
-  } catch (e) {
-    if (request === resourceSequence) resourceError.value = e instanceof Error ? e.message : '读取集群资源失败'
-  } finally {
-    if (request === resourceSequence) discovering.value = false
-  }
-})
-watch(() => creator.deployment, () => { creator.container = containers.value[0]?.name ?? '' })
+watch(() => pager.rows.value.map((s) => s.id).join(','), () => { void loadStatus() })
 watch(() => [filters.projectId, filters.appId, filters.namespaceId], () => {
+  // 筛选条件变了，先清掉旧结果与旧状态：列表请求还没回来时不应该继续显示上一次的筛选结果
+  status.value = {}
+  void (async () => {
+    await load()
+    await loadStatus()
+  })()
   if (!props.embedded) {
     void router.replace({ query: { project: filters.projectId ? String(filters.projectId) : undefined,
       app: filters.appId ? String(filters.appId) : undefined, namespace: filters.namespaceId ? String(filters.namespaceId) : undefined } })
   }
 })
-onMounted(load)
+onMounted(async () => {
+  await load()
+  await loadStatus()
+})
 </script>
 
 <template>
   <div :class="{ page: !embedded }">
-    <PageHeader v-if="!embedded" title="服务" description="服务把项目的应用关联到已分配命名空间中的 Deployment，发布时固定镜像摘要与配置修订。">
-      <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-      <el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreator">创建服务</el-button>
+    <PageHeader v-if="!embedded" title="服务" description="服务是应用在一个环境中的部署。托管服务由平台生成并下发全部对象；纳管服务关联已有的 Deployment，发布时只更新镜像。">
+      <el-button :icon="Refresh" :loading="loading" @click="refresh">刷新</el-button>
+      <el-dropdown v-if="importTargets.length" trigger="click" @command="openImport">
+        <el-button :icon="Upload">导入已有服务<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item v-for="n in importTargets" :key="n.id" :command="n.id">{{ n.cluster_name }} / {{ n.name }}（{{ TIER_TEXT[n.tier] }}）</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+      <el-button v-if="canCreate" type="primary" :icon="Plus" @click="create">新建服务</el-button>
     </PageHeader>
     <el-card>
       <div class="filter-bar">
-        <el-input v-model="keyword" :prefix-icon="Search" placeholder="搜索服务、应用或命名空间" clearable aria-label="搜索服务" />
+        <el-input v-model="keyword" :prefix-icon="Search" placeholder="搜索服务、应用、环境或工作负载" clearable aria-label="搜索服务" />
         <el-select v-if="!embedded" v-model="filters.projectId" clearable filterable placeholder="全部项目" aria-label="按项目筛选">
           <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
         </el-select>
         <el-select v-model="filters.appId" clearable filterable placeholder="全部应用" aria-label="按应用筛选">
           <el-option v-for="a in appOptions" :key="a.id" :label="a.name" :value="a.id" />
         </el-select>
-        <el-select v-if="!embedded" v-model="filters.namespaceId" clearable filterable placeholder="全部命名空间" aria-label="按命名空间筛选">
+        <el-select v-if="!embedded" v-model="filters.namespaceId" clearable filterable placeholder="全部环境" aria-label="按环境筛选">
           <el-option v-for="n in namespaces" :key="n.id" :label="`${n.cluster_name} / ${n.name}`" :value="n.id" />
         </el-select>
-        <span class="count">共 {{ filtered.length }} 个服务</span>
-        <el-button v-if="embedded && canCreate" type="primary" :icon="Plus" @click="openCreator">创建服务</el-button>
+        <el-select v-model="filters.mode" clearable placeholder="全部方式" aria-label="按服务方式筛选" class="mode-select">
+          <el-option label="托管" value="managed" /><el-option label="纳管" value="image_only" />
+        </el-select>
+        <span class="count">共 {{ filtered.length }} 个服务，托管 {{ managedCount }} 个</span>
+        <el-button v-if="embedded && canCreate" type="primary" :icon="Plus" @click="create">新建服务</el-button>
       </div>
-      <el-table v-loading="loading" :data="filtered" empty-text="暂无可见服务">
+      <el-table v-loading="loading" :data="pager.rows.value" empty-text="暂无可见服务">
         <el-table-column label="服务" min-width="170">
           <template #default="{ row }">
             <RouterLink :to="{ name: 'service-detail', params: { id: row.id } }"><b>{{ row.name }}</b></RouterLink>
-            <div class="hint mono">{{ row.spec?.target?.name ?? row.spec?.mode }}</div>
+            <el-tooltip :content="SERVICE_MODE_HINT[row.mode]">
+              <el-tag size="small" :type="row.mode === 'managed' ? 'primary' : 'info'" effect="plain" class="gap">{{ SERVICE_MODE_TEXT[row.mode] }}</el-tag>
+            </el-tooltip>
+            <div v-if="row.workload && row.workload !== row.name" class="hint mono">{{ row.workload }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="项目 / 应用" min-width="180">
+        <el-table-column label="项目 / 应用" min-width="140">
           <template #default="{ row }">
             <RouterLink v-if="!embedded" :to="{ name: 'project-detail', params: { id: row.project_id } }">{{ row.project_name }}</RouterLink>
             <div :class="{ hint: !embedded }">{{ row.app_name }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="环境" min-width="200">
+        <el-table-column label="环境" min-width="170">
           <template #default="{ row }">
             <el-tag size="small" :type="TIER_TAG[row.tier]" effect="plain">{{ TIER_TEXT[row.tier] }}</el-tag>
             <span class="hint gap">{{ row.cluster_name }} / {{ row.namespace_name }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="配置 / 已部署修订" width="150">
+        <el-table-column label="运行状态" min-width="170">
           <template #default="{ row }">
-            <span class="mono">{{ row.current_revision_id }} / {{ row.deployed_revision_id ?? '-' }}</span>
-            <el-tag v-if="row.deployed_revision_id && row.deployed_revision_id !== row.current_revision_id" size="small" type="warning" class="gap">有未发布配置</el-tag>
+            <template v-if="rowStatus(row)">
+              <el-tooltip :content="rowStatus(row)?.message" placement="top">
+                <el-tag size="small" :type="RUNTIME_STATE_TAG[rowStatus(row)?.state ?? 'unknown']">{{ RUNTIME_STATE_TEXT[rowStatus(row)?.state ?? 'unknown'] }}</el-tag>
+              </el-tooltip>
+              <span v-if="rowStatus(row)?.desired !== undefined && !['missing', 'unknown'].includes(rowStatus(row)?.state ?? '')"
+                class="num gap">{{ rowStatus(row)?.ready }}/{{ rowStatus(row)?.desired }}</span>
+              <div v-if="rowStatus(row)?.image" class="hint mono break-word">{{ shortImage(rowStatus(row)?.image?.split('@')[0]) }}</div>
+            </template>
+            <span v-else class="hint">{{ statusLoading ? '读取中…' : '未读取' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="配置" width="120">
+          <template #default="{ row }">
+            <el-tag v-if="!row.deployed_revision_id" size="small" type="info" effect="plain">尚未发布</el-tag>
+            <el-tag v-else-if="row.deployed_revision_id !== row.current_revision_id || row.config_status?.pending" size="small" type="warning">有未发布配置</el-tag>
+            <span v-else class="hint">已同步</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="110" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="router.push({ name: 'service-detail', params: { id: row.id } })">详情</el-button>
             <el-button v-if="session.deployEnabled && session.canNamespace(row.namespace_id, 'service.deploy')" link type="primary" @click="openDeploy(row)">发布</el-button>
           </template>
         </el-table-column>
       </el-table>
+      <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
     </el-card>
 
-    <el-dialog v-model="creator.visible" title="创建服务" width="640px" :close-on-click-modal="false">
-      <el-form label-position="top" @submit.prevent="create">
-        <el-form-item label="服务名称" required><el-input v-model="creator.name" maxlength="63" placeholder="小写字母、数字和 -" /></el-form-item>
-        <div class="form-grid">
-          <el-form-item label="项目">
-            <el-select v-model="creator.projectId" :disabled="!!projectId" @change="changeProject">
-              <el-option v-for="p in creatorProjects" :key="p.id" :label="p.name" :value="p.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="应用">
-            <el-select v-model="creator.appId" filterable placeholder="选择项目内的应用">
-              <el-option v-for="a in creatorApps" :key="a.id" :label="a.name" :value="a.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="命名空间">
-            <el-select v-model="creator.namespaceId" placeholder="项目已分配的命名空间">
-              <el-option v-for="n in creatorNamespaces" :key="n.id" :label="`${n.cluster_name} / ${n.name}（${TIER_TEXT[n.tier]}）`" :value="n.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="Deployment">
-            <el-select v-model="creator.deployment" filterable :loading="discovering" :disabled="!creator.namespaceId" placeholder="从集群读取工作负载">
-              <el-option v-for="d in discovered?.deployments ?? []" :key="d.name" :label="`${d.name}（${d.ready_replicas}/${d.replicas} 就绪）`" :value="d.name" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="容器">
-            <el-select v-model="creator.container" :disabled="!creator.deployment" placeholder="选择目标容器">
-              <el-option v-for="c in containers" :key="c.name" :label="c.name" :value="c.name" />
-            </el-select>
-          </el-form-item>
-        </div>
-        <el-alert v-if="resourceError" type="error" :closable="false" :title="resourceError" />
-        <p v-if="creator.container" class="hint mono break-word">当前镜像：{{ containers.find((c) => c.name === creator.container)?.image }}</p>
-      </el-form>
-      <template #footer>
-        <el-button @click="creator.visible = false">取消</el-button>
-        <el-button type="primary" :loading="busy" :disabled="discovering || !creator.deployment || !creator.container" @click="create">创建服务</el-button>
-      </template>
-    </el-dialog>
-
-    <DeployDialog v-model="deployOpen" :service="deployTarget" @submitted="load" />
+    <DeployDialog v-model="deployOpen" :service="deployTarget" :prefer-latest="!!deployTarget?.config_status?.pending" @submitted="refresh" />
   </div>
 </template>
 
 <style scoped>
 .gap { margin-left: 6px; }
+.filter-bar .mode-select { width: 130px; }
 </style>

@@ -12,7 +12,7 @@ html.dark {
   color-scheme: dark;
   --hi-bg-page: #141922; --hi-bg-card: #1c2330; --hi-bg-soft: #232b39; --hi-bg-hover: #26334b;
   --hi-border: #333e50; --hi-border-light: #2b3545; --hi-text-1: #edf1f8; --hi-text-2: #bac5d6; --hi-text-3: #919fb4;
-  --hi-sider-bg: #1c2330; --hi-sider-text: #bac5d6; --hi-sider-active-bg: #243856;
+  --hi-sider-bg: #1c2330; --hi-sider-text: #bac5d6; --hi-sider-active-bg: #243856; --hi-scroll-shadow: rgba(0, 0, 0, 0.6);
   --el-color-primary: #76a4ff; --el-color-primary-light-3: #5b83d0; --el-color-primary-light-5: #42649f;
   --el-color-primary-light-7: #324d79; --el-color-primary-light-8: #2a4167; --el-color-primary-light-9: #233550;
   --el-color-primary-dark-2: #a1bfff; --el-fill-color-light: var(--hi-bg-soft); --el-bg-color: var(--hi-bg-card); --el-bg-color-overlay: var(--hi-bg-card);
@@ -52,6 +52,9 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--el-color-primar
 .el-table th.el-table__cell { font-weight: 500; font-size: 12px; height: 44px; }
 .el-table td.el-table__cell { padding: 15px 0; }
 .el-table .cell { line-height: 1.6; }
+/* size="small" 的表格（详情页中的次要表格）保持紧凑；上面的行高只用于普通列表 */
+.el-table--small th.el-table__cell { height: 36px; }
+.el-table--small td.el-table__cell { padding: 7px 0; }
 .el-button { font-size: 14px; font-weight: 500; }
 .el-button--primary:not(.is-text):not(.is-link):not(.is-plain) { box-shadow: 0 2px 4px #1d63f01a; }
 .el-form-item__label { color: var(--hi-text-2); font-size: 14px; }

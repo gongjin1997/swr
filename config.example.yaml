@@ -30,9 +30,19 @@ registry:
   insecure: false
   timeout: 30
 
+database:
+  # PostgreSQL 14+，或以 DBCOMPATIBILITY 'PG' 创建的 GaussDB / openGauss 数据库。
+  # 口令不要写在这里，用环境变量 BUILDER_DATABASE_PASSWORD 提供；整个连接串也可以用 BUILDER_DATABASE_URL 提供
+  url: postgresql://swr@127.0.0.1:5432/swr
+  # psycopg：PostgreSQL，以及允许 MD5 认证（password_encryption_type=1）的 GaussDB；
+  # gaussdb：华为 GaussDB 驱动（pip install gaussdb，另装 GaussDB 客户端 libpq），可用 SHA256 认证
+  driver: psycopg
+  pool_size: 10
+  connect_timeout: 10
+
 build:
   docker_bin: docker
-  data_dir: ./data            # 数据库、构建日志、构建上下文
+  data_dir: ./data            # 构建日志、构建上下文、发布日志、secret.key
   max_concurrent: 2           # 同时进行的构建数；同一个镜像仓库始终串行
   login_timeout: 120
   build_timeout: 1800

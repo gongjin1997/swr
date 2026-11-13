@@ -12,9 +12,9 @@ from .worker import ServiceDeploymentWorker
 
 
 class DeployManager:
-    def __init__(self, settings, store, box, events, transport=None):
+    def __init__(self, settings, store, box, events, transport=None, registry=None):
         self.settings, self.store, self.box, self.events, self.transport = settings, store, box, events, transport
-        self.service_worker = ServiceDeploymentWorker(settings, store, box, events, transport)
+        self.service_worker = ServiceDeploymentWorker(settings, store, box, events, transport, registry)
 
     def start(self) -> None:
         self.store.fail_unfinished_deployments("平台重启，部署状态未知，请确认目标环境后重新操作")

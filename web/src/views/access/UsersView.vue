@@ -11,6 +11,8 @@ import { useCatalog } from '@/stores/catalog'
 import { useSession } from '@/stores/session'
 import { fmtTime } from '@/utils/format'
 import UserDrawer from './UserDrawer.vue'
+import TablePager from '@/components/TablePager.vue'
+import { usePagination } from '@/composables/usePagination'
 
 const session = useSession()
 const catalog = useCatalog()
@@ -33,6 +35,7 @@ const filtered = computed(() => users.value.filter((u) => {
   if (filters.kind === 'none' && u.grant_count) return false
   return true
 }))
+const pager = usePagination(() => filtered.value, { resetOn: () => [filters.keyword, filters.status, filters.kind] })
 const detailId = computed<number | null>(() => (route.query.user ? Number(route.query.user) : null))
 
 async function load() {
@@ -154,8 +157,8 @@ async function toggle(user: Account) {
   const action = user.enabled ? '停用' : '启用'
   const note = user.enabled ? '停用后该账号的会话与 API 令牌立即失效。' : ''
   if (!(await confirmAction(`${action}账号 ${user.username}？${note}`, `${action}账号`, user.enabled))) return
-  if (await run(() => userApi.update(user.id, { display_name: user.display_name, email: user.email, enabled: !user.enabled }),
-    `已${action}`)) await load()
+  // 只提交启用状态：带上列表里的 display_name/email 会把别人刚改过的资料覆盖回旧值
+  if (await run(() => userApi.update(user.id, { enabled: !user.enabled }), `已${action}`)) await load()
 }
 
 async function resetPassword(user: Account) {
@@ -190,28 +193,28 @@ onMounted(load)
       <span class="count">共 {{ filtered.length }} 个账号</span>
       <el-button type="primary" :icon="Plus" @click="openCreator">新增账号</el-button>
     </div>
-    <el-table v-loading="loading" :data="filtered" empty-text="没有匹配的账号">
-      <el-table-column label="账号" min-width="190">
+    <el-table v-loading="loading" :data="pager.rows.value" empty-text="没有匹配的账号">
+      <el-table-column label="账号" min-width="150">
         <template #default="{ row }">
           <el-button link type="primary" @click="openDetail(row)">{{ row.display_name }}</el-button>
           <div class="hint">{{ row.username }}<template v-if="row.email"> · {{ row.email }}</template></div>
         </template>
       </el-table-column>
-      <el-table-column label="身份" min-width="170">
+      <el-table-column label="身份" min-width="140">
         <template #default="{ row }">
           <el-tag v-if="row.is_platform_admin" type="danger" effect="plain">平台管理员</el-tag>
           <span v-else :class="{ hint: !row.grant_count }">{{ row.role_label }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="授权数" width="90"><template #default="{ row }">{{ row.grant_count }}</template></el-table-column>
-      <el-table-column label="状态" width="150">
+      <el-table-column label="授权数" width="78"><template #default="{ row }">{{ row.grant_count }}</template></el-table-column>
+      <el-table-column label="状态" width="120">
         <template #default="{ row }">
           <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag>
           <el-tag v-if="row.must_change_password" type="warning" class="gap">待改密</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="最近登录" width="170"><template #default="{ row }">{{ fmtTime(row.last_login_at) }}</template></el-table-column>
-      <el-table-column label="操作" width="260" fixed="right">
+      <el-table-column label="最近登录" width="150"><template #default="{ row }">{{ fmtTime(row.last_login_at) }}</template></el-table-column>
+      <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openDetail(row)">授权</el-button>
           <template v-if="row.can_manage">
@@ -226,6 +229,7 @@ onMounted(load)
         </template>
       </el-table-column>
     </el-table>
+    <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
   </el-card>
 
   <el-dialog v-model="creator.visible" title="新增账号" width="680px" :close-on-click-modal="false">

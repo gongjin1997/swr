@@ -7,6 +7,12 @@ from typing import Any, Dict, List, Tuple
 from .schema import utcnow
 
 
+def _prefix_pattern(prefix: str) -> str:
+    """LIKE 前缀匹配：用 ! 转义用户输入中的通配符（避免反斜杠在不同 standard_conforming_strings 下含义不同）。"""
+    escaped = prefix.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+    return escaped + "%"
+
+
 class SystemMixin:
     def get_settings(self) -> Dict[str, Any]:
         with self._db() as db:
@@ -17,30 +23,29 @@ class SystemMixin:
         now = utcnow()
         with self._db() as db:
             for key, value in values.items():
-                db.execute("INSERT INTO settings(key, value, updated_at, updated_by) VALUES (?, ?, ?, ?) "
-                           "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, "
-                           "updated_by = excluded.updated_by",
-                           (key, json.dumps(value, ensure_ascii=False), now, username))
+                self.upsert(db, "settings", {"key": key},
+                            {"value": json.dumps(value, ensure_ascii=False), "updated_at": now, "updated_by": username})
             for key in removed:
-                db.execute("DELETE FROM settings WHERE key = ?", (key,))
+                db.execute("DELETE FROM settings WHERE key = %s", (key,))
 
     def add_audit(self, username: str, action: str, target: str = "", detail: str = "", ip: str = "") -> None:
         with self._db() as db:
-            db.execute("INSERT INTO audit_logs(created_at, username, action, target, detail, ip) VALUES (?, ?, ?, ?, ?, ?)",
+            db.execute("INSERT INTO audit_logs(created_at, username, action, target, detail, ip) "
+                       "VALUES (%s, %s, %s, %s, %s, %s)",
                        (utcnow(), username, action, target[:200], detail[:1000], ip[:64]))
 
     def list_audit(self, limit: int = 50, offset: int = 0, username: str = "",
                    action: str = "") -> Tuple[List[Dict[str, Any]], int]:
         where, args = [], []
         if username:
-            where.append("username = ?")
+            where.append("username = %s")
             args.append(username)
         if action:
-            where.append("action LIKE ?")
-            args.append(action + "%")
+            where.append("action ILIKE %s ESCAPE '!'")
+            args.append(_prefix_pattern(action))
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         with self._db() as db:
             total = db.execute(f"SELECT COUNT(*) FROM audit_logs {clause}", args).fetchone()[0]
-            rows = db.execute(f"SELECT * FROM audit_logs {clause} ORDER BY id DESC LIMIT ? OFFSET ?",
+            rows = db.execute(f"SELECT * FROM audit_logs {clause} ORDER BY id DESC LIMIT %s OFFSET %s",
                               (*args, limit, offset)).fetchall()
         return [dict(r) for r in rows], total

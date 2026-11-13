@@ -250,6 +250,8 @@ export interface AppFields {
   platform: string
   latest_strategy: 'version' | 'time'
   initial_tag: string
+  /** carry：逢十进一（1.0.9 → 1.1.0）；last：末位递增（1.0.9 → 1.0.10） */
+  version_increment: 'carry' | 'last'
   tag_template: string
   tag_regex: string
   push_latest: boolean
@@ -415,12 +417,193 @@ export interface RbacReview {
   warnings: string[]
 }
 
+// ------------------------------------------------------------------ Kubernetes 运行状态
+export type RuntimeState = 'healthy' | 'progressing' | 'degraded' | 'failed' | 'stopped' | 'paused' | 'missing' | 'unknown'
+export type StatusLevel = 'ok' | 'warning' | 'error'
+
+export interface KubeContainer {
+  name: string
+  image: string
+  resources: { requests: Record<string, string>; limits: Record<string, string> }
+  probes: Partial<Record<'startup' | 'readiness' | 'liveness', string>>
+}
+
+export interface DeploymentCondition {
+  type: string
+  status: string
+  reason: string
+  message: string
+  last_update: string | null
+  last_transition: string | null
+}
+
 export interface KubeDeployment {
   name: string
   uid: string
+  created_at: string | null
+  generation: number | null
+  observed_generation: number | null
   replicas: number
   ready_replicas: number
-  containers: { name: string; image: string }[]
+  updated_replicas: number
+  available_replicas: number
+  unavailable_replicas: number
+  revision: string
+  strategy: { type: string; max_surge: string | number | null; max_unavailable: string | number | null }
+  state: RuntimeState
+  message: string
+  paused: boolean
+  conditions: DeploymentCondition[]
+  labels: Record<string, string>
+  annotations: Record<string, string>
+  /** 由平台托管时为所属服务的 ID，否则为空字符串 */
+  platform_service: string
+  containers: KubeContainer[]
+}
+
+export interface ContainerState {
+  name: string
+  image: string
+  digest: string
+  ready: boolean
+  started: boolean
+  restarts: number
+  state: 'running' | 'waiting' | 'terminated' | 'unknown'
+  reason: string
+  message: string
+  started_at: string | null
+  last_state: { reason: string; exit_code: number | null; started_at: string | null; finished_at: string | null } | null
+}
+
+export interface PodInfo {
+  name: string
+  phase: string
+  status: string
+  message: string
+  level: StatusLevel
+  ready: boolean
+  ready_containers: number
+  total_containers: number
+  restarts: number
+  last_restart_at: string | null
+  last_restart_reason: string
+  created_at: string | null
+  start_time: string | null
+  node: string
+  pod_ip: string
+  host_ip: string
+  qos_class: string
+  pod_template_hash: string
+  deleting: boolean
+  containers: ContainerState[]
+  revision?: string
+  current?: boolean
+}
+
+export interface ReplicaSetInfo {
+  name: string
+  revision: string
+  current: boolean
+  replicas: number
+  ready_replicas: number
+  available_replicas: number
+  created_at: string | null
+  images: string[]
+  deployment_id: string
+}
+
+export interface KubeServicePort {
+  name: string
+  port: number
+  targetPort: number | string
+  nodePort: number | null
+  protocol: string
+}
+
+export interface KubeServiceInfo {
+  name: string
+  type: string
+  cluster_ip: string
+  selector: Record<string, string>
+  ports: KubeServicePort[]
+}
+
+export interface IngressInfo {
+  name: string
+  ingress_class: string
+  hosts: string[]
+  rules: { host: string; paths: { path: string; path_type: string; service: string; port: number | string | null }[] }[]
+  service_names: string[]
+  https: boolean
+  port: string
+  inconsistent: string
+  listener_master: string
+}
+
+export interface HpaInfo {
+  name: string
+  min_replicas: number
+  max_replicas: number
+  current_replicas: number | null
+  desired_replicas: number | null
+  targets: { resource: string; utilization: number | null; value: string | null }[]
+  current: Record<string, number | null>
+  last_scale_time: string | null
+  conditions: { type: string; status: string; reason: string; message: string }[]
+}
+
+export interface KubeEvent {
+  type: string
+  reason: string
+  message: string
+  kind: string
+  name: string
+  count: number
+  first_seen: string | null
+  last_seen: string | null
+  source: string
+}
+
+export interface AccessPoint {
+  type: 'ingress' | 'cluster' | 'node'
+  label: string
+  address: string
+}
+
+export interface RuntimeSummary {
+  state: RuntimeState
+  message: string
+  desired: number
+  ready: number
+  available: number
+  updated: number
+  pods: number
+  restarts: number
+  warning_events: number
+  image: string
+  running_images: string[]
+  created_at: string | null
+  deployment_id: string
+}
+
+export interface ServiceRuntime {
+  namespace_id: number
+  namespace_name: string
+  cluster_name: string
+  fetched_at: string
+  warnings: string[]
+  found: boolean
+  target: { kind: string; name: string; container: string }
+  summary: RuntimeSummary
+  deployment: KubeDeployment | null
+  container: KubeContainer | null
+  pods: PodInfo[]
+  replicasets: ReplicaSetInfo[]
+  services: KubeServiceInfo[]
+  ingresses: IngressInfo[]
+  hpa: HpaInfo | null
+  events: KubeEvent[]
+  access: AccessPoint[]
 }
 
 export interface NamespaceResources {
@@ -428,19 +611,92 @@ export interface NamespaceResources {
   namespace_name: string
   cluster_name: string
   deployments: KubeDeployment[]
-  services: { name: string; type: string; cluster_ip: string; ports: { port: number; targetPort: string | number }[] }[]
-  pods: { name: string; phase: string; ready: boolean; node: string }[]
-  ingresses: { name: string; hosts: string[] }[]
+  services: KubeServiceInfo[]
+  pods: PodInfo[]
+  ingresses: IngressInfo[]
   warnings: string[]
   fetched_at: string
-  found?: boolean
-  container?: { name: string; image: string } | null
+}
+
+export interface ServiceStatusRow {
+  service_id: number
+  state: RuntimeState
+  message: string
+  ready?: number
+  desired?: number
+  image?: string
+  deployment_id?: string
 }
 
 // ------------------------------------------------------------------ 服务与发布
+export type ServiceMode = 'managed' | 'image_only'
+
 export interface ImageOnlySpec {
   mode: 'image_only'
   target: { kind: 'Deployment'; name: string; container: string }
+}
+
+export interface ServicePortSpec {
+  name: string
+  port: number
+  target_port: number | string
+  node_port?: number | null
+}
+
+export interface MountSpec {
+  config: string
+  path: string
+  items: string[]
+  volume: string
+}
+
+export type ResourceKey = 'cpu_request' | 'memory_request' | 'cpu_limit' | 'memory_limit'
+
+export interface ManagedSpec {
+  mode: 'managed'
+  template: string
+  base: string
+  names: Partial<Record<NamingKey | 'hpa', string>>
+  selector: Record<string, string>
+  container: { name: string; env: { name: string; value: string }[]; downward_api: boolean; image_pull_policy: string }
+  probe: { type: 'http' | 'tcp' | 'none'; scheme: 'HTTP' | 'HTTPS'; path: string; port: number }
+  resources: Partial<Record<ResourceKey, string>>
+  replicas: number | null
+  workload: { termination_grace_period_seconds: number }
+  service: { enabled: boolean; type: string; ports: ServicePortSpec[] }
+  ingress: { enabled: boolean; host: string; path: string; port: number | null; url_match_mode: string }
+  hpa: { enabled: boolean; min_replicas: number; max_replicas: number; cpu_utilization: number }
+  mounts: MountSpec[]
+  log: { enabled: boolean; volume: string }
+  pod_annotations: Record<string, string>
+}
+
+export interface ServiceTemplate {
+  code: string
+  name: string
+  version: number
+  description: string
+  objects: string[]
+  defaults: ManagedSpec
+}
+
+export interface ConfigStatusChange {
+  set_id?: number
+  scope_type?: string
+  scope_id?: number
+  name: string
+  kind: string
+  version: number | null
+  change: 'updated' | 'added' | 'removed' | 'replaced'
+  current: number | null
+  current_scope?: string
+}
+
+export interface ConfigStatus {
+  deployed: boolean
+  pending: boolean
+  changes: ConfigStatusChange[]
+  deployment_id?: number
 }
 
 export interface Service {
@@ -451,7 +707,12 @@ export interface Service {
   app_id: number
   current_revision_id: number
   deployed_revision_id: number | null
-  spec: ImageOnlySpec | Record<string, unknown>
+  mode: ServiceMode
+  spec: ImageOnlySpec | ManagedSpec
+  workload: string
+  config_status?: ConfigStatus
+  /** 当前账号在服务所在命名空间的操作权限（仅详情接口返回） */
+  permissions?: string[]
   project_name: string
   app_name: string
   cluster_name: string
@@ -459,6 +720,144 @@ export interface Service {
   tier: Tier
   created_at: string
   updated_at: string
+}
+
+
+export interface ConfigPin {
+  set_id: number
+  scope_type: ConfigScope
+  scope_id: number
+  name: string
+  kind: ConfigKind
+  version: number
+}
+
+export interface ApplyResult {
+  kind: string
+  name: string
+  action: 'create' | 'update' | 'unchanged' | 'skip' | 'delete' | 'error'
+  message: string
+  diff: { path: string; live: unknown; desired: unknown }[]
+  /** 线上同名对象的归属：self 本服务或平台共享配置，other 平台中的其他服务，foreign 不由平台管理 */
+  owner: '' | 'self' | 'other' | 'foreign'
+}
+
+export interface RenderResult {
+  mode: ServiceMode
+  image: string
+  revision_id: number | null
+  objects: { key: string; kind: string; name: string; yaml: string }[]
+  yaml: string
+  errors: string[]
+  warnings: string[]
+  config: ConfigPin[]
+  dry_run: ApplyResult[] | null
+}
+
+export interface ManifestSnapshot {
+  deployment_id: number
+  checksum: string
+  created_at: string
+  config: ConfigPin[]
+  profile_version: number
+  ingress_version: number | null
+  yaml: string
+  objects: { key: string; kind: string; name: string }[]
+}
+
+/** 挂载配置时可选的配置文件集（按名称在服务、环境、项目、平台层中查找，下层优先）。 */
+export interface FileSetOption {
+  name: string
+  kind: ConfigKind
+  keys: string[]
+  scope: string
+}
+
+/** 新建服务时一并提交的服务层配置。 */
+export interface ServiceConfigInput {
+  env?: ConfigEntryInput[]
+  secret_env?: ConfigEntryInput[]
+  files?: ConfigEntryInput[]
+}
+
+// ------------------------------------------------------------------ 导入已有服务
+export interface ImportServiceRow {
+  deployment: string
+  name: string
+  supported: boolean
+  reason: string
+  warnings: string[]
+  objects: { kind: string; name: string }[]
+  action: 'create' | 'convert' | 'skip' | 'unsupported'
+  existing_service?: { id: number; name: string } | null
+  name_conflict?: boolean
+  image?: string
+  digest?: string | null
+  digests?: number
+  spec?: ManagedSpec
+  app?: { id?: number; name?: string; create?: { repository: string; organization: string } }
+  config?: { env: string[]; secret_env: string[]; files: string[] }
+  effective?: Record<'env' | 'secret_env', { added: string[]; changed: string[]; locked: string[] }>
+}
+
+export interface ImportFile {
+  name: string
+  kind: ConfigKind
+  keys: string[]
+  used_by: string[]
+  size: number
+  existing: { id: number; scope_type: ConfigScope; version: number; same: boolean | null } | null
+}
+
+export interface ImportReport {
+  namespace_id: number
+  namespace_name: string
+  project_id: number | null
+  source_namespace: string
+  counts: Record<string, number>
+  ignored: Record<string, number>
+  profile: { proposed: EnvironmentProfile; saved: EnvironmentProfile | null; version: number; same: boolean }
+  ingress: { proposed: IngressSpec | null; reuse: { id: number; name: string } | null; current_id: number | null }
+  env: { keys: Record<string, string>; additions: string[]; conflicts: string[]; existing: boolean }
+  secret_env: { keys: string[]; additions: string[]; conflicts: string[]; existing: boolean }
+  files: ImportFile[]
+  services: ImportServiceRow[]
+  unused: { kind: string; name: string }[]
+  warnings: string[]
+  blockers: string[]
+  permissions: { environment_config: boolean; service_create: boolean; certificate_manage: boolean; app_manage: boolean }
+}
+
+export interface ImportSource {
+  source: 'yaml' | 'cluster'
+  yaml?: string
+  project_id: number | null
+}
+
+export interface ImportSelection {
+  deployment: string
+  name?: string
+  app_id?: number | null
+  create_app?: boolean
+}
+
+export interface ImportApply extends ImportSource {
+  services: ImportSelection[]
+  save_profile: boolean
+  ingress: 'create' | 'reuse' | 'none'
+  save_config: boolean
+  overwrite_files: boolean
+  use_certificates: boolean
+}
+
+export interface ImportResult {
+  profile: { version: number; ingress_profile_id: number | null } | null
+  ingress_profile: { id: number; name: string } | null
+  config_sets: { id: number; name: string; kind: ConfigKind; version: number; action: string }[]
+  apps: { id: number; name: string }[]
+  services: { deployment: string; status: 'created' | 'converted' | 'skipped' | 'error'; message: string; service_id?: number; name?: string }[]
+  errors: string[]
+  notes: string[]
 }
 
 export interface Revision {
@@ -522,3 +921,363 @@ export interface Deployment {
 
 /** 提交发布、回滚、重新发布的响应；完整记录用 deploymentApi.get 获取。 */
 export type DeploymentTicket = Pick<Deployment, 'id' | 'service_id' | 'job_id' | 'revision_id' | 'kind' | 'status' | 'digest' | 'created_at'>
+
+// ------------------------------------------------------------------ 环境与配置
+export type ConfigScope = 'platform' | 'project' | 'environment' | 'binding' | 'service'
+export type ConfigKind = 'env' | 'secret_env' | 'files' | 'secret_files'
+export type FileFormat = 'properties' | 'yaml' | 'json' | 'xml' | 'text'
+
+/** 接口返回的条目：敏感条目不带值，只说明来源（直接填写或引用证书）。 */
+export interface ConfigEntry {
+  key: string
+  description: string
+  locked: boolean
+  value?: string
+  format?: FileFormat
+  secret?: boolean
+  source?: 'value' | 'certificate'
+  certificate_id?: number
+  certificate_name?: string
+  certificate_version?: number | null
+  size?: number | null
+}
+
+/** 保存时提交的条目：敏感条目三选一——value（新值）、keep（沿用上一版本）、certificate_id（引用证书）。 */
+export interface ConfigEntryInput {
+  key: string
+  description?: string
+  locked?: boolean
+  value?: string
+  format?: FileFormat
+  keep?: boolean
+  certificate_id?: number
+  certificate_version?: number
+}
+
+export interface ConfigSet {
+  id: number
+  scope_type: ConfigScope
+  scope_id: number
+  name: string
+  kind: ConfigKind
+  description: string
+  version: number
+  updated_at: string
+  created_at: string
+  entries: ConfigEntry[]
+  can_edit: boolean
+  can_reveal: boolean
+}
+
+export interface ConfigVersion {
+  id: number
+  number: number
+  checksum: string
+  note: string
+  created_by: number | null
+  created_by_username: string | null
+  created_at: string
+}
+
+export interface ConfigChange {
+  key: string
+  change: 'added' | 'removed' | 'changed'
+  old?: string | null
+  new?: string | null
+}
+
+export interface ConfigOrigin {
+  scope_type: ConfigScope
+  scope_id: number
+  config_set_id: number
+  version: number
+  /** 资源绑定层：来源资源 */
+  resource_id?: number
+  resource_name?: string
+  alias?: string
+}
+
+export interface EffectiveEntry extends ConfigEntry {
+  origin: ConfigOrigin
+  overrides: ConfigOrigin[]
+}
+
+export interface EffectiveFile {
+  name: string
+  kind: ConfigKind
+  origin: ConfigOrigin
+  keys: string[]
+  overrides: ConfigOrigin[]
+}
+
+export interface EffectiveConfig {
+  env: EffectiveEntry[]
+  secret_env: EffectiveEntry[]
+  files: EffectiveFile[]
+  warnings: string[]
+}
+
+export type CompareStatus = 'same' | 'different' | 'left_only' | 'right_only' | 'hidden'
+
+export interface CompareRow {
+  key: string
+  left: string | null
+  right: string | null
+  status: CompareStatus
+}
+
+export interface CompareFile {
+  name: string
+  status: CompareStatus | ''
+  files: { key: string; status: CompareStatus; properties?: CompareRow[] }[]
+}
+
+export interface EnvironmentCompare {
+  env: CompareRow[]
+  secret_env: CompareRow[]
+  files: CompareFile[]
+}
+
+export type NamingKey = 'deployment' | 'service' | 'ingress' | 'configmap' | 'secret' | 'properties'
+
+export interface RequiredParam {
+  key: string
+  label: string
+}
+
+export interface EnvironmentProfile {
+  naming: Record<NamingKey, string>
+  host: string
+  scheduling: { node_pool_label: string; node_pool: string; anti_affinity: boolean; zone_spread: boolean }
+  image_pull_secret: string
+  log: { enabled: boolean; host_path: string; mount_path: string; sub_path_expr: string }
+  defaults: { replicas: number; cpu_request: string; memory_request: string; cpu_limit: string; memory_limit: string }
+  /** 环境要求：合并后的环境变量 / 敏感变量里必须存在的键，缺失时预览与发布校验报错 */
+  required_params?: RequiredParam[]
+  /** 环境要求：环境应登记的资源类型，仅作为就绪提示 */
+  required_resources?: string[]
+}
+
+export interface IngressSpec {
+  ingress_class: string
+  elb_class: string
+  elb_id: string
+  port: number
+  certificate_ids: string[]
+  annotations: Record<string, string>
+  /** CCE 的路径匹配方式（ingress.beta.kubernetes.io/url-match-mode），为空时不设置 */
+  url_match_mode?: string
+}
+
+export interface IngressProfile {
+  id: number
+  name: string
+  description: string
+  spec: IngressSpec
+  version: number
+  environment_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface EnvironmentSummary {
+  id: number
+  name: string
+  cluster_id: number
+  cluster_name: string
+  tier: Tier
+  project_ids: number[]
+  profile_version: number
+  ingress_profile_id: number | null
+  ingress_profile_name: string | null
+  service_count: number
+  can_edit: boolean
+}
+
+export interface EnvironmentDetail extends EnvironmentSummary {
+  policy: NamespacePolicy
+  profile: EnvironmentProfile
+  profile_saved: boolean
+  ingress_profile: IngressProfile | null
+  config_sets: ConfigSet[]
+  can_reveal: boolean
+}
+
+export type ExpiryStatus = 'ok' | 'warning' | 'expiring' | 'expired' | 'unknown'
+
+export interface Certificate {
+  id: number
+  name: string
+  kind: 'x509' | 'pkcs12' | 'jks' | 'key' | 'file'
+  kind_label: string
+  description: string
+  version: number
+  filename: string
+  size: number
+  sha256: string
+  metadata: Record<string, unknown>
+  not_after: string | null
+  used_by: number
+  status: ExpiryStatus
+  days_left: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CertificateVersion {
+  number: number
+  filename: string
+  size: number
+  sha256: string
+  metadata: Record<string, unknown>
+  not_after: string | null
+  note: string
+  created_at: string
+  created_by_username: string | null
+  status: ExpiryStatus
+  days_left: number | null
+}
+
+export interface CertificateUsage {
+  id: number
+  scope_type: ConfigScope
+  scope_id: number
+  name: string
+  kind: ConfigKind
+  entry_key: string
+  certificate_version: number
+}
+
+export interface CertificateDetail extends Certificate {
+  versions: CertificateVersion[]
+  usage: CertificateUsage[]
+}
+
+export interface CertificateOption {
+  id: number
+  name: string
+  kind: Certificate['kind']
+  kind_label: string
+  version: number
+  filename: string
+  status: ExpiryStatus
+  days_left: number | null
+}
+
+export interface CertificateUpload {
+  filename: string
+  content_base64: string
+  password?: string
+  not_after?: string
+  note?: string
+}
+
+// ------------------------------------------------------------------ 资源管理
+export type ResourceScopeType = 'platform' | 'environment'
+export type ResourceType = 'gauss_db' | 'gauss_schema' | 'gauss_user' | 'redis' | 'kafka' | 'mqs' | 'config_center' | 'iam_endpoint' | 'endpoint'
+
+export interface Resource {
+  id: number
+  scope_type: ResourceScopeType
+  scope_id: number
+  type: ResourceType
+  name: string
+  description: string
+  version: number
+  attributes: Record<string, any>
+  created_at: string
+  updated_at: string
+  can_edit: boolean
+  can_reveal: boolean
+  binding_count?: number
+  /** 详情接口返回：引用这个资源的服务（命名空间/服务名、别名） */
+  used_by?: { service_id: number; service_name: string; namespace_name: string; alias: string }[]
+}
+
+export interface ResourceVersion {
+  resource_id: number
+  number: number
+  attributes: Record<string, any>
+  checksum: string
+  note: string
+  created_at: string
+  created_by: number
+}
+
+export interface ResourceBinding {
+  alias: string
+  resource_id: number
+  resource: {
+    id: number
+    type: ResourceType
+    name: string
+    scope_type: ResourceScopeType
+    scope_id: number
+    version: number
+    attributes: Record<string, any>
+  }
+}
+
+export interface ResourceExport {
+  resource_id: number
+  resource_type: ResourceType
+  resource_name: string
+  env: [string, string][]
+  secret_env: [string, string][]
+}
+
+export interface CreateResourceRequest {
+  scope_type: ResourceScopeType
+  scope_id?: number
+  type: ResourceType
+  name: string
+  description?: string
+  attributes: Record<string, any>
+  note?: string
+}
+
+export interface UpdateResourceRequest {
+  base_version: number
+  attributes: Record<string, any>
+  note?: string
+  description?: string
+}
+
+export interface BindResourceRequest {
+  resource_id: number
+  alias: string
+}
+
+// ------------------------------------------------------------------ 环境预置
+export interface Preset {
+  id: number
+  name: string
+  description: string
+  profile_template: Record<string, any>
+  default_config_sets: {
+    kind: ConfigKind
+    name: string
+    entries: ConfigEntryInput[]
+  }[]
+  version: number
+  created_at: string
+  updated_at: string
+  created_by: number
+  updated_by: number | null
+}
+
+export interface CreatePresetRequest {
+  name: string
+  description?: string
+  profile_template: Record<string, any>
+  default_config_sets: {
+    kind: ConfigKind
+    name: string
+    entries: ConfigEntryInput[]
+  }[]
+  base_version?: number
+}
+
+export interface ApplyPresetRequest {
+  preset_id: number
+}

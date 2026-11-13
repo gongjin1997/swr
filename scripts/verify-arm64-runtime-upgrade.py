@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""用额外 Python 模块模拟依赖升级，实测完整包升级与跨运行镜像回滚。"""
+"""用额外 Python 模块模拟运行依赖升级，实测完整包升级（upgrade.sh）与跨运行镜像回滚；数据保存在内置 PostgreSQL。
+
+    python3 scripts/verify-arm64-runtime-upgrade.py <完整包目录> <verify-arm64-deployment.py 的报告> --report <输出>
+"""
 from __future__ import annotations
 
 import argparse
@@ -14,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "deploy/offline"))
-from release import create, digest, extract
+from release import create, digest, extract  # noqa: E402
 
 
 def run(*args):
@@ -25,28 +28,30 @@ def run(*args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("bundle", type=Path)
     parser.add_argument("previous_report", type=Path)
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     old = json.loads(args.previous_report.read_text())
     assert old["result"] == "passed", "先完成基础部署验收"
-    root, name = Path(old["root"]), old["container"]
+    root, name, db_name = Path(old["root"]), old["container"], old["database"]
     base = args.bundle.resolve()
-    tag = "swr-builder:arm64-qa-runtime-" + root.name.split("-")[-1]
+    tag = "swr-builder:arm64-qa-runtime-" + root.name.split("-")[-1].lower()
     report = {"checks": [], "result": "running"}
 
     def ctl(*command):
         return run("sudo", "-n", root / "swrctl", *command)
 
+    def sql(statement):
+        return run("docker", "exec", db_name, "psql", "-U", "swr", "-d", "swr", "-At", "-c", statement)
+
     def probe():
-        return run("docker", "exec", name, "python", "-c",
-                   "import sqlite3,hashlib,json; from pathlib import Path; "
-                   "db=sqlite3.connect('/var/lib/swr/builder.db'); "
-                   "print(json.dumps({'users':db.execute('select username,password_hash from users order by id').fetchall(),"
-                   "'sentinel':db.execute('select value from offline_qa_sentinel').fetchone()[0],"
-                   "'key':hashlib.sha256(Path('/var/lib/swr/secret.key').read_bytes()).hexdigest()}))")
+        return {"users": sql("SELECT string_agg(username || ':' || password_hash, ',' ORDER BY id) FROM users"),
+                "sentinel": sql("SELECT value FROM offline_qa_sentinel"),
+                "key": run("docker", "exec", name, "python", "-c",
+                           "import hashlib; from pathlib import Path; "
+                           "print(hashlib.sha256(Path('/var/lib/swr/secret.key').read_bytes()).hexdigest())")}
 
     try:
         ctl("start")
@@ -80,6 +85,13 @@ def main():
             shutil.copy2(workspace / "runtime-lock.json", source / "deploy/offline/runtime-lock.json")
             init = source / "swr_builder/__init__.py"
             init.write_text(init.read_text() + "\nimport swr_offline_upgrade_probe\n")
+            # 完整包里的代码包带编译好的前端
+            with tarfile.open(next((base / "releases").glob("*.tar.gz")), "r:gz") as code:
+                for member in code.getmembers():
+                    if member.isfile() and member.name.startswith("swr_builder/webui/"):
+                        target = source / member.name
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(code.extractfile(member).read())
             create(source, bundle / "releases", "qa-runtime-r4", digest(workspace / "runtime-lock.json"))
             with tarfile.open(bundle / "source.tar.gz", "w:gz") as tar:
                 for path in sorted(source.rglob("*")):
@@ -94,17 +106,19 @@ def main():
             (bundle / "SHA256SUMS").write_text("".join(
                 f"{digest(p)}  {p.relative_to(bundle).as_posix()}\n"
                 for p in sorted(bundle.rglob("*")) if p.is_file()))
-            # 先验证普通代码更新拒绝新依赖标识，随后由完整包正式升级。
+            # 先验证代码包 / 补丁拒绝新的运行依赖标识，随后由完整包正式升级。
             run("docker", "cp", bundle / "releases/swr-code-qa-runtime-r4.tar.gz", f"{name}:/var/lib/swr/qa-runtime.tar.gz")
-            mismatch = subprocess.run(["sudo", "-n", str(root / "swrctl"), "update", str(root / "data/qa-runtime.tar.gz")],
+            mismatch = subprocess.run(["sudo", "-n", str(root / "swrctl"), "apply", str(root / "data/qa-runtime.tar.gz")],
                                       text=True, capture_output=True)
             assert mismatch.returncode != 0 and "运行依赖" in mismatch.stderr + mismatch.stdout
-            report["checks"].append("code_update_rejects_new_runtime_contract")
+            report["checks"].append("code_package_rejects_new_runtime_contract")
             run("sh", bundle / "upgrade.sh", root)
             updated = json.loads(ctl("status"))
             assert updated["image"] != status["image"] and updated["version"] == "qa-runtime-r4"
             assert probe() == before
-            assert run("docker", "exec", name, "python", "-c", "import swr_offline_upgrade_probe; print(swr_offline_upgrade_probe.VALUE)") == "new-arm64-runtime-dependency"
+            assert run("docker", "exec", name, "python", "-c",
+                       "import swr_offline_upgrade_probe; print(swr_offline_upgrade_probe.VALUE)") == \
+                "new-arm64-runtime-dependency"
             ctl("verify")
             report["checks"].append("full_bundle_installs_new_runtime_dependency_and_preserves_data")
             ctl("rollback")
@@ -121,7 +135,8 @@ def main():
         raise
     finally:
         args.report.write_text(json.dumps(report, indent=2) + "\n")
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+        subprocess.run(["docker", "rm", "-f", name, db_name], capture_output=True)
+        subprocess.run(["docker", "network", "rm", old["network"]], capture_output=True)
         # QA 镜像保留，便于复核已登记的跨镜像回滚关系。
 
 

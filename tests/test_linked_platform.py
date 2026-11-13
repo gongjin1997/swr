@@ -212,7 +212,7 @@ def test_uat_approval_is_scoped_independent_and_applied(linked):
     assert c.post(f"/api/deployments/{deployment['id']}/approve", json={'comment': 'UAT 已验收'}).status_code == 200
     completed = wait_deploy(c, deployment['id'])
     assert completed['status'] == 'success', completed
-    assert kube.image.endswith('@sha256:' + 'a1' * 32)
+    assert kube.image == 'registry.example/team/payments:1.0.1'  # 按版本号下发
 
 
 def test_revoked_approval_cannot_pass_worker_precheck(linked):

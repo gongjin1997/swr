@@ -11,7 +11,8 @@ RECENT_JOBS = 6
 PENDING_SCAN = 100
 
 
-def overview(store: Store, me: Principal) -> Dict[str, Any]:
+def overview(store: Store, me: Principal, deploy_enabled: bool = True) -> Dict[str, Any]:
+    """deploy_enabled=False（部署中心已关闭，不能审批）时不列待我审批的发布。"""
     result: Dict[str, Any] = {"projects": len(projects.list_projects(store, me)) if me.can_anywhere("project.view") else 0}
     if me.can_anywhere("app.view"):
         result["apps"] = len(store.list_apps(me.project_ids("app.view")))
@@ -23,7 +24,8 @@ def overview(store: Store, me: Principal) -> Dict[str, Any]:
                           "success": counts["success"], "failed": counts["failed"], "recent": recent}
     if me.can_anywhere("app.view") or me.can_anywhere("namespace.view"):
         result["services"] = len(catalog.list_services(store, me))
-        pending, _ = releases.list_records(store, me, limit=PENDING_SCAN, offset=0, status="pending_approval")
+        pending, _ = (releases.list_records(store, me, limit=PENDING_SCAN, offset=0, status="pending_approval")
+                      if deploy_enabled else ([], 0))
         result["approvals"] = [{key: item[key] for key in ("id", "target_name", "project_name", "namespace_name",
                                                             "cluster_name", "environment", "operator", "created_at",
                                                             "require_admin_approval", "service_id")}

@@ -1,0 +1,388 @@
+"""资源管理、绑定与导出的集成测试。"""
+import pytest
+
+from swr_builder.delivery import resources as resource_types
+from swr_builder.errors import Conflict, Forbidden, NotFound
+from swr_builder.security import SecretBox
+from tests.dbutil import new_store
+
+
+def test_resource_types_registry():
+    """测试资源类型注册"""
+    types = list(resource_types.RESOURCE_TYPES.keys())
+    assert len(types) == 9
+    assert "gauss_db" in types
+    assert "gauss_schema" in types
+    assert "gauss_user" in types
+    assert "redis" in types
+
+
+def test_validate_attributes():
+    """测试属性校验"""
+    # 正常情况
+    attrs = {"host": "db.example", "port": 5432}
+    validated = resource_types.validate_attributes("gauss_db", attrs, None)
+    assert validated == {"host": "db.example", "port": 5432}
+
+    # 使用默认值
+    attrs = {"host": "db.example"}
+    validated = resource_types.validate_attributes("gauss_db", attrs, None)
+    assert validated["port"] == 5432
+
+    # 必填字段缺失
+    with pytest.raises(ValueError, match="必填项"):
+        resource_types.validate_attributes("gauss_db", {}, None)
+
+    # 类型错误
+    with pytest.raises(ValueError, match="必须是整数"):
+        resource_types.validate_attributes("gauss_db", {"host": "db.example", "port": "abc"}, None)
+
+
+def test_secret_attributes():
+    """测试敏感属性识别"""
+    secrets = resource_types.secret_attributes("gauss_user")
+    assert "password" in secrets
+    assert "user" not in secrets
+
+    secrets = resource_types.secret_attributes("redis")
+    assert "password" in secrets
+
+
+def test_mask_secrets():
+    """测试敏感属性屏蔽"""
+    attrs = {"user": "test_user", "password": "secret123"}
+    masked = resource_types.mask_secrets("gauss_user", attrs)
+    assert masked["user"] == "test_user"
+    assert masked["password"] == "******"
+
+
+def test_compute_exports():
+    """测试导出计算"""
+    from swr_builder.security import SecretBox
+    box = SecretBox(b"test" * 8)
+    chain = [
+        {"type": "gauss_db", "name": "test-db", "attributes": {"host": "db.example", "port": 5432}},
+    ]
+    exports = resource_types.compute_exports(chain, "", box)
+    assert ("DB_HOST", "db.example") in exports["env"]
+    assert ("DB_PORT", "5432") in exports["env"]
+
+
+def test_compute_exports_with_parent_chain():
+    """测试父链导出计算"""
+    from swr_builder.security import SecretBox
+    box = SecretBox(b"test" * 8)
+    chain = [
+        {"type": "gauss_user", "name": "test-user", "attributes": {"user": "app_user", "password": "secret"}},
+        {"type": "gauss_schema", "name": "test-schema", "attributes": {"database": "app_db", "schema": "public"}},
+        {"type": "gauss_db", "name": "test-db", "attributes": {"host": "db.example", "port": 5432}},
+    ]
+    exports = resource_types.compute_exports(chain, "", box)
+
+    # DB 层导出
+    assert ("DB_HOST", "db.example") in exports["env"]
+    assert ("DB_PORT", "5432") in exports["env"]
+
+    # Schema 层导出
+    assert ("DB_NAME", "app_db") in exports["env"]
+    assert ("DB_SCHEMA", "public") in exports["env"]
+
+    # User 层导出
+    assert ("DB_USER", "app_user") in exports["env"]
+    assert ("DB_PASSWORD", "secret") in exports["secret_env"]
+    assert any("DB_URL" in k for k, v in exports["env"])
+
+
+def test_resource_crud():
+    """测试资源 CRUD"""
+    from swr_builder.access import load_principal
+
+    store = new_store()
+    box = SecretBox(b"test" * 8)
+
+    # 创建平台管理员
+    user = store.create_user(username="admin", display_name="Admin", email="admin@example.com",
+                            password_hash="hash", role="platform_admin", enabled=1, must_change_password=0)
+    me = load_principal(store, user)
+
+    # 创建资源
+    attrs = {"host": "db.example", "port": 5432}
+    validated = resource_types.validate_attributes("gauss_db", attrs, None, box)
+    checksum = resource_types.checksum(validated)
+
+    resource_id = store.create_resource("platform", 0, "gauss_db", "test-db", "测试数据库",
+                                       validated, checksum, "初始版本", user["id"])
+    assert resource_id > 0
+
+    # 读取资源
+    resource = store.get_resource(resource_id)
+    assert resource is not None
+    assert resource["name"] == "test-db"
+    assert resource["type"] == "gauss_db"
+    assert resource["version"] == 1
+
+    # 更新资源（创建新版本）
+    new_attrs = {"host": "db2.example", "port": 5433}
+    validated = resource_types.validate_attributes("gauss_db", new_attrs, None, box)
+    checksum = resource_types.checksum(validated)
+
+    new_version = store.add_resource_version(resource_id, 1, validated, checksum, "更新主机", user["id"])
+    assert new_version == 2
+
+    # 版本列表
+    versions = store.list_resource_versions(resource_id)
+    assert len(versions) == 2
+    assert versions[0]["number"] == 2
+    assert versions[1]["number"] == 1
+
+    # 删除资源
+    assert store.delete_resource(resource_id)
+    assert store.get_resource(resource_id) is None
+
+
+def test_service_resource_binding():
+    """测试服务资源绑定"""
+    from swr_builder.access import load_principal
+
+    store = new_store()
+    box = SecretBox(b"test" * 8)
+
+    # 创建用户和基础数据
+    user = store.create_user(username="admin", display_name="Admin", email="admin@example.com",
+                            password_hash="hash", role="platform_admin", enabled=1, must_change_password=0)
+    me = load_principal(store, user)
+
+    project = store.create_project("test-project", "测试项目", [])
+    project_id = project["id"]
+
+    app = store.create_app({"slug": "test-app", "name": "测试应用", "repo": "harbor.example/test",
+                           "description": "测试", "configs": [], "secrets": []}, project_id)
+    app_id = app["id"]
+
+    cluster_id = store.create_cluster({"name": "test-cluster", "title": "测试集群",
+                                      "server": "https://k8s.example:6443", "auth_type": "sa_token",
+                                      "credential_encrypted": "{}"})
+    namespace_id = store.create_namespace(cluster_id, "test-ns", "dev", {}, project_id)
+
+    service = store.create_service("test-service", project_id, namespace_id, app_id, {"mode": "managed"}, user["id"])
+    service_id = service["id"]
+
+    # 创建资源
+    attrs = {"host": "redis.example", "port": 6379, "password": "secret"}
+    validated = resource_types.validate_attributes("redis", attrs, None, box)
+    checksum = resource_types.checksum(validated)
+    resource_id = store.create_resource("environment", namespace_id, "redis", "cache-redis", "缓存",
+                                       validated, checksum, "初始版本", user["id"])
+
+    # 绑定资源
+    store.create_service_resource_binding(service_id, resource_id, "cache", user["id"])
+
+    # 查询绑定
+    bindings = store.list_service_resource_bindings(service_id)
+    assert len(bindings) == 1
+    assert bindings[0]["alias"] == "cache"
+    assert bindings[0]["resource_id"] == resource_id
+
+    # 删除绑定
+    assert store.delete_service_resource_binding(service_id, resource_id)
+    bindings = store.list_service_resource_bindings(service_id)
+    assert len(bindings) == 0
+
+
+def test_resource_binding_prevents_deletion():
+    """测试有绑定的资源不能删除"""
+    from swr_builder.access import load_principal
+
+    store = new_store()
+    box = SecretBox(b"test" * 8)
+
+    # 服务层检查权限需要真实授权，不能只靠 users.role
+    user = store.create_user(username="admin", display_name="Admin", email="admin@example.com",
+                            password_hash="hash", role="platform_admin", enabled=1, must_change_password=0,
+                            grants=[{"role": "platform_admin", "scope_type": "global", "scope_id": 0}])
+    me = load_principal(store, user)
+
+    project = store.create_project("test-project", "测试项目", [])
+    project_id = project["id"]
+
+    app = store.create_app({"slug": "test-app", "name": "测试应用", "repo": "harbor.example/test",
+                           "description": "测试", "configs": [], "secrets": []}, project_id)
+    app_id = app["id"]
+
+    cluster_id = store.create_cluster({"name": "test-cluster", "title": "测试集群",
+                                      "server": "https://k8s.example:6443", "auth_type": "sa_token",
+                                      "credential_encrypted": "{}"})
+    namespace_id = store.create_namespace(cluster_id, "test-ns", "dev", {}, project_id)
+    service = store.create_service("test-service", project_id, namespace_id, app_id, {"mode": "managed"}, user["id"])
+    service_id = service["id"]
+
+    attrs = {"host": "redis.example", "port": 6379}
+    validated = resource_types.validate_attributes("redis", attrs, None, box)
+    checksum = resource_types.checksum(validated)
+    resource_id = store.create_resource("environment", namespace_id, "redis", "cache-redis", "缓存",
+                                       validated, checksum, "初始版本", user["id"])
+
+    store.create_service_resource_binding(service_id, resource_id, "cache", user["id"])
+
+    # 被服务绑定时业务层拒绝删除（软删除不再触发外键错误，保护在 services/resources.py）
+    from swr_builder.services import resources as resource_service
+
+    with pytest.raises(Conflict, match="不能删除"):
+        resource_service.delete_resource(store, me, resource_id)
+
+    # 解绑后可以删除
+    store.delete_service_resource_binding(service_id, resource_id)
+    resource_service.delete_resource(store, me, resource_id)
+    assert store.get_resource(resource_id) is None
+
+
+def test_soft_delete_keeps_row_and_frees_name():
+    """软删除：记录保留，列表与按名查找都看不到，名字可以重新使用。"""
+    store = new_store()
+    box = SecretBox(b"test" * 8)
+    user = store.create_user(username="admin", display_name="Admin", email="admin@example.com",
+                            password_hash="hash", role="platform_admin", enabled=1, must_change_password=0)
+    project = store.create_project("test-project", "测试项目", [])
+    cluster_id = store.create_cluster({"name": "test-cluster", "title": "测试集群",
+                                      "server": "https://k8s.example:6443", "auth_type": "sa_token",
+                                      "credential_encrypted": "{}"})
+    namespace_id = store.create_namespace(cluster_id, "test-ns", "dev", {}, project["id"])
+    service = store.create_service("test-service", project["id"], namespace_id,
+                                   store.create_app({"slug": "test-app", "name": "测试应用", "repo": "harbor.example/test",
+                                                     "description": "测试", "configs": [], "secrets": []},
+                                                    project["id"])["id"],
+                                   {"mode": "managed"}, user["id"])
+    assert store.delete_service(service["id"])
+    assert store.get_service(service["id"]) is None
+    assert all(s["id"] != service["id"] for s in store.list_services())
+    # 同一个命名空间下可以重新创建同名服务（唯一索引只约束未删除的行）
+    again = store.create_service("test-service", project["id"], namespace_id, service["app_id"],
+                                 {"mode": "managed"}, user["id"])
+    assert again["id"] != service["id"]
+
+
+def test_preset_crud():
+    """测试环境预置 CRUD"""
+    store = new_store()
+
+    profile_template = {"naming": {"deployment": "{base}-app"}, "required_params": [{"key": "DB_HOST", "label": "数据库地址"}]}
+    default_config_sets = [{"kind": "env", "name": "env", "entries": [{"key": "ENV", "value": "test"}]}]
+
+    preset_id = store.create_preset("dev-preset", "开发环境预置", profile_template, default_config_sets, 1)
+    assert preset_id > 0
+
+    preset = store.get_preset(preset_id)
+    assert preset is not None
+    assert preset["name"] == "dev-preset"
+    assert preset["version"] == 1
+
+    # 更新
+    new_version = store.update_preset(preset_id, 1, "dev-preset-v2", "开发环境预置 v2", profile_template,
+                                     default_config_sets, 1)
+    assert new_version == 2
+
+    preset = store.get_preset(preset_id)
+    assert preset["name"] == "dev-preset-v2"
+    assert preset["version"] == 2
+
+    # 删除
+    assert store.delete_preset(preset_id)
+    assert store.get_preset(preset_id) is None
+
+
+def test_apply_preset_to_environment():
+    """测试应用预置到环境"""
+    store = new_store()
+    box = SecretBox(b"test" * 8)
+
+    user = store.create_user(username="admin", display_name="Admin", email="admin@example.com",
+                            password_hash="hash", role="platform_admin", enabled=1, must_change_password=0)
+    project = store.create_project("test-project", "测试项目", [])
+    project_id = project["id"]
+
+    cluster_id = store.create_cluster({"name": "test-cluster", "title": "测试集群",
+                                      "server": "https://k8s.example:6443", "auth_type": "sa_token",
+                                      "credential_encrypted": "{}"})
+    namespace_id = store.create_namespace(cluster_id, "test-ns", "dev", {}, project_id)
+
+    # 创建预置（required_params 在 profile_template 中）
+    profile_template = {
+        "naming": {"deployment": "{base}-app"},
+        "required_params": [{"key": "REDIS_HOST", "label": "Redis 地址"}]
+    }
+    default_config_sets = [
+        {"kind": "env", "name": "common-env", "entries": [{"key": "LOG_LEVEL", "value": "debug"}]}
+    ]
+
+    preset = {
+        "id": 1,
+        "profile_template": profile_template,
+        "default_config_sets": default_config_sets,
+    }
+
+    # 应用预置
+    store.apply_preset_to_environment(namespace_id, preset, user["id"])
+
+    # 验证环境档案已更新
+    profile = store.get_environment_profile(namespace_id)
+    assert profile is not None
+    assert profile["version"] == 1
+
+    import json
+    profile_data = json.loads(profile["profile"]) if isinstance(profile["profile"], str) else profile["profile"]
+    assert "required_params" in profile_data
+    assert len(profile_data["required_params"]) == 1
+    assert profile_data["required_params"][0]["key"] == "REDIS_HOST"
+
+    # 验证配置集已创建
+    config_sets = store.list_config_sets([("environment", namespace_id)])
+    assert len(config_sets) == 1
+    assert config_sets[0]["name"] == "common-env"
+    assert config_sets[0]["kind"] == "env"
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
+
+
+def test_infer_resources():
+    """测试资源推断"""
+    from swr_builder.delivery.importer import infer_resources
+
+    # 数据库
+    assert "gauss_db" in infer_resources(["DB_HOST", "DB_PORT", "DB_USER"])
+    assert "gauss_db" in infer_resources(["DATABASE_HOST", "DATABASE_PORT"])
+    assert "gauss_db" in infer_resources(["POSTGRES_HOST"])
+
+    # Redis
+    assert "redis" in infer_resources(["REDIS_HOST", "REDIS_PORT"])
+    assert "redis" in infer_resources(["REDIS_URL"])
+
+    # Kafka
+    assert "kafka" in infer_resources(["KAFKA_BROKERS"])
+    assert "kafka" in infer_resources(["KAFKA_BOOTSTRAP_SERVERS"])
+
+    # RabbitMQ
+    assert "rabbitmq" in infer_resources(["RABBITMQ_HOST"])
+    assert "rabbitmq" in infer_resources(["RABBITMQ_URL"])
+
+    # OBS
+    assert "obs" in infer_resources(["S3_ENDPOINT", "S3_ACCESS_KEY"])
+    assert "obs" in infer_resources(["OBS_ENDPOINT"])
+
+    # MongoDB
+    assert "mongodb" in infer_resources(["MONGO_HOST"])
+    assert "mongodb" in infer_resources(["MONGODB_HOST"])
+    assert "mongodb" in infer_resources(["MONGO_URL"])
+
+    # 组合
+    result = infer_resources(["DB_HOST", "REDIS_HOST", "KAFKA_BROKERS"])
+    assert "gauss_db" in result
+    assert "redis" in result
+    assert "kafka" in result
+
+    # 空列表
+    assert infer_resources([]) == []
+
+    # 无关键字
+    assert infer_resources(["FOO", "BAR", "BAZ"]) == []

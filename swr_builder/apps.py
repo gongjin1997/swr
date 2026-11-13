@@ -18,6 +18,12 @@ FROM_RE = re.compile(r"^\s*FROM\s", re.IGNORECASE | re.MULTILINE)
 
 MODES = ("incremental", "full")
 TEMPLATE_KEYS = ("full_template", "incremental_template")
+VERSION_INCREMENTS = ("carry", "last")
+
+
+def version_carry(app: Dict[str, Any]) -> bool:
+    """应用是否按“逢十进一”递增版本号；早期保存、没有该字段的应用按默认（逢十进一）。"""
+    return (app.get("version_increment") or "carry") != "last"
 
 APP_DEFAULTS: Dict[str, Any] = {
     "name": "",
@@ -34,6 +40,7 @@ APP_DEFAULTS: Dict[str, Any] = {
     "tag_regex": "",
     "tag_template": "",
     "initial_tag": "1.0.0",
+    "version_increment": "carry",  # carry：逢十进一（1.0.9 → 1.1.0）；last：末位递增（1.0.9 → 1.0.10）
     "max_layers": 100,             # 上一版本层数达到该值时自动改为全量构建（Docker 上限 127 层）
     "push_latest": False,
     "full_template": DEFAULT_FULL_TEMPLATE,
@@ -86,6 +93,8 @@ def normalize_app(data: Dict[str, Any]) -> Dict[str, Any]:
         raise AppValidationError("默认构建方式只能是 incremental（累加）或 full（全量）")
     if app["latest_strategy"] not in ("version", "time"):
         raise AppValidationError("上一版本判定方式只能是 version 或 time")
+    if app["version_increment"] not in VERSION_INCREMENTS:
+        raise AppValidationError("版本递增方式只能是 carry（逢十进一）或 last（末位递增）")
 
     target_dir = app["target_dir"] or "/app"
     if not target_dir.startswith("/"):

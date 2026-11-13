@@ -1,3 +1,169 @@
+# v2.0.0-dev.2
+
+引入"资源"：数据库、缓存、消息队列等中间件的连接信息只登记一次，服务绑定后由平台按类型规则导出成环境变量。
+同时把环境要求并入环境档案，并简化环境预置。设计见 [docs/v2-服务创建与环境配置设计.md](docs/v2-服务创建与环境配置设计.md) §11 决定 #17–#28。
+
+**数据层**
+- 迁移 6：`resources` 增加 `parent_id`（显式父资源，外键 + 索引）；重建 `service_resource_bindings`，
+  主键改为 `(service_id, resource_id)`、约束显式命名，迁移时合并重复绑定；`environment_presets` 去掉
+  `required_resource_types` / `required_params`，增加 `version`、`updated_by`。迁移只追加，不修改已发布的迁移。
+
+**资源**
+- 资源类型登记在代码（`delivery/resources.py`），首批：GaussDB 实例 → Schema → 账号、Redis、Kafka、MQS、
+  配置中心、IAM 端点、通用端点。平台只登记连接信息，不调用云 API 开通任何资源。
+- 作用域为平台或环境；属性按版本保存且不可变，更新带 `base_version`，属性没有变化时不产生新版本。
+- 敏感属性用 `SecretBox` 加密；接口只返回"已设置 + 长度"，更新时不传敏感属性表示保留原值；
+  查看明文需要 `secret.view`，每次写审计。
+- 类型声明了父类型的资源必须指定父资源；环境资源的父资源可以在本环境或平台，平台资源的父资源只能是平台资源。
+  有子资源或被服务绑定的资源不能删除（409）。
+
+**资源绑定与导出**
+- 服务可以绑定本环境或平台的资源；绑定子资源时自动带上父链的属性。别名（大写前缀，可空）作为导出变量名的前缀，
+  用来区分同类资源；两个绑定导出同名变量时拒绝。
+- 导出只有 `env` 与 `secret_env`，值只支持 `{属性}` 占位替换；`env` 导出不能引用敏感属性，引用不存在的属性时报错。
+- 配置合并顺序改为：平台 < 项目 < 环境 < 资源绑定 < 服务，已有的锁定键规则继续生效。
+- 发布快照记录绑定的资源及其祖先版本；按快照重放时读取被钉住的版本。没有 `resources` 键的旧快照按"无绑定"重放。
+- 没有绑定的服务 `config_hash` 与原公式完全一致，升级不会触发滚动重启；有绑定时资源一改即提示"配置待生效"。
+- 生效配置显示"资源绑定"作为来源层，标明来自哪个资源、哪个版本。
+
+**环境要求与预置**
+- 环境要求并入环境档案：`profile.required_params` 是合并后的环境变量里必须存在的键；`profile.required_resources`
+  只作为环境应登记哪些资源的就绪提示。
+- 环境预置 = 档案模板 + 默认环境层配置集（只有 `env` 与 `files`，不含敏感值）。套用是复制：档案覆盖为模板，
+  同名配置集已存在时跳过；套用在一个事务内完成。
+
+**接口与权限**
+- 新增 `resource.view` / `resource.manage`（全局与命名空间），角色目录同步；维护预置需要全局 `config.manage`，
+  套用预置需要环境的 `environment.config`。
+- 新接口：`/api/resources` 增删改查、版本、`/reveal`；`/api/services/{id}/bindings` 增删；
+  `/api/presets` 增删改查与 `/api/environments/{id}/apply-preset`。
+- 删除 `GET /api/services/{id}/exports?reveal=true`：它不检查 `secret.view` 也不写审计。查看服务绑定的导出变量
+  改由生效配置接口返回（只含变量名与来源）。
+- 新建服务可以同时提交 `bindings`；只有托管服务可以绑定。
+
+**导入**
+- 导入分析按 key 的形状推断服务可能依赖的资源类型（`DB_HOST`、`REDIS_HOST`、`KAFKA_BROKERS` 等），只给类型不给值。
+
+**控制台**
+- 新页面：资源（列表、新建 / 编辑、详情与版本、查看明文）、环境预置（列表、新建 / 编辑）；导航归入"环境"分组。
+- 新建服务向导弹出资源绑定步骤，预览清单里能看到导出的变量；服务详情新增"资源绑定"页签，按绑定展示导出的变量名。
+- 环境详情可以套用预置；生效配置的来源列显示"资源绑定"。
+
+**删除语义**
+- 内容对象改为软删除：用户、项目、应用、集群、命名空间、服务、负载均衡入口、证书、配置集、资源、
+  环境预置、自定义角色。迁移 7 加 `deleted_at`，唯一约束换成只约束未删除行的部分唯一索引，
+  删除后可以重新使用同一名字。
+- 删除服务时服务层配置集一起标记，修订与密钥保留（发布记录引用它们）；删除账号时会话与令牌立即失效。
+- 会话、令牌、授权、项目与命名空间的关联表仍物理删除：它们不是内容，授权另有 `revoked_at` 记录撤销历史。
+- 资源列表尚未接分页与使用数；环境要求（`required_params`）目前只能改档案 JSON，表单未做。
+- 宽度与深色模式只做了列宽计算，未在浏览器里逐页目测。
+
+# v2.0.0-dev.1
+
+在 v1.3 的基础上补上“新增服务”：数据库换成 PostgreSQL / GaussDB，环境配置分层维护，平台按模板生成并下发服务的全部对象，已有服务可以导入后由平台接管。设计与取舍见 [docs/v2-服务创建与环境配置设计.md](docs/v2-服务创建与环境配置设计.md)。
+
+**升级须知（不兼容）**
+- 运行数据库改为 PostgreSQL 14+，或以 `DBCOMPATIBILITY 'PG'` 创建的 GaussDB / openGauss。需要配置 `database.url`（或 `BUILDER_DATABASE_URL`）与 `BUILDER_DATABASE_PASSWORD`。
+- v1.x 的 SQLite 数据用 `python -m swr_builder db import-sqlite --from data/builder.db` 导入空库，必须使用原来的 `secret.key`。
+- 离线包改为内置 PostgreSQL。v1 的离线部署不能原地升级：把 v2 安装到新目录，用 `SWR_IMPORT_V1=<v1 目录>` 导入旧数据（见部署文档第 9 节）。
+- 离线包的 `deploy/offline/requirements.lock` 还是 v1 的（没有 psycopg）。第一次在联网构建机制作 v2 完整包时会自动重新解析，
+  之后把新的 `requirements.lock` 与 `runtime-lock.json` 提交回仓库，补丁包才能与现场的运行镜像匹配。
+- 命名空间的 RBAC 模板增加了 Secret、ReplicaSet、事件的规则，策略开启 Ingress / HPA 时还有对应规则。已纳管的命名空间要按新模板重新授权后才能使用托管服务。
+- `GET /api/services/{id}/runtime` 的响应改为新结构（Pod、ReplicaSet、HPA、事件、访问地址）。
+
+**数据层**
+- `store/db.py`：连接池、事务与保存点；SQL 只用 PostgreSQL 与 GaussDB / openGauss 共有的语法。去掉进程锁：修订号在服务行锁内生成；发布单用条件更新领取，并由唯一索引保证同一服务只有一个执行中的发布。
+- 版本化迁移：1 基线（等价于 v1.3 的结构）、2 环境与配置、3 发布快照、4 补丁脚本记录（`patch_scripts`）。
+  新增命令 `db check`、`db upgrade`、`db import-sqlite`、`db status`、`db apply-sql`。
+- `db apply-sql`：执行补丁包与铺底数据中的 SQL，顺序为 `ddl/` → `dml/` → 根目录；每个脚本一个事务并与执行记录一起提交，
+  第一行写 `-- swr:no-transaction` 时在事务外执行；同一补丁同一路径只执行一次，已执行的脚本内容变化时报错；`--check` 只校验。
+- GaussDB：启动时检查是否为 PG 兼容模式；驱动可选 psycopg 或华为的 gaussdb。
+
+**环境与配置**
+- 环境档案：对象命名、主机名、节点池调度、拉取密钥、日志目录、默认资源。负载均衡入口：支持 CCE 路径匹配方式。
+- 平台 → 项目 → 环境 → 服务四层配置集：
+  - 环境变量与敏感变量逐层覆盖，上层可以锁定；配置文件按名称替换。
+  - 每次修改生成不可变版本，可以查看差异；敏感值逐项加密，有权限的人可以查看明文，每次查看记审计。
+  - 生效配置注明每个键的来源层；任意两个环境可以对比。
+- 证书库：解析有效期与指纹，按版本轮换；被引用的证书不能删除。
+
+**托管服务**
+- 内置模板 web 生成 ConfigMap、Secret、properties、Service、Deployment、Ingress 与 HPA，对象结构与现有 CCE 服务一致。
+- 提交发布时记录配置版本快照，与发布单在同一事务中写入；审批、下发、回滚和重新发布都按快照渲染。发布时可以只换镜像，也可以发布最新配置。
+- worker 先对全部对象做服务端 dry-run，任何对象失败都不写入；再用 Server-Side Apply（`fieldManager=swr-builder`）下发。下发规则：
+  - 共享配置只升级不降级；
+  - 开启 HPA 时先移交副本数；
+  - 关闭的 Ingress、HPA 等对象在核对平台标签后删除；
+  - 配置变化通过 Pod 模板注解触发滚动。
+- 集群中已有、不由平台管理的同名对象：普通发布拒绝且不写入集群，只有“接管发布”会接管。属于平台中其他服务的对象不会被覆盖。
+- 预览与服务端校验（含新建前的预览）：显示平台声明的字段与线上值的差异。
+
+**导入已有服务**
+- 上传 `kubectl get … -o yaml` 的导出，或直接读取集群。平台推断环境档案和负载均衡入口，把所有服务值相同的键上提到环境层，公共配置文件和证书目录作为环境层配置，并列出不一致的地方和接管后的差异。
+- 确认后写入平台（应用、服务、各层配置、证书），再用接管发布交给平台管理；接管发布的镜像沿用线上 digest。
+
+**页面**
+- 服务详情改为标签页：
+  - 运行状态：Pod 状态（按 kubectl 的规则）、重启次数与最近重启、运行时长、节点与 IP、容器状态；Deployment 条件与滚动进度、ReplicaSet 历史、HPA、Service / Ingress 与访问地址、相关事件；
+  - 配置、对象清单、发布记录、修订历史。
+- 新页面：新建服务向导，环境中的“导入已有服务”，环境、配置中心、证书、负载均衡入口。
+- 服务列表增加服务方式、运行状态、就绪副本与未发布配置几列；运行状态只读取当前页。
+- 所有列表都有分页；构建记录、发布记录、审计按页从服务端读取。
+- 布局（按 1440 / 1280 / 1024 / 390 宽度与深色模式逐页检查后调整）：
+  - 侧栏菜单在 900px 高的屏幕上完整显示，更矮时可滚动的一侧显示阴影；`size="small"` 的表格恢复紧凑行高；
+  - 服务详情：设置密钥、删除移入“更多”；概览卡片在较窄的屏幕上不留空位；工作负载信息按宽度分 3 / 2 / 1 列；
+    镜像只显示仓库与 digest 前缀（完整值在提示中，可复制）；Deployment 条件都正常时只显示一行；访问地址对齐；
+  - 对象清单把对象和服务端校验结果合并为一张表，直接列出变化的字段；
+  - 服务列表在 1280 宽度下不再横向滚动；配置卡片的按钮固定在右侧，不再重复类型说明；导入页面两张卡片对齐。
+
+**接口与权限**
+- 新接口：
+  - 环境、配置与证书：`/api/environments/*`、`/api/config-sets/*`、`/api/certificates/*`、`/api/ingress-profiles/*`；
+  - 模板与校验：`GET /api/service-templates`、`POST /api/services/preview`、`POST /api/services/{id}/render`；
+  - 服务状态与快照：`POST /api/services/status`、`GET /api/services/{id}/manifest`、`GET /api/services/{id}/effective-config`；
+  - 接管与导入：`POST /api/services/{id}/adopt`、`POST /api/environments/{id}/import/analyze`、`POST /api/environments/{id}/import/apply`。
+- `POST /api/services` 接受 `mode: managed` 和服务层 `config`。
+- 新权限：`service.create`、`environment.config`、`config.manage`、`secret.view`、`certificate.view`、`certificate.manage`。新增内置角色“配置管理员”；命名空间管理员与项目管理员获得本范围的配置权限。
+- 修复：系统设置关闭“启用部署中心”后，服务的发布、回滚、重新发布、接管与扩缩容接口仍能提交，不需要审批的发布照常执行（此前只拦截 `/api/deploy/` 与 `/api/deployments`）。现在：
+  - 这些接口返回 403 `MODULE_DISABLED`；部署模块的路由在定义处用 `@deploy_module` 标记，不再按路径前缀判断；
+  - worker 不再领取发布，排队中的发布取消，已领取的发布在写入集群前停止；已开始写入的发布照常完成；
+  - 工作台不列“待我审批”，服务详情与导入页面隐藏发布、回滚、接管与审批操作。
+- 修复：早期保存、缺少字段的命名空间策略显示为“需 undefined 人审批”。命名空间与环境接口现在返回按默认值补齐的策略，与发布流程实际使用的一致。
+
+- 修复：接管发布没有构建，发布中心与发布详情此前显示“构建 #null”，现在显示“线上镜像（接管发布）”。
+
+**版本号与镜像**
+- 自动生成的版本号默认逢十进一：除第一位外每一位只用 0–9，`1.0.8 → 1.0.9 → 1.1.0`、`1.9.9 → 2.0.0`、`1.0.9-arm64 → 1.1.0-arm64`。
+  已经大于 9 的位（按旧规则产生的版本号）在下一次构建时进位，例如 `1.0.15 → 1.1.0`。
+  应用设置新增“版本递增方式”，可改回末位递增（`1.0.9 → 1.0.10`）；配置了版本号模板的应用不受影响。
+- Deployment 中写入构建的版本号（`仓库:版本号`），不再写 `仓库@sha256:…`。回滚与重新发布也按版本号下发，包括升级前按 digest
+  下发的发布；接管发布原样沿用 Deployment 当前的镜像地址。构建时的 digest 仍记在发布单上，worker 写入集群前向镜像仓库核对
+  该版本号仍指向它：版本号在平台之外被覆盖或已删除时发布失败，不写入集群（镜像不在当前配置的镜像仓库中时跳过核对）。
+
+**ARM64 离线交付**（[部署文档](docs/ARM64离线部署与更新.md)）
+- 全量离线包增加 PostgreSQL 16.15 镜像（按摘要固定）与铺底资源 `seed/`（`sql/`、`images/`、`certs/`）。`install.sh` 一次完成：
+  导入镜像、生成数据库口令、启动数据库、迁移、导入 v1 数据（可选）、铺底 SQL、启动平台；失败时清理容器，生成的文件移到
+  `failed-install-<时间>/`，可以直接重试。`SWR_DATABASE=external` 改用外部 PostgreSQL / GaussDB。
+- 补丁包 `swr-patch-<版本>.tar.gz` 不含镜像：可带完整代码、`sql/ddl`、`sql/dml`，也可以只有 SQL（代码版本不变）；
+  `base` 限定适用的版本。开发机用 `scripts/build-arm64-patch.py` 制作，目标机用 `swrctl build-patch` 离线制作。
+- `swrctl apply`：应用仍在运行时预检（包与逐文件 SHA256、版本与运行依赖、未结束的任务、新代码是否认识数据库迁移、SQL 与执行记录），
+  再停机、`pg_dump` 与文件备份、切换代码、迁移、执行 SQL、健康检查。任一步失败（包括 Ctrl+C）都恢复数据库、文件和原版本；
+  备份失败时直接用原版本重新启动。使用外部数据库时，会修改数据库的更新需要 `--db-backup-confirmed`。
+- `swrctl rollback` 遇到目标版本不认识的迁移时拒绝，并提示用备份恢复；`backup` / `restore` 包含数据库导出；
+  新增 `backups`、`history`、`stop --with-db`、`logs --db`。`upgrade.sh` 支持 PostgreSQL 小版本升级，主版本变化时拒绝。
+- 构建：依赖锁跟不上 `requirements.in` / `requirements.txt` 时自动重新解析；组包与审核脚本检查两个镜像与铺底资源；
+  验收脚本改用 PostgreSQL，覆盖补丁、失败恢复与运行依赖升级。`deploy/offline/config.yaml` 之前被 `.gitignore` 忽略，现已纳入版本库。
+
+**工程与文档**
+- CI 在 PostgreSQL 16 与 openGauss 5.0 上各运行一遍后端测试。`tests/fake_kube.py` 模拟 Kubernetes API，支持 Server-Side Apply。
+- 新增 `DESIGN.md`（前端设计规范）、`docs/系统架构.md`、`AGENTS.md`（Codex）与 `CLAUDE.md`（Claude Code，导入 AGENTS.md）；
+  `docs/系统设计.md` 按 v2 重写；`docs/开发文档.md` 补充部署模块路由、迁移步骤、托管服务交付、前端开发、测试方法与文档维护。
+
+**尚未实现**
+- 配置变更后对受影响服务的批量发布（目前需要在每个服务上“沿用当前镜像发布最新配置”）。
+- 服务矩阵、线上字段的自动漂移检查、HCS ELB 证书到期查询。
+- PostgreSQL 主版本升级工具；离线包在真实 ARM64 主机与 Docker 上的验收（验收脚本已提供）。
+
 # v1.3.0-dev.2
 
 整体重构：账号权限只有一套模型，业务规则集中在服务层，界面以项目为中心组织。权限模型详见 [docs/账号与权限设计.md](docs/账号与权限设计.md)。

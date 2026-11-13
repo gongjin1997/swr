@@ -1,4 +1,4 @@
-"""验证交付镜像的架构、全部常用扩展依赖和本机时区数据。"""
+"""验证交付镜像的架构、全部常用扩展依赖、数据库驱动和本机时区数据。"""
 import importlib
 import json
 import platform
@@ -11,13 +11,16 @@ MODULES = (
     "tomli_w", "orjson", "jwt", "tenacity", "paramiko", "kubernetes", "tzdata",
     "dateutil", "croniter", "email_validator", "sqlalchemy", "alembic", "websockets",
     "rich", "huaweicloudsdkcore", "huaweicloudsdkiam.v3", "huaweicloudsdkswr.v2",
-    "huaweicloudsdkcce.v3", "huaweicloudsdkecs.v2",
+    "huaweicloudsdkcce.v3", "huaweicloudsdkecs.v2", "psycopg",
 )
 
 if __name__ == "__main__":
     for module in MODULES:
         importlib.import_module(module)
+    import psycopg
     import yaml
+    # v2 使用 PostgreSQL / GaussDB：psycopg 必须带 libpq（psycopg[binary]），否则平台无法连接数据库
+    assert psycopg.pq.__impl__ in ("binary", "c"), psycopg.pq.__impl__
     assert yaml.safe_load("service:\n  enabled: true\n")["service"]["enabled"] is True
     assert ZoneInfo("Asia/Shanghai").key == "Asia/Shanghai"
     assert platform.machine() in ("aarch64", "arm64"), platform.machine()
@@ -29,4 +32,5 @@ if __name__ == "__main__":
     }.items():
         versions[name] = subprocess.check_output(command, text=True).strip()
     print(json.dumps({"architecture": platform.machine(), "imports": len(MODULES),
-                      "python": platform.python_version(), "tools": versions}, ensure_ascii=False))
+                      "python": platform.python_version(), "psycopg": psycopg.__version__,
+                      "libpq": psycopg.pq.version(), "tools": versions}, ensure_ascii=False))

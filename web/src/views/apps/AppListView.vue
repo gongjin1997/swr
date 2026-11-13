@@ -12,6 +12,8 @@ import { usePlatform } from '@/stores/platform'
 import { useSession } from '@/stores/session'
 import { fmtTime } from '@/utils/format'
 import AppFormDialog from './AppFormDialog.vue'
+import TablePager from '@/components/TablePager.vue'
+import { usePagination } from '@/composables/usePagination'
 
 const props = defineProps<{ projectId?: number; embedded?: boolean }>()
 const platform = usePlatform()
@@ -31,6 +33,7 @@ const filtered = computed(() => platform.apps.filter((app) =>
   (!route.query.app || props.embedded || app.id === Number(route.query.app)) &&
   (!mode.value || app.default_mode === mode.value) &&
   (!keyword.value.trim() || `${app.name} ${app.description} ${app.image_repo}`.toLowerCase().includes(keyword.value.trim().toLowerCase()))))
+const pager = usePagination(() => filtered.value, { resetOn: () => [keyword.value, mode.value, project.value] })
 const canCreate = computed(() => project.value ? session.canProject(project.value, 'app.manage') : session.can('app.manage'))
 
 async function load() {
@@ -82,21 +85,21 @@ onMounted(load)
         <span class="count">共 {{ filtered.length }} 个应用</span>
         <el-button v-if="embedded && canCreate" type="primary" :icon="Plus" @click="open(null)">新建应用</el-button>
       </div>
-      <el-table v-loading="loading" :data="filtered" :empty-text="keyword || mode ? '没有匹配的应用' : '还没有应用'">
-        <el-table-column label="应用" min-width="200">
+      <el-table v-loading="loading" :data="pager.rows.value" :empty-text="keyword || mode ? '没有匹配的应用' : '还没有应用'">
+        <el-table-column label="应用" min-width="160">
           <template #default="{ row }">
             <b>{{ row.name }}</b>
             <div v-if="row.description" class="hint">{{ row.description }}</div>
           </template>
         </el-table-column>
-        <el-table-column v-if="!embedded" label="项目" min-width="140">
+        <el-table-column v-if="!embedded" label="项目" min-width="110">
           <template #default="{ row }"><RouterLink :to="{ name: 'project-detail', params: { id: row.project_id } }">{{ session.projectName(row.project_id) }}</RouterLink></template>
         </el-table-column>
-        <el-table-column label="镜像仓库" min-width="260"><template #default="{ row }"><span class="mono break-word">{{ row.image_repo }}</span></template></el-table-column>
-        <el-table-column label="默认方式" width="100"><template #default="{ row }">{{ MODE_TEXT[row.default_mode] }}</template></el-table-column>
-        <el-table-column label="镜像内路径" min-width="180"><template #default="{ row }"><span class="mono">{{ destination(row) }}</span></template></el-table-column>
-        <el-table-column label="更新时间" width="170"><template #default="{ row }">{{ fmtTime(row.updated_at) }}</template></el-table-column>
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="镜像仓库" min-width="200"><template #default="{ row }"><span class="mono break-word">{{ row.image_repo }}</span></template></el-table-column>
+        <el-table-column label="默认方式" width="88"><template #default="{ row }">{{ MODE_TEXT[row.default_mode] }}</template></el-table-column>
+        <el-table-column label="镜像内路径" min-width="140"><template #default="{ row }"><span class="mono">{{ destination(row) }}</span></template></el-table-column>
+        <el-table-column label="更新时间" width="150"><template #default="{ row }">{{ fmtTime(row.updated_at) }}</template></el-table-column>
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button v-if="session.canProject(row.project_id, 'build.run')" link type="primary"
               @click="router.push({ name: 'build', query: { app: row.id } })">构建</el-button>
@@ -109,6 +112,7 @@ onMounted(load)
           </template>
         </el-table-column>
       </el-table>
+      <TablePager v-model:page="pager.page.value" v-model:size="pager.size.value" :total="pager.total.value" />
     </el-card>
     <AppFormDialog v-model="dialog" :app="editing" :project-id="project ?? undefined" @saved="load" />
   </div>

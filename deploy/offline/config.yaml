@@ -1,0 +1,66 @@
+# ARM64 离线部署的平台配置（安装后位于 <部署目录>/config/config.yaml，容器内 /etc/swr/config.yaml）。
+# 修改后执行 <部署目录>/swrctl restart。仓库、Kubernetes 等大部分设置也可以在页面「系统设置」中保存。
+# 优先级：环境变量（config/swr-builder.env）> 页面设置 > 本文件 > 默认值。
+# 端口、数据目录、数据库连接由部署工具管理，不要在这里修改：
+#   - 访问端口在安装时指定（默认 8082），容器内固定 8080；
+#   - 数据目录固定为容器内 /var/lib/swr（宿主机 <部署目录>/data）；
+#   - 内置数据库的连接写在 config/swr-builder.env；使用外部 PostgreSQL / GaussDB 时也写在那里。
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  # 仅首次启动创建 admin 时使用；留空则随机生成到 data/admin-initial-password.txt
+  admin_password: ""
+  # 通过 HTTPS（反向代理）访问后改为 true
+  secure_cookie: false
+
+registry:
+  # 现场 SWR 地址（不带 https://）、默认组织与登录账号；也可在页面「系统设置 → 镜像仓库」中填写
+  address: ""
+  organization: ""
+  username: ""
+  # 密码 / AK / SK 请放在 config/swr-builder.env（SWR_PASSWORD、SWR_AK、SWR_SK），不要写在这里
+  password: ""
+  ak: ""
+  sk: ""
+  project: ""
+  # 仓库使用自签名证书时填写 CA 路径，例如 /etc/swr/certs/swr-ca.crt（宿主机 <部署目录>/config/certs/）
+  ca_file: ""
+  insecure: false
+  timeout: 30
+
+database:
+  # 留空：使用 config/swr-builder.env 中的 BUILDER_DATABASE_URL / BUILDER_DATABASE_PASSWORD
+  url: ""
+  # psycopg：PostgreSQL，以及允许 MD5 认证的 GaussDB；gaussdb：华为 GaussDB 驱动（离线镜像未预装）
+  driver: ""
+  pool_size: 10
+  connect_timeout: 10
+
+build:
+  docker_bin: docker
+  max_concurrent: 2
+  login_timeout: 120
+  build_timeout: 1800
+  push_timeout: 1800
+  max_upload_mb: 2048
+  keep_context: false
+  cleanup_local_images: true
+  extra_build_args: []
+
+security:
+  session_hours: 12
+  remember_days: 7
+  password_min_length: 8
+  max_login_failures: 5
+  lock_minutes: 15
+
+general:
+  site_name: SWR 镜像构建平台
+  deploy_enabled: true
+
+hcs:
+  enabled: false
+
+# 首次启动时导入的应用（数据库中已有应用时忽略）；一般在页面「应用管理」中维护，或用铺底 SQL 预置
+apps: []

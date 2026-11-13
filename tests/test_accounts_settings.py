@@ -8,7 +8,7 @@ from swr_builder.api import ROUTERS
 from swr_builder.main import AUTHENTICATED_ROUTE, PUBLIC_ROUTE, ROUTE_PERMISSIONS, create_app, route_permission
 from swr_builder.config import Settings
 from swr_builder.security import hash_password, verify_password, SecretBox
-from swr_builder.store import Store
+from tests.dbutil import new_store
 
 HEAD={'X-Requested-With':'XMLHttpRequest'}
 
@@ -218,9 +218,13 @@ def test_password_and_secret_tampering(tmp_path):
     box=SecretBox.load(tmp_path/'key');v=box.encrypt('secret');assert box.decrypt(v)=='secret'
     with pytest.raises(Exception):box.decrypt(v[:-6]+'AAAAAA')
 
-def test_v1_migration_preserves_apps_and_jobs(tmp_path):
+def test_v1_sqlite_import_preserves_apps_jobs_and_roles(tmp_path):
+    """v1.0 的 SQLite 数据库经 db import-sqlite 导入：原 ID 保留、旧角色转为授权、原文件不被修改。"""
     import sqlite3
-    from swr_builder.store import SCHEMA,utcnow
+    from swr_builder.store import utcnow
+    from swr_builder.store.importer import import_sqlite
+    from swr_builder.store.legacy_sqlite import SCHEMA
+    from swr_builder.store.migrations import MIGRATIONS, schema_versions
     path=tmp_path/'old.db'
     with sqlite3.connect(path) as db:
         db.executescript(SCHEMA)
@@ -229,37 +233,44 @@ def test_v1_migration_preserves_apps_and_jobs(tmp_path):
         db.execute("INSERT INTO jobs(app_name,status,created_at) VALUES(?,?,?)",('old-app','success',utcnow()))
         db.execute("INSERT INTO users(username,password_hash,role,created_at,updated_at) VALUES(?,?,?,?,?)",('old-admin','hash','admin',utcnow(),utcnow()))
         db.execute("INSERT INTO users(username,password_hash,role,created_at,updated_at) VALUES(?,?,?,?,?)",('old-dev','hash','developer',utcnow(),utcnow()))
-    store=Store(path)
+    original=path.read_bytes()
+    store=new_store()
+    result=import_sqlite(store,path)
+    assert result['tables']['apps']==1 and result['tables']['users']==2 and result['tables']['jobs']==1
+    assert path.read_bytes()==original
     assert store.list_apps()[0]['name']=='old-app'
     assert store.list_jobs()[0][0]['status']=='success'
     assert 'created_by' in store.get_job(1)
-    assert store.count_users()==2
+    assert store.count_users()==2 and store.get_user_by_name('OLD-ADMIN')['id']==1
     default_project=store.default_project_id()
     assert store.get_app(1)['project_id']==default_project
     bindings=store.all_bindings()
     assert any(b['subject_id']==1 and b['role']=='platform_admin' and b['scope_type']=='global' for b in bindings)
     assert any(b['subject_id']==2 and b['role']=='developer' and b['scope_id']==default_project for b in bindings)
-    assert [r[0] for r in sqlite3.connect(path).execute('SELECT version FROM schema_migrations ORDER BY version')]==[1,2,3,4,5,6,7]
-    Store(path)
+    assert schema_versions(store)==[v for v,_,_ in MIGRATIONS]
+    assert store.create_app({'name':'new-app','repository':'new-app'})['id']==2  # 自增序列已重置
+    with pytest.raises(RuntimeError,match='不是空库'):
+        import_sqlite(store,path)
     assert len(store.list_projects())==1
 
 
-def test_cluster_namespace_foreign_keys_and_repeat_migrations(tmp_path):
-    import sqlite3
-    from swr_builder.store import Store
-    store=Store(tmp_path/'scope.db')
+def test_cluster_namespace_foreign_keys_and_repeat_migrations():
+    from swr_builder.store import IntegrityViolation
+    from swr_builder.store.migrations import MIGRATIONS, schema_versions
+    store=new_store()
     cluster_id=store.create_cluster({'name':'cluster-a','auth_type':'sa_token','server':'https://kube.example',
         'credential_encrypted':'enc:v2:test','status':'ready'})
     namespace_id=store.create_namespace(cluster_id,'dev','dev',{'require_approval':True})
     project_id=store.default_project_id()
     store.assign_namespace(project_id,namespace_id)
+    store.assign_namespace(project_id,namespace_id)  # 重复分配被忽略
     assert store.get_project(project_id)['namespace_ids']==[namespace_id]
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(IntegrityViolation):
         with store._db() as db:
-            db.execute('DELETE FROM clusters WHERE id=?',(cluster_id,))
-    with store._db() as db:
-        assert db.execute('PRAGMA foreign_key_check').fetchall()==[]
-        assert db.execute('SELECT count(*) FROM schema_migrations').fetchone()[0]==7
+            db.execute('DELETE FROM clusters WHERE id=%s',(cluster_id,))
+    again=new_store()  # 再次启动不会重复执行迁移
+    assert schema_versions(again)==[v for v,_,_ in MIGRATIONS]
+    assert again.get_project(project_id)['namespace_ids']==[namespace_id]
 
 def test_session_ownership_and_own_cancel(setup):
     _,app,c=setup;login(c)

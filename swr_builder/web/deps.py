@@ -7,7 +7,7 @@ from fastapi import Depends, Request
 
 from ..access import Principal
 from ..context import AppContext
-from .guard import AUTHENTICATED_ROUTE, PUBLIC_ROUTE, authenticated, public, requires
+from .guard import AUTHENTICATED_ROUTE, PUBLIC_ROUTE, authenticated, deploy_module, public, requires
 
 
 def get_ctx(request: Request) -> AppContext:
@@ -49,4 +49,4 @@ def audit(request: Request, action: str, target: Any = "", detail: str = "") -> 
 
 
 __all__ = ["Ctx", "User", "Me", "get_ctx", "get_user", "get_principal", "client_ip", "display_name", "session_hash",
-           "audit", "requires", "public", "authenticated", "PUBLIC_ROUTE", "AUTHENTICATED_ROUTE"]
+           "audit", "requires", "public", "authenticated", "deploy_module", "PUBLIC_ROUTE", "AUTHENTICATED_ROUTE"]

@@ -10,7 +10,20 @@ permissions:
 
 jobs:
   backend:
+    name: backend (PostgreSQL 16)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # 每个测试在这个账号下新建并删除自己的数据库（见 tests/conftest.py）
+      SWR_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,6 +32,47 @@ jobs:
           cache: pip
           cache-dependency-path: requirements*.txt
       - run: pip install -r requirements-dev.txt
+      - run: pytest -q
+
+  backend-opengauss:
+    # GaussDB 与 openGauss 同源；用 openGauss 镜像确认 SQL 只用了两者共有的部分（PG 兼容模式、MD5 认证）
+    name: backend (openGauss 5.0, GaussDB 兼容)
+    runs-on: ubuntu-latest
+    services:
+      opengauss:
+        image: enmotech/opengauss:5.0.3
+        env:
+          GS_PASSWORD: Swr@Test2026
+        ports: ["15432:5432"]
+        options: --privileged
+    env:
+      SWR_TEST_DATABASE_URL: postgresql://gaussdb:Swr%40Test2026@127.0.0.1:15432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - run: pip install -r requirements-dev.txt
+      - name: 等待 openGauss 就绪
+        run: |
+          python - <<'EOF'
+          import os, time
+          import psycopg
+          last = None
+          for _ in range(90):
+              try:
+                  conn = psycopg.connect(os.environ["SWR_TEST_DATABASE_URL"], connect_timeout=3)
+                  print(conn.execute("SELECT version()").fetchone()[0])
+                  conn.close()
+                  break
+              except Exception as exc:  # noqa: BLE001
+                  last = exc
+                  time.sleep(2)
+          else:
+              raise SystemExit(f"openGauss 未就绪：{last}")
+          EOF
       - run: pytest -q
 
   frontend:
