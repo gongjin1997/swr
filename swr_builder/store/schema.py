@@ -430,6 +430,33 @@ RESOURCE_MANAGEMENT = [
     "ALTER TABLE environment_profiles ADD COLUMN required_params TEXT NOT NULL DEFAULT '[]'",
 ]
 
+# 迁移 6：资源有明确的上级；一个服务对同一资源只绑定一次（别名改为可选的变量名前缀）
+RESOURCE_BINDINGS = [
+    "ALTER TABLE resources ADD COLUMN parent_id BIGINT",
+    "ALTER TABLE resources ADD CONSTRAINT fk_resources_parent FOREIGN KEY (parent_id) REFERENCES resources(id) "
+    "ON DELETE RESTRICT",
+    "CREATE INDEX idx_resources_parent ON resources (parent_id)",
+    "ALTER TABLE service_resource_bindings RENAME TO service_resource_bindings_v5",
+    """CREATE TABLE service_resource_bindings (
+        service_id BIGINT NOT NULL,
+        resource_id BIGINT NOT NULL,
+        alias TEXT NOT NULL DEFAULT '',
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL,
+        CONSTRAINT pk_service_resource_bindings PRIMARY KEY (service_id, resource_id),
+        CONSTRAINT fk_service_resource_bindings_service FOREIGN KEY (service_id) REFERENCES services(id)
+            ON DELETE CASCADE,
+        CONSTRAINT fk_service_resource_bindings_resource FOREIGN KEY (resource_id) REFERENCES resources(id)
+            ON DELETE RESTRICT
+    )""",
+    # 旧别名只是名称、不影响导出，迁移后一律为空（不加前缀）
+    "INSERT INTO service_resource_bindings(service_id, resource_id, alias, created_at) "
+    "SELECT service_id, resource_id, '', CURRENT_TIMESTAMP FROM service_resource_bindings_v5 "
+    "GROUP BY service_id, resource_id",
+    "DROP TABLE service_resource_bindings_v5",
+    "CREATE INDEX idx_service_resource_bindings_resource ON service_resource_bindings (resource_id)",
+]
+
 # 有自增主键的表：导入旧数据后要重置序列
 SERIAL_TABLES = ("projects", "users", "api_tokens", "audit_logs", "apps", "jobs", "role_bindings", "clusters",
                  "namespaces", "services", "service_revisions", "service_secrets", "deploy_targets", "deployments",

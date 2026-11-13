@@ -12,7 +12,8 @@ import hashlib
 import logging
 from typing import Any, Callable, List, Tuple
 
-from .schema import BASELINE, ENVIRONMENT_CONFIG, MANAGED_DELIVERY, PATCH_SCRIPTS, RESOURCE_MANAGEMENT, utcnow
+from .schema import (BASELINE, ENVIRONMENT_CONFIG, MANAGED_DELIVERY, PATCH_SCRIPTS, RESOURCE_BINDINGS,
+                     RESOURCE_MANAGEMENT, utcnow)
 
 logger = logging.getLogger("swr_builder.store")
 
