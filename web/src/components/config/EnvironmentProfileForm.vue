@@ -1,7 +1,9 @@
 <script setup lang="ts">
 /** 环境档案：对象命名、访问入口、调度、拉取密钥、日志目录与资源默认值。命名规则按示例服务名实时预览。 */
 import { computed, ref } from 'vue'
+import { Delete, Plus } from '@element-plus/icons-vue'
 import type { EnvironmentProfile, IngressProfile, NamingKey } from '@/api/types'
+import { getResourceTypeOptions } from '@/utils/resourceTypes'
 
 const profile = defineModel<EnvironmentProfile>({ required: true })
 const ingressProfileId = defineModel<number | null>('ingressProfileId', { required: true })
@@ -18,6 +20,23 @@ const render = (template: string) => {
   return fill(fill(fill(template, 'base', name), 'service', name), 'namespace', props.namespaceName)
 }
 const selectedIngress = computed(() => props.ingressProfiles.find((p) => p.id === ingressProfileId.value) ?? null)
+const typeOptions = getResourceTypeOptions()
+
+/** 旧档案没有这两组字段：读写前补成空数组，避免 v-model 落到 undefined 上 */
+const requiredParams = computed({
+  get: () => (profile.value.required_params ??= []),
+  set: (value) => { profile.value.required_params = value },
+})
+const requiredResources = computed({
+  get: () => (profile.value.required_resources ??= []),
+  set: (value) => { profile.value.required_resources = value },
+})
+function addParam() {
+  requiredParams.value.push({ key: '', label: '' })
+}
+function removeParam(index: number) {
+  requiredParams.value.splice(index, 1)
+}
 </script>
 
 <template>
@@ -82,6 +101,22 @@ const selectedIngress = computed(() => props.ingressProfiles.find((p) => p.id ==
       </template>
     </div>
 
+    <h4>环境要求</h4>
+    <p class="hint">必填参数：合并后的环境变量与敏感变量里必须存在这些键，否则预览与发布校验报错。应登记的资源类型只作为就绪提示，不阻断发布。</p>
+    <el-form-item label="必填参数">
+      <el-button size="small" :icon="Plus" @click="addParam">添加参数</el-button>
+      <div v-for="(param, index) in requiredParams" :key="index" class="param-row">
+        <el-input v-model="param.key" placeholder="键，例如 DB_HOST" style="width: 220px" />
+        <el-input v-model="param.label" placeholder="说明，例如 数据库地址" style="width: 220px" />
+        <el-button link type="danger" :icon="Delete" aria-label="删除参数" @click="removeParam(index)" />
+      </div>
+    </el-form-item>
+    <el-form-item label="应登记的资源类型">
+      <el-select v-model="requiredResources" multiple filterable placeholder="不要求" style="width: 100%">
+        <el-option v-for="option in typeOptions" :key="option.value" :label="option.label" :value="option.value" />
+      </el-select>
+    </el-form-item>
+
     <h4>资源与副本默认值</h4>
     <div class="form-grid">
       <el-form-item label="副本数"><el-input-number v-model="profile.defaults.replicas" :min="0" :max="100" /></el-form-item>
@@ -98,4 +133,5 @@ h4 { margin: 18px 0 6px; }
 h4:first-child { margin-top: 0; }
 .sample { max-width: 280px; }
 .hint.mono { display: block; margin-top: 4px; word-break: break-all; }
+.param-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
 </style>

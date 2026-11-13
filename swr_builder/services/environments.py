@@ -13,8 +13,8 @@ from typing import Any, Dict, List, Optional
 from ..access import Principal
 from ..errors import Forbidden, NotFound
 from ..store import Store
-from ..validation import (DNS_LABEL_RE, DNS_SUBDOMAIN_RE, LABEL_KEY_RE, LABEL_VALUE_RE, QUANTITY_RE, reject_unknown,
-                          text_field)
+from ..validation import (CONFIG_KEY_RE, DNS_LABEL_RE, DNS_SUBDOMAIN_RE, LABEL_KEY_RE, LABEL_VALUE_RE,
+                          QUANTITY_RE, reject_unknown, text_field)
 from . import configsets
 from .access import namespace_or_404
 from .namespaces import effective_policy
@@ -30,6 +30,9 @@ DEFAULT_PROFILE: Dict[str, Any] = {
     "image_pull_secret": "default-secret",
     "log": {"enabled": False, "host_path": "", "mount_path": "/var/log/app", "sub_path_expr": ""},
     "defaults": {"replicas": 1, "cpu_request": "500m", "memory_request": "4Gi", "cpu_limit": "2", "memory_limit": "4Gi"},
+    # 环境要求：合并后的 env / secret_env 里必须存在的键；只登记、不填值
+    "required_params": [],
+    "required_resources": [],
 }
 _PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
 _ABSOLUTE_PATH = re.compile(r"/[^\0]{0,1023}")
@@ -100,6 +103,31 @@ def normalize_profile(data: Any) -> Dict[str, Any]:
     secret = profile["image_pull_secret"]
     if not isinstance(secret, str) or (secret and not DNS_SUBDOMAIN_RE.fullmatch(secret)):
         raise ValueError("image_pull_secret 必须是 Secret 名称或为空")
+    params = profile["required_params"]
+    if not isinstance(params, list) or len(params) > 100:
+        raise ValueError("required_params 必须是数组（最多 100 项）")
+    seen: set = set()
+    for item in params:
+        if not isinstance(item, dict):
+            raise ValueError("required_params 的每一项必须是 {key, label}")
+        reject_unknown(item, ("key", "label"), "required_params 的每一项只能是 key 与 label")
+        key = item.get("key")
+        if not isinstance(key, str) or not CONFIG_KEY_RE.fullmatch(key):
+            raise ValueError("required_params 的 key 必须是合法的环境变量名")
+        if key in seen:
+            raise ValueError(f"required_params 的键 {key} 重复")
+        seen.add(key)
+        label = item.get("label", "")
+        if not isinstance(label, str) or len(label) > 80:
+            raise ValueError("required_params 的 label 必须是不超过 80 字符的字符串")
+        item["label"] = label
+    resources = profile["required_resources"]
+    if not isinstance(resources, list) or len(resources) > 20:
+        raise ValueError("required_resources 必须是数组（最多 20 项）")
+    from ..delivery import resources as resource_types
+
+    for name in resources:
+        resource_types.validate_type(name)
     log = profile["log"]
     reject_unknown(log, tuple(DEFAULT_PROFILE["log"]), "log 包含不支持的字段")
     if not isinstance(log["enabled"], bool):

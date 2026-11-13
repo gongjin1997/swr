@@ -1040,6 +1040,11 @@ export interface EnvironmentCompare {
 
 export type NamingKey = 'deployment' | 'service' | 'ingress' | 'configmap' | 'secret' | 'properties'
 
+export interface RequiredParam {
+  key: string
+  label: string
+}
+
 export interface EnvironmentProfile {
   naming: Record<NamingKey, string>
   host: string
@@ -1047,6 +1052,10 @@ export interface EnvironmentProfile {
   image_pull_secret: string
   log: { enabled: boolean; host_path: string; mount_path: string; sub_path_expr: string }
   defaults: { replicas: number; cpu_request: string; memory_request: string; cpu_limit: string; memory_limit: string }
+  /** 环境要求：合并后的环境变量 / 敏感变量里必须存在的键，缺失时预览与发布校验报错 */
+  required_params?: RequiredParam[]
+  /** 环境要求：环境应登记的资源类型，仅作为就绪提示 */
+  required_resources?: string[]
 }
 
 export interface IngressSpec {

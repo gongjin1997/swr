@@ -299,6 +299,13 @@ def check_render(inputs: RenderInputs, namespace: Dict[str, Any]) -> List[str]:
     except ValueError as exc:
         errors.append(str(exc))
     errors += check_resources(effective_resources(spec, profile), policy)
+    # 环境要求：合并后的环境变量与敏感变量里必须存在这些键
+    for item in profile.get("required_params") or []:
+        key = item.get("key") if isinstance(item, dict) else ""
+        if key and key not in inputs.env and key not in inputs.secret_env:
+            label = (item.get("label") or "") if isinstance(item, dict) else ""
+            errors.append(f"环境要求缺少参数 {key}{f'（{label}）' if label else ''}："
+                          "请在环境层配置集、资源绑定或服务层配置里提供")
     allowed_secrets = policy.get("image_pull_secrets") or []
     if profile.get("image_pull_secret") and allowed_secrets and profile["image_pull_secret"] not in allowed_secrets:
         errors.append(f"镜像拉取密钥 {profile['image_pull_secret']} 不在命名空间策略允许的范围内")
