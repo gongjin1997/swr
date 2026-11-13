@@ -268,10 +268,11 @@ export interface AccountCreate {
   grants: GrantInput[]
 }
 
+/** 部分更新：没传的字段保持原值（后端按“存在才改”处理）。 */
 export interface AccountUpdate {
-  display_name: string
-  email: string
-  enabled: boolean
+  display_name?: string
+  email?: string
+  enabled?: boolean
   platform_admin?: boolean
 }
 

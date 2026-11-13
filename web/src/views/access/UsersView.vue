@@ -157,8 +157,8 @@ async function toggle(user: Account) {
   const action = user.enabled ? '停用' : '启用'
   const note = user.enabled ? '停用后该账号的会话与 API 令牌立即失效。' : ''
   if (!(await confirmAction(`${action}账号 ${user.username}？${note}`, `${action}账号`, user.enabled))) return
-  if (await run(() => userApi.update(user.id, { display_name: user.display_name, email: user.email, enabled: !user.enabled }),
-    `已${action}`)) await load()
+  // 只提交启用状态：带上列表里的 display_name/email 会把别人刚改过的资料覆盖回旧值
+  if (await run(() => userApi.update(user.id, { enabled: !user.enabled }), `已${action}`)) await load()
 }
 
 async function resetPassword(user: Account) {
