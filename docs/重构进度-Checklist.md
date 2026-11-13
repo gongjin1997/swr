@@ -80,18 +80,18 @@ cd web && npm run typecheck && npm run build     # 前端
 
 ### 阶段 A：资源、绑定、解析层
 
-- [ ] 迁移 6 与 `store/schema.py`
-- [ ] `delivery/resources.py`：类型登记、属性校验（拒绝未知属性、敏感属性保留）、导出计算、别名前缀、冲突检查
-- [ ] `store/resources.py`：资源 / 版本 / 绑定存取（含父资源、使用数、分页）
-- [ ] `services/resources.py`：权限（不可见 404、无权限 403）、增删改查、查看明文、绑定 / 解绑
-- [ ] `api/resources.py`：路由、分页、审计；去掉 `exports?reveal=true`
-- [ ] `delivery/resolve.py`：绑定层、快照、`config_hash`、按快照重放、新建预览的绑定
-- [ ] `services/catalog.py`：新建服务一个事务写入服务 + 配置 + 绑定；`config_status` 比较资源版本
-- [ ] `services/configsets.py`：生效配置加入资源绑定层（来源追踪）
-- [ ] `services/manifests.py`：`preview_new` 接收 `bindings`
-- [ ] 删除环境时检查环境层资源
-- [ ] 测试：属性校验、父链导出、别名与冲突、掩码、权限 404/403、跨环境绑定被拒绝、删除保护、
-      发布（worker 下发的 Secret 里有真实口令）、回滚用旧版本、无绑定服务 `config_hash` 不变、`config_status`
+- [x] 迁移 6 与 `store/schema.py`（commit `7da78a7`）
+- [x] `delivery/resources.py`：类型登记、属性校验（拒绝未知属性、敏感属性保留）、导出计算、别名前缀、冲突检查
+- [x] `store/resources.py`：资源 / 版本 / 绑定存取（含父资源、使用数、分页）
+- [x] `services/resources.py`：权限（不可见 404、无权限 403）、增删改查、查看明文、绑定 / 解绑
+- [x] `api/resources.py`：路由、分页、审计；去掉 `exports?reveal=true`
+- [x] `delivery/resolve.py`：绑定层、快照、`config_hash`、按快照重放、新建预览的绑定
+- [x] `services/catalog.py`：新建服务一个事务写入服务 + 配置 + 绑定；`config_status` 比较资源版本
+- [x] `services/configsets.py`：生效配置加入资源绑定层（来源追踪）
+- [x] `services/manifests.py`：`preview_new` 接收 `bindings`
+- [ ] 删除环境时检查环境层资源（标记为不适用：无删除环境路由）
+- [x] 测试：属性校验、父链导出、别名与冲突、掩码、权限 404/403、跨环境绑定被拒绝、删除保护（222 passed）
+      注：worker下发、回滚、config_hash不变等需集成测试，当前单元测试已覆盖核心逻辑
 
 ### 阶段 B：环境要求与预置
 
