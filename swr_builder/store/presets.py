@@ -65,7 +65,8 @@ class PresetsMixin:
                 raise RevisionConflict(EDIT_CONFLICT)
             db.execute(
                 "UPDATE environment_presets SET name = %s, description = %s, profile_template = %s, "
-                "default_config_sets = %s, version = version + 1, updated_by = %s, updated_at = %s WHERE id = %s",
+                "default_config_sets = %s, version = version + 1, updated_by = %s, updated_at = %s "
+                "WHERE id = %s AND deleted_at IS NULL",
                 (name, description, json.dumps(profile_template, ensure_ascii=False),
                  json.dumps(default_config_sets, ensure_ascii=False), actor_id, now, preset_id)
             )
@@ -106,7 +107,8 @@ class PresetsMixin:
                 name = config_set["name"]
                 entries = config_set.get("entries") or []
                 existing = db.execute(
-                    "SELECT id FROM config_sets WHERE scope_type = %s AND scope_id = %s AND name = %s",
+                    "SELECT id FROM config_sets WHERE scope_type = %s AND scope_id = %s AND name = %s "
+                    "AND deleted_at IS NULL",
                     ("environment", namespace_id, name)
                 ).fetchone()
                 if existing:
