@@ -233,6 +233,9 @@ location / {
 | GET/PUT | `/api/environments`、`/api/environments/{id}`、`/profile`、`/effective-config`、`/compare` | 环境、环境档案、生效配置与环境对比 |
 | POST | `/api/environments/{id}/import/analyze`、`/import/apply` | 导入已有服务：分析 kubectl 导出或集群对象 / 确认写入平台 |
 | GET/POST | `/api/config-sets`、`/api/certificates`、`/api/ingress-profiles` | 分层配置集（版本、差异、查看明文）、证书库、负载均衡入口 |
+| GET/POST | `/api/resources`；GET/PUT/DELETE `/api/resources/{id}`；GET `/versions`、`/versions/{n}`；POST `/reveal` | 资源（只登记连接信息，不申请云资源）：平台或环境作用域、不可变版本、查看敏感属性（需 `secret.view`，写审计） |
+| GET/POST | `/api/services/{id}/bindings`；DELETE `/api/services/{id}/bindings/{resource_id}` | 服务的资源绑定：绑定后按类型规则导出环境变量与敏感变量，别名作为变量名前缀 |
+| GET/POST | `/api/presets`；GET/PUT/DELETE `/api/presets/{id}`；POST `/api/environments/{id}/apply-preset` | 环境预置（档案模板 + 默认环境层配置集）与套用（复制，已存在的同名配置集跳过） |
 | GET | `/api/deployments`、`/api/deployments/{id}`；POST `/api/deployments/{id}/approve`、`/reject` | 发布记录与审批 |
 | GET/POST | `/api/users`；GET/PUT/DELETE `/api/users/{id}` | 账号（创建时可带 `grants` 初始授权） |
 | GET/POST | `/api/bindings`；DELETE `/api/bindings/{id}`；GET `/api/bindings/options` | 授权与可授予的范围、角色 |
