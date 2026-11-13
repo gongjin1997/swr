@@ -102,8 +102,8 @@ cd web && npm run typecheck && npm run build     # 前端
 
 ### 阶段 D：导入推断
 
-- [ ] `delivery/importer.py`：按 key 的形状推断服务可能依赖的资源类型（只给 key，不给值）
-- [ ] 测试（虚构数据）
+- [x] `delivery/importer.py`：按 key 的形状推断服务可能依赖的资源类型（只给 key，不给值）
+- [x] 测试（虚构数据）（223 passed）
 
 ## 4. 前端
 
